@@ -11,9 +11,9 @@ What this means is we can achieve a level of (pseudo) SSR in environments such a
 ## How it works
 
 1. You have a React / Preact App, and you already have your development / production builds
-2. You need to create an additional build - called a pre-render - which extracts the rendered html into a file
-3. This tranform will inject template props in to your pre-render build - so that you can later process it on the server
-4. You will still need to apply this transform to your other builds (with the option `disabled: true`) so that it cleans up extra props added to your other builds.,
+2. You need to create an additional build - called a pre-render - which extracts the rendered html into a file.
+3. This transform will inject template props in to your pre-render build - so that you can later process it on the server
+4. You will still need to apply this transform to your other builds (with the option `disabled: true`) so that it cleans up `templateProps` from your code.
 
 ## How to use
 
