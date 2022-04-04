@@ -2,7 +2,7 @@
 A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a (currently mustache based) pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
 
 ## What is a template friendly version? 
-A template friendly version will replace your components props with template strings such as `{{name}}` so that they be processed on the server - allowing for the correct data to be added back in serverside.
+A template friendly version will replace your components props with template strings such as `{{name}}`.
 
 This version should be saved to static template files for processing via the server on page load.
 
