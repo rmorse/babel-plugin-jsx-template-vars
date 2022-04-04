@@ -43,6 +43,6 @@ Check out a full example here.
 ## Caveats
 One thing to watch out for is data fetching and loading.
 
-Often props will get passed down into various api requests / data stores - if they are replaced with template props such as `{{name}}` it might cause them to fail.  We need the to succeed / continue as usual to get a true render.
+Often props will get passed down into various data fetching routines, and if they are replaced with template props such as `{{name}}` it might cause them to fail.  We need them to succeed and continue as usual to get a true render.
 
-What this means is, you'll want to set your template props on components that live underneath the data fetching / api requests - if you set them too high up it might cause issues.
+What this means is, you'll want to set your template props on components that live underneath the data requests that use those props - if you set them too high up in your application it might cause issues.
