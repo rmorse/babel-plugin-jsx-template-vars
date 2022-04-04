@@ -8,7 +8,7 @@ This version should be saved to static template files for processing via the ser
 
 For now we support [Mustache](https://mustache.github.io/) templates as they can be processed and rendered in almost any server environment.
 
-What this means is we can achieve a level of (pseudo) SSR in environments such as PHP.
+This means we can achieve a level of (pseudo) SSR in environments such as PHP.
 
 ## How it works
 
