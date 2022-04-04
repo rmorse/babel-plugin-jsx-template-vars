@@ -27,7 +27,7 @@ Then add it as a plugin to build - if using webpack it would look like this:
 
 ### Define which props will be template props
 
-All you have to do is use `templateProps` property to your components so we know which props need to be replaced with template strings.
+Add a `templateProps` property to your components so we know which props need to be replaced with template strings.
 
 ```jsx
 const Person = ( { name } ) => {
