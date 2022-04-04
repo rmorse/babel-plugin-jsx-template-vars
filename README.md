@@ -1,12 +1,12 @@
 # Babel Template Props
-A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a (currently mustache based) pre-render for achieving SSR in environements which don't support JavaScript rendering (eg PHP).
+A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a (currently mustache based) pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
 
 ## What is a template friendly version? 
-A template friendly version will replace your components props with template strings such as `{{name}}`.
+A template friendly version will replace your components props with template strings such as `{{name}}` so that they be processed on the server with correct data injected back into the html.
 
 For now we support [Mustache](https://mustache.github.io/) templates as they can be processed and rendered in almost any server environment.
 
-What this means is, you can do pseudo SSR in everonments such as PHP.
+What this means is we can achieve a level of (pseudo) SSR in environments such as PHP.
 
 ## How it works
 
