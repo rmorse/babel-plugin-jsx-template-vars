@@ -45,6 +45,6 @@ Check out a full example here.
 ## Caveats
 One thing to watch out for is data fetching and loading.
 
-In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template props such as `{{name}}` it might cause them to fail.  We need them to succeed and continue as usual to get a true render.
+In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template strings such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true render.
 
 You'll want to set your template props on components that live underneath the data requests (futher down the tree) that use those props.
