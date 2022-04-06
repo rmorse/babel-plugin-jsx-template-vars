@@ -43,8 +43,15 @@ Person.templateProps = [ 'name' ];
 Check out a full example here.
 
 ## Caveats
+
+### Data fetching & loading
 One thing to watch out for is data fetching and loading.
 
 In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template strings such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true render.
 
 To work around this you can try to set your template props only on components that live underneath the data requests (futher down the tree) that use those props for data fetching.
+
+### Nested props
+This transform supports nested props (arrays and objects), but only supports 1 level of depth.
+
+It is recommended to set template props on components that reside further down the tree and deal with those nested props directly.
