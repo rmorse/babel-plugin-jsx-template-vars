@@ -17,7 +17,7 @@ Useful for generating a pre-render for SSR in environments such as PHP * **with 
 Add this transform plugin to babel in your pre-render build to replace your component props to with template strings (tags) such as `{{name}}`- allowing your markup to be processed as a Mustache compatible template.
 
 ### Workflow
-1. Assumes you already have a React / Preact app with your development / production builds setup already.
+1. Assumes you already have a React / Preact app with your development / production builds setup.
 2. Create an additional build, a **pre-render** - which renders your app, and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
 4. Configure by adding `.templateProps` to components that have dynamic data.
@@ -106,8 +106,6 @@ This will autogenerate an array with a single value (and Mustache tags), with an
 ```
 ### Telling Mustache that the array is a list (work in progress)
 
-** This is a work in progress **.  
-
 As a workaround, we can tag our JSX output with comments, and they will be transformed to the correct Mustache syntax:
 ```jsx
     <section class="profile">
@@ -127,8 +125,7 @@ Which will be converted to:
     </section>
 ```
 
-**The goal for a v1** is to have a more robust solution, where we can track the prop (in the above example `favoriteColors`) all the way down to the components return (after `.map()`), and wrap it with the opening and closing list tags.  [Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
-
+**The goal for a v1** is to have a more robust and automated solution (so we can drop the comments), where we can track the prop (in the above example `favoriteColors`) all the way down to the components return (after `.map()`), and automatically wrap it with the opening and closing list tags.  [Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
 
 Check out a full example... [ ] _working on it_...
 
