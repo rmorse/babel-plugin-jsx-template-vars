@@ -20,7 +20,7 @@ Add this transform plugin to babel in your pre-render build to replace your comp
 1. Assumes you already have a React / Preact app with your development / production builds setup already.
 2. Create an additional build, a **pre-render** - which renders your app, and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
-4. Configure via adding `.templateProps` to components that have dynamic data.
+4. Configure by adding `.templateProps` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
 
 Note: You will still need to add this transform to your other builds (with the option `disabled: true`) so that it removes `templateProps` from your production/development code.
