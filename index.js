@@ -6,7 +6,6 @@ const { types } = require("babel-core");
  * Read in the info, find the component definition, and replace prop values in components before they are used.
  * Tagging lists is a manual process marked by comments (but could be handled via `templateProps`).
 */
-
 const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
 const getObjectFromExpression = ( expression ) => {
 	//if ( expression.type === 'ObjectExpression' ) {

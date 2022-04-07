@@ -1,5 +1,5 @@
 {
-  "name": "@rmors_/babel-plugin-jsx-template-props",
+  "name": "babel-plugin-jsx-template-props",
   "version": "0.0.1-alpha",
   "description": "A Babel transform for rendering a template friendly version of your React / Preact app for generating pre-renders.",
   "main": "index.js",
