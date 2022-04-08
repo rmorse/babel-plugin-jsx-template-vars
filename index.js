@@ -1,5 +1,3 @@
-const { types } = require("babel-core");
-
 /**
  * Look for `templateProps` property attached to our components to figure out which props
  * are dynamic and need to be handled via Mustache tags - eg `{{name}}`
@@ -7,76 +5,77 @@ const { types } = require("babel-core");
  * Tagging lists is a manual process marked by comments (but could also be handled via `templateProps`).
 */
 const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
-const getObjectFromExpression = ( expression ) => {
-	let obj = {};
-	expression.properties.forEach( ( property ) => {
-			if ( property.value.value ) {
-				obj[ property.key.name ] = property.value.value;
-			} else if ( property.value.elements ) {
-				obj[ property.key.name ] = getArrayFromExpression( property.value );
-			} else if ( property.value.properties ) {
-				obj[ property.key.name ] = getObjectFromExpression( property.value );
-			}
-	} );
-	return obj;
-}
-const getArrayFromExpression = ( expression ) => {
-	const props = [];
-	if ( expression && expression.elements ) {
-		expression.elements.forEach( ( element ) => {
-			if ( element.type === 'StringLiteral' ) {
-				props.push( element.value );
-			}
-			if ( element.type === 'ArrayExpression' ) {
-				// We have an object to process
-				if ( element.elements ) {
-					const prop = getArrayFromExpression( element );
-					props.push( prop );
-				}
-			}
-			else if ( element.type === 'ObjectExpression' ) {
-				// We have an object to process
-				const prop = getObjectFromExpression( element );
-				props.push( prop );
-			}
-		} );
-	}
-	return props;
-};
+
 
 // Keep track of the funtion declarations, so we can easily look them up
 // later once we've found `templateProps`
 const foundVariableDeclarations = {};
 
-const createProp = ( name, config ) => {
-	let newPropVar;
-	if ( ! config || config.type === 'string' ) {
-		newPropVar = types.stringLiteral(`{{${ name }}}` );
-	}
-	else if ( config.type === 'array' ) {
-		const { type, props } = config.child;
-		const newProp = [];
-		if ( type === 'object' ) {
-			const childProp = {};
-			const propsArr = [];
-			props.forEach( ( propName ) => {
-				propsArr.push( types.objectProperty( types.identifier( propName ), types.stringLiteral( `{{${ propName }}}` ) ) );
-			} );
-			newProp.push( childProp );
-			const templateObject = types.objectExpression( propsArr )
-			newPropVar = types.arrayExpression( [ templateObject ] );
-		}
-	}
-	
-	return newPropVar;
-};
-
-module.exports = ( { types } ) => {
-
-	function buildAssignment(left, right) {
+module.exports = ( { types }, config ) => {
+	// console.log("options", config);
+	const buildAssignment = (left, right) => {
 		return types.assignmentExpression("=", left, right);
 	}
+	const getObjectFromExpression = ( expression ) => {
+		let obj = {};
+		expression.properties.forEach( ( property ) => {
+				if ( property.value.value ) {
+					obj[ property.key.name ] = property.value.value;
+				} else if ( property.value.elements ) {
+					obj[ property.key.name ] = getArrayFromExpression( property.value );
+				} else if ( property.value.properties ) {
+					obj[ property.key.name ] = getObjectFromExpression( property.value );
+				}
+		} );
+		return obj;
+	}
+	const getArrayFromExpression = ( expression ) => {
+		const props = [];
+		if ( expression && expression.elements ) {
+			expression.elements.forEach( ( element ) => {
+				if ( element.type === 'StringLiteral' ) {
+					props.push( element.value );
+				}
+				if ( element.type === 'ArrayExpression' ) {
+					// We have an object to process
+					if ( element.elements ) {
+						const prop = getArrayFromExpression( element );
+						props.push( prop );
+					}
+				}
+				else if ( element.type === 'ObjectExpression' ) {
+					// We have an object to process
+					const prop = getObjectFromExpression( element );
+					props.push( prop );
+				}
+			} );
+		}
+		return props;
+	};
 
+	const createProp = ( name, config ) => {
+		let newPropVar;
+		if ( ! config || config.type === 'string' ) {
+			newPropVar = types.stringLiteral(`{{${ name }}}` );
+		}
+		else if ( config.type === 'array' ) {
+			const { type, props } = config.child;
+			const newProp = [];
+			if ( type === 'object' ) {
+				const childProp = {};
+				const propsArr = [];
+				props.forEach( ( propName ) => {
+					propsArr.push( types.objectProperty( types.identifier( propName ), types.stringLiteral( `{{${ propName }}}` ) ) );
+				} );
+				newProp.push( childProp );
+				const templateObject = types.objectExpression( propsArr )
+				newPropVar = types.arrayExpression( [ templateObject ] );
+			}
+		}
+		
+		return newPropVar;
+	};
+	
 	return {
 		name: "template-props-plugin",
 		visitor: {

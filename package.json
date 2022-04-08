@@ -26,7 +26,5 @@
     "url": "https://github.com/rmorse/babel-plugin-jsx-template-props/issues"
   },
   "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-props#readme",
-  "devDependencies": {
-    "babel-core": "^6.26.3"
-  }
+  "devDependencies": {}
 }
