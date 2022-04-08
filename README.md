@@ -94,7 +94,7 @@ const Person = ( { name, favoriteColors } ) => {
 };
 Person.templateProps = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
-This will autogenerate an array with a single value (and Mustache tags), with an object as described by the `child` props:
+This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props:
 
 ```js
 [
@@ -106,7 +106,10 @@ This will autogenerate an array with a single value (and Mustache tags), with an
 ```
 ### Telling Mustache that the array is a list (work in progress)
 
-As a workaround, we can tag our JSX output with comments, and they will be transformed to the correct Mustache syntax:
+It's important to signal to Mustache when a list or repeatable element starts and ends - so we can supply array like data when 
+generating the render on the server.
+
+While the plan is to automate this, for now we have a work a workaround using JSX comments, which get transformed to the correct Mustache syntax, e.g.:
 ```jsx
     <section class="profile">
         { /* Template Props: list-start: favoriteColors */ }
@@ -125,7 +128,12 @@ Which will be converted to:
     </section>
 ```
 
-**The goal for a v1** is to have a more robust and automated solution (so we can drop the comments), where we can track the prop (in the above example `favoriteColors`) all the way down to the components return (after `.map()`), and automatically wrap it with the opening and closing list tags.  [Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
+The comments must be in the format:
+1. Start with `Template Props: `
+2. Signal opening or closing list with `list-start: ` or `list-end: `
+3. The name of the variable/list (e.g. `favoriteColors`)
+
+**The goal for a v1** is to have a more robust and automated solution (so we don't need the comments), whereby we can track the prop (in the above example `favoriteColors`) from being passed into the component, all the way down to the components return (after `.map()`), and then automatically wrap it with the opening and closing list tags.  [Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
 
 Check out a full example... [ ] _working on it_...
 
