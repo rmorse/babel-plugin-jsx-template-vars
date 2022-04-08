@@ -1,6 +1,6 @@
 {
   "name": "babel-plugin-jsx-template-props",
-  "version": "0.0.11-alpha",
+  "version": "0.0.12-alpha",
   "description": "A Babel transform for rendering a template friendly version of your React / Preact app for generating pre-renders.",
   "main": "index.js",
   "scripts": {

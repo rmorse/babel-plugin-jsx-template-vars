@@ -6,13 +6,11 @@
 */
 const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
 
-
 // Keep track of the funtion declarations, so we can easily look them up
 // later once we've found `templateProps`
 const foundVariableDeclarations = {};
 
 module.exports = ( { types }, config ) => {
-	console.log("config", config);
 	const tidyOnly = config.tidyOnly ?? false;
 	const buildAssignment = (left, right) => {
 		return types.assignmentExpression("=", left, right);
