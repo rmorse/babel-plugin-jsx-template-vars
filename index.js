@@ -2,13 +2,12 @@ const { types } = require("babel-core");
 
 /**
  * Look for `templateProps` property attached to our components to figure out which props
- * are dynamic and need to handled via Mustache tags - eg `{{name}}`
+ * are dynamic and need to be handled via Mustache tags - eg `{{name}}`
  * Read in the info, find the component definition, and replace prop values in components before they are used.
- * Tagging lists is a manual process marked by comments (but could be handled via `templateProps`).
+ * Tagging lists is a manual process marked by comments (but could also be handled via `templateProps`).
 */
 const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
 const getObjectFromExpression = ( expression ) => {
-	//if ( expression.type === 'ObjectExpression' ) {
 	let obj = {};
 	expression.properties.forEach( ( property ) => {
 			if ( property.value.value ) {
@@ -42,7 +41,6 @@ const getArrayFromExpression = ( expression ) => {
 			}
 		} );
 	}
-	// console.log("return: ", props)
 	return props;
 };
 
@@ -50,7 +48,7 @@ const getArrayFromExpression = ( expression ) => {
 // later once we've found `templateProps`
 const foundVariableDeclarations = {};
 
-const createProp = ( name, config, path ) => {
+const createProp = ( name, config ) => {
 	let newPropVar;
 	if ( ! config || config.type === 'string' ) {
 		newPropVar = types.stringLiteral(`{{${ name }}}` );
@@ -65,10 +63,8 @@ const createProp = ( name, config, path ) => {
 				propsArr.push( types.objectProperty( types.identifier( propName ), types.stringLiteral( `{{${ propName }}}` ) ) );
 			} );
 			newProp.push( childProp );
-			// newPropVar = types.stringLiteral(`{{${ name }}}` ); // types.objectProperty(types.identifier('path'), types.stringLiteral(path));
 			const templateObject = types.objectExpression( propsArr )
 			newPropVar = types.arrayExpression( [ templateObject ] );
-			
 		}
 	}
 	
@@ -158,10 +154,8 @@ module.exports = ( { types } ) => {
 									if ( Array.isArray( prop ) && prop.length === 2 ) {
 										propName = prop[0];
 										propConfig = prop[1];
-
-										right = createProp( propName, propConfig, path );
+										right = createProp( propName, propConfig );
 										
-										console.log(`Calculating ${ propName }, propConfig: `, propConfig);
 									} else {
 										propName = prop;
 										right = types.stringLiteral(`{{${ propName }}}` );

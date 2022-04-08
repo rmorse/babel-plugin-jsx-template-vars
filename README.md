@@ -153,3 +153,73 @@ To work around this you can try to set your template props only on components th
 This transform supports nested props (arrays and objects), but only supports 1 level of depth.
 
 It is recommended to set template props on components that reside further down the tree and deal with those nested props directly.
+
+### Props with computations
+Lets say you pass a prop with a number value, such as 10, replacing that should be fine if it is displayed "as is".
+
+```jsx
+const Stick = ( { size } ) => {
+    const doubleSize = size * 2;
+    return (
+        <>
+            <p>One stick is { size }</p>
+            <p>Two stick are { doubleSize }</p>
+        </>
+    );
+};
+Stick.templateProps = [ 'size' ];
+```
+
+However if you need to do a computation with it, and then display it, things get a bit more tricky.
+```jsx
+const Stick = ( { size } ) => {
+    const doubleSize = size * 2;
+    return (
+        <>
+            <p>Size is { size }</p>
+            <p>Double size is { doubleSize }</p>
+        </>
+    );
+};
+Stick.templateProps = [ 'size' ];
+```
+Right now this is not supported.
+
+The current way around would be to set templateProps on the variable before and after the computation (you'll need seperate components), but this is not ideal. Further research required.
+
+```jsx
+const StickOne = ( { size } ) => {
+    const doubleSize = size * 2;
+    return (
+        <>
+            <p>Size is { size }</p>
+            <StickTwo size={ doubleSize } />
+        </>
+    );
+};
+StickOne.templateProps = [ 'size' ];
+
+const StickTwo = ( { size } ) => {
+    return (
+        <p>Double size is { size }</p>
+    );
+};
+StickTwo.templateProps = [ 'size' ];
+```
+
+
+Possible solution
+```jsx
+const Stick = ( { size } ) => {
+    const doubleSize = size * 2;
+    return (
+        <>
+            <p>One stick is { size }</p>
+            <p>Two stick are { doubleSize }</p>
+        </>
+    );
+};
+
+Stick.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
+// this basically tracks any variable inside the component and can expose it
+```
