@@ -12,7 +12,8 @@ const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
 const foundVariableDeclarations = {};
 
 module.exports = ( { types }, config ) => {
-	// console.log("options", config);
+	console.log("config", config);
+	const tidyOnly = config.tidyOnly ?? false;
 	const buildAssignment = (left, right) => {
 		return types.assignmentExpression("=", left, right);
 	}
@@ -80,6 +81,9 @@ module.exports = ( { types }, config ) => {
 		name: "template-props-plugin",
 		visitor: {
 			VariableDeclaration( path, state ) {
+				if ( tidyOnly ) {
+					return;
+				}
 				const { declarations } = path.node;
 				declarations.forEach( ( declaration ) => {
 					if ( declaration.id && declaration.id.type === 'Identifier' ) {
@@ -113,6 +117,12 @@ module.exports = ( { types }, config ) => {
 
 				if ( propertyName === 'templateProps' ) {
 					path.remove();
+				}
+
+				// Next we'll try to find the variable declaration that contains the object,
+				// If tidyOnly is set, we want to exit here, after the removal of the templateProps.
+				if ( tidyOnly ) {
+					return;
 				}
 
 				let templateProps = [];
@@ -177,15 +187,18 @@ module.exports = ( { types }, config ) => {
 				const comments = path.node?.expression?.innerComments;
 				if ( comments && comments.length ) {
 					comments.forEach( ( comment ) => {
-						// console.log( comment.value );
 						if ( comment.value.trim().lastIndexOf( TEMPLATE_PROPS_COMMENT_ID ) === 0 ) {
 							// Split the string into parts:
-							const commentParts = comment.value.split( ':' ).map( ( e ) => e.trim() );
-							const [ , action, name ] = commentParts;
-							if ( action === 'list-start' ) {
-								path.insertAfter( types.stringLiteral(`{{#${ name }}}` ) );
-							} else if ( action === 'list-end' ) {
-								path.insertAfter( types.stringLiteral(`{{/${ name }}}` ) );
+							if ( tidyOnly ) {
+								path.remove();
+							} else {
+								const commentParts = comment.value.split( ':' ).map( ( e ) => e.trim() );
+								const [ , action, name ] = commentParts;
+								if ( action === 'list-start' ) {
+									path.insertAfter( types.stringLiteral(`{{#${ name }}}` ) );
+								} else if ( action === 'list-end' ) {
+									path.insertAfter( types.stringLiteral(`{{/${ name }}}` ) );
+								}
 							}
 						}
 					} );
