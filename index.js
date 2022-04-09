@@ -137,6 +137,7 @@ module.exports = ( { types }, config ) => {
 				// Now we have new props to replace, we need to update the object.
 
 				// A functional component will usually be transformed something like:
+				// TODO - maybe this assumption is dangerous?
 				/*
 					var Field = function Field(_ref) {
 					var type = _ref.type,

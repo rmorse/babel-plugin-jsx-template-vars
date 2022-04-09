@@ -4,32 +4,22 @@ A Babel transform for rendering a template friendly version of your JSX app.  Us
 ## What are template props
 The idea is that this transform will replace selected props (across the components you specify) with a placeholder string such as `{{name}}`. 
 
-This allows you to render the component with a template engine (i.e. Mustache) and then replace the placeholders with the actual values. 
+This should be used in a pre-render build of your application, where you would save the html output to a file to be rendered later via your server.
 
-The pre-rendered version of your app should be saved to static template files for processing via the server.
+Replacing props with template tags allows you to render your application via the [Mustache](https://mustache.github.io/) templating engine, which can be processed and rendered in almost any server environment.
 
-Currently supports [Mustache](https://mustache.github.io/) templates as they can be processed and rendered in almost any server environment.
-
-Useful for generating a pre-render for SSR in environments such as PHP * **with a fair few limitations**.
+This technique suits simpler/smaller applications as there are **a fair few limitations**.
 
 ## How it works
 
 Add this transform plugin to babel in your pre-render build to replace your component props to with template strings (tags) such as `{{name}}`- allowing your markup to be processed as a Mustache compatible template.
 
 ### Workflow
-1. Assumes you already have a React / Preact app with your development / production builds setup.
+1. Assumes you already have a React/Preact app with your development/production builds setup.
 2. Create an additional build, a **pre-render** - which renders your app, and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
 4. Configure by adding `.templateProps` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
-
-Note: You will still need to add this transform to your other builds (with the option `tidyOnly: true`) so that it removes `templateProps` from your production/development code:
-
-```
-plugins: [
-    [ 'babel-plugin-jsx-template-props', { tidyOnly: true } ]
-],
-```
 
 ## How to use
 
@@ -62,6 +52,14 @@ Then add it as it as a plugin to Babel.
 },
 ```
 
+Note: You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateProps` are removed from your production/development code:
+
+```js
+plugins: [
+    [ 'babel-plugin-jsx-template-props', { tidyOnly: true } ]
+],
+```
+
 ### Define which props will be template props
 
 Add a `templateProps` property to your components so we know which props need to be replaced with template strings, format is an array of strings:
@@ -80,9 +78,17 @@ Person.templateProps = [ 'name', 'favoriteColor' ];
 
 ### Lists and repeatable elements
 
-Lists are repeatable, so we need to take into consideration a few things.
+To use repeatable elements and lists in Mustache templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
 
-We can define that one of our template props will be array like, so we know it's repeatable and the shape (props) of the objects in the array.
+```html
+    <section class="profile">
+        {{#favoriteColors}}
+            <p>Favorite color: {{label}}</p>
+        {{/favoriteColors}}
+    </section>
+```
+
+First we need to define which prop is an array (`favoriteColors`) and then also which props we need to great template tags for.
 
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
@@ -98,6 +104,7 @@ const Person = ( { name, favoriteColors } ) => {
         </>
     );
 };
+// Setup favoriteColors as type array with objects as children.
 Person.templateProps = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props:
@@ -110,12 +117,9 @@ This will generate an array with a single value (and Mustache tags), with an obj
     }
 ]
 ```
-### Telling Mustache that the array is a list (work in progress)
+### Adding the opening + closing list tags (work in progress)
 
-It's important to signal to Mustache when a list or repeatable element starts and ends - so we can supply array like data when 
-generating the render on the server.
-
-While the plan is to automate this, for now we have a work a workaround using JSX comments, which get transformed to the correct Mustache syntax, e.g.:
+Right now there is no way to automatically insert these tags, so the current workaround is using JSX comments to signal where they should occur:
 ```jsx
     <section class="profile">
         { /* Template Props: list-start: favoriteColors */ }
@@ -124,7 +128,7 @@ While the plan is to automate this, for now we have a work a workaround using JS
     </section>
 ```
 
-Which will be converted to:
+Will be converted to:
 
 ```html
     <section class="profile">
@@ -139,9 +143,16 @@ The comments must be in the format:
 2. Signal opening or closing list with `list-start: ` or `list-end: `
 3. The name of the variable/list (e.g. `favoriteColors`)
 
-**The goal for a v1** is to have a more robust and automated solution (so we don't need the comments), whereby we can track the prop (in the above example `favoriteColors`) from being passed into the component, all the way down to the components return (after `.map()`), and then automatically wrap it with the opening and closing list tags.  [Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
+#### The goal for a v1
+...is to have the addition of the opening and closing list tags automated (so the comments won't be necessary)
 
-Check out a full example... [ ] _working on it_...
+We whould be able to track the prop (in the above example `favoriteColors`) from being passed into the component as a prop, all the way down to the components return (after `.map()`), and then automatically wrap it with the opening and closing list tags.  
+
+[Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
+
+
+## Working example
+[ ] _currently working on a new repo for a demo project..._
 
 ## Caveats
 
@@ -164,21 +175,21 @@ It is recommended to set template props on components that reside further down t
 Lets say you pass a prop with a number value, such as 10, replacing that should be fine if it is displayed "as is".
 
 ```jsx
-const Stick = ( { size } ) => {
+const Box = ( { size } ) => {
     const doubleSize = size * 2;
     return (
         <>
-            <p>One stick is { size }</p>
-            <p>Two stick are { doubleSize }</p>
+            <p>One Box is { size }</p>
+            <p>Two Boxes are { doubleSize }</p>
         </>
     );
 };
-Stick.templateProps = [ 'size' ];
+Box.templateProps = [ 'size' ];
 ```
 
 However if you need to do a computation with it, and then display it, things get a bit more tricky.
 ```jsx
-const Stick = ( { size } ) => {
+const Box = ( { size } ) => {
     const doubleSize = size * 2;
     return (
         <>
@@ -187,45 +198,45 @@ const Stick = ( { size } ) => {
         </>
     );
 };
-Stick.templateProps = [ 'size' ];
+Box.templateProps = [ 'size' ];
 ```
 Right now this is not supported.
 
-The current way around would be to set templateProps on the variable before and after the computation (you'll need seperate components), but this is not ideal. Further research required.
+The current workaround would be to set templateProps on the variable before and after the computation (you'll need seperate components), but this is not ideal.
 
 ```jsx
-const StickOne = ( { size } ) => {
+const BoxOne = ( { size } ) => {
     const doubleSize = size * 2;
     return (
         <>
             <p>Size is { size }</p>
-            <StickTwo size={ doubleSize } />
+            <BoxTwo size={ doubleSize } />
         </>
     );
 };
-StickOne.templateProps = [ 'size' ];
+BoxOne.templateProps = [ 'size' ];
 
-const StickTwo = ( { size } ) => {
+const BoxTwo = ( { size } ) => {
     return (
         <p>Double size is { size }</p>
     );
 };
-StickTwo.templateProps = [ 'size' ];
+BoxTwo.templateProps = [ 'size' ];
 ```
 
-
-Possible solution
+#### Potential solution
+A possible solution could be to change this plugins behaviour from defining `templateProps`, and instead allow for any variable to be exposed inside the component.  `templateTags` could be used instead to reference any variable or nested prop.
 ```jsx
-const Stick = ( { size } ) => {
+const Box = ( { size } ) => {
     const doubleSize = size * 2;
     return (
         <>
-            <p>One stick is { size }</p>
-            <p>Two stick are { doubleSize }</p>
+            <p>One Box is { size }</p>
+            <p>Two Boxes are { doubleSize }</p>
         </>
     );
 };
 
+// This could reference any any variable inside the component and expose it to Mustache
 Stick.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
-// this basically tracks any variable inside the component and can expose it
 ```
