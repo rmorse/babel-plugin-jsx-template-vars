@@ -170,7 +170,7 @@ This transform supports nested props (arrays and objects), but only supports 1 l
 It is recommended to set template props on components that reside further down the tree and deal with those nested props directly.
 
 ### Props with computations
-Lets say you pass a prop with a number value, such as 10, replacing that should be fine if it is displayed "as is".
+Lets say you pass a prop with a number value, such as 10, replacing that should be fine if it is displayed "as is" or as part of a string.
 
 ```jsx
 const Box = ( { size } ) => {
@@ -236,5 +236,5 @@ const Box = ( { size } ) => {
 };
 
 // This could reference any any variable inside the component and expose it to Mustache
-Stick.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
+Box.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
 ```
