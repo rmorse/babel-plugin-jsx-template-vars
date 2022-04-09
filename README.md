@@ -12,11 +12,11 @@ This technique suits simpler/smaller applications as there are **a fair few limi
 
 ## How it works
 
-Add this transform plugin to babel in your pre-render build to replace your component props to with template strings (tags) such as `{{name}}`- allowing your markup to be processed as a Mustache compatible template.
+Add this transform plugin to babel in your pre-render build to replace your component props with template tags such as `{{name}}`- allowing the resulting markup to be processed as a Mustache compatible template.
 
 ### Workflow
 1. Assumes you already have a React/Preact app with your development/production builds setup.
-2. Create an additional build, a **pre-render** - which renders your app, and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
+2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
 4. Configure by adding `.templateProps` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
@@ -88,7 +88,7 @@ To use repeatable elements and lists in Mustache templates, our code must be con
     </section>
 ```
 
-First we need to define which prop is an array (`favoriteColors`) and then also which props we need to great template tags for.
+First we need to define which prop is an array (`favoriteColors`) and then also which props we need to create template tags for.
 
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
@@ -107,15 +107,15 @@ const Person = ( { name, favoriteColors } ) => {
 // Setup favoriteColors as type array with objects as children.
 Person.templateProps = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
-This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props:
 
-```js
-[
-    {
-        value: '{{value}}',
-        label: '{{label}}',
-    }
-]
+This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props, resulting in the following output:
+
+```html
+    <section class="profile">
+        {{#favoriteColors}}
+            <p>Favorite color: {{label}}</p>
+        {{/favoriteColors}}
+    </section>
 ```
 ### Adding the opening + closing list tags (work in progress)
 
