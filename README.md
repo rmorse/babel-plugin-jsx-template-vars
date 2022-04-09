@@ -112,9 +112,7 @@ This will generate an array with a single value (and Mustache tags), with an obj
 
 ```html
     <section class="profile">
-        {{#favoriteColors}}
-            <p>Favorite color: {{label}}</p>
-        {{/favoriteColors}}
+        <p>Favorite color: {{label}}</p>
     </section>
 ```
 ### Adding the opening + closing list tags (work in progress)
