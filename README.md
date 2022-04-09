@@ -62,7 +62,7 @@ plugins: [
 
 ### Define which props will be template props
 
-Add a `templateProps` property to your components so we know which props need to be replaced with template strings, format is an array of strings:
+Add a `templateProps` property to your components so we know which props need to be replaced with template tags, format is an array of strings:
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -160,7 +160,7 @@ As it says, this is an exploration on a concept of semi automating the generatio
 ### Data fetching & loading
 One thing to watch out for is data fetching and loading.
 
-In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template strings such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true render.
+In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template tags such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true render.
 
 To work around this you can try to set your template props only on components that live underneath the data requests (futher down the tree) that use those props for data fetching.
 
