@@ -52,9 +52,9 @@ module.exports = ( { types }, config ) => {
 		return props;
 	};
 
-	const createProp = ( name, config ) => {
+	const createPropValue = ( name, config ) => {
 		let newPropVar;
-		if ( ! config || config.type === 'string' ) {
+		if ( ! config || ! config.type || config.type === 'string' ) {
 			newPropVar = types.stringLiteral(`{{${ name }}}` );
 		}
 		else if ( config.type === 'array' ) {
@@ -74,6 +74,77 @@ module.exports = ( { types }, config ) => {
 		
 		return newPropVar;
 	};
+
+
+	function normaliseConfigProp( prop ) {
+		if ( ! Array.isArray( prop ) ) {
+			return [ prop, {} ];
+		}
+	}
+		
+	function getConfigPropName( prop ) {
+		if ( Array.isArray( prop ) && prop.length === 2 ) {
+			return prop[0];
+		} else {
+			return prop;
+		}
+	}
+	function getTemplatePropsFromExpression( expression ) {
+		const left = expression.left;
+		const right = expression.right;
+		if ( ! left || ! right ) {
+			return false;
+		}
+
+		const { object, property } = left;
+		// Make sure the property being set is `templateProps`
+		if ( object?.type !== 'Identifier' ) {
+			return false;
+		}
+		if ( property?.type !== 'Identifier' ) {
+			return false;
+		}
+
+		const objectName = object.name;
+		const propertyName = property.name;
+
+		if ( propertyName === 'templateProps' ) {
+			let templatePropsValue = [];
+			// Now process the right part of the expression 
+			// .templateProps = *right* and build our config object.
+			if ( right && right.type === 'ArrayExpression' ) {
+				// Then we have an array to process the props.
+				templatePropsValue = getArrayFromExpression( right );
+			}
+			const templateProps = {
+				replace: [],
+				control: [],
+				list: [],
+			}
+
+			// Build template prop queues for processing at different times.
+			templatePropsValue.forEach( ( prop ) => {
+				console.log( prop );
+				const normalisedProp = normaliseConfigProp( prop );
+				const [ propName, propConfig ] = normalisedProp;
+
+				if ( propConfig.type === 'replace' || ! propConfig.type ) {
+					templateProps.replace.push( propName );
+				} else if ( propConfig.type === 'control' ) {
+					templateProps.control.push( propName );
+				} else if ( propConfig.type === 'list' ) {
+					templateProps.listvl.push( propName );
+				}
+				
+			} );
+			return templateProps;
+		}
+
+		return false;
+	}
+	function getObjectNameFromExpression( expression ) {
+		return expression?.left?.object?.name;
+	}
 	
 	return {
 		name: "template-props-plugin",
@@ -85,57 +156,31 @@ module.exports = ( { types }, config ) => {
 				const { declarations } = path.node;
 				declarations.forEach( ( declaration ) => {
 					if ( declaration.id && declaration.id.type === 'Identifier' ) {
-						foundVariableDeclarations[ declaration.id.name ] = { declaration, path };
+						
+						foundVariableDeclarations[ path.scope.uid ] = [];
+						foundVariableDeclarations[ path.scope.uid ][ declaration.id.name ] = { declaration, path };
 					}
 				} );
 			},
 			ExpressionStatement( path, state ) {
 				// Try to look for the property assignment of `templateProps` and remove it
 				// from the source
-
+				console.log("scope", path.scope.uid)
 				// Get the left part of the expression
 				// MyObject.templateProps = []
-				const left = path.node.expression.left;
-				const right = path.node.expression.right;
-				if ( ! left || ! right ) {
+				const { expression } = path.node;
+				const templateProps = getTemplatePropsFromExpression( expression );
+				if ( ! templateProps ) {
 					return;
 				}
-
-				const { object, property } = left;
-				// Make sure the property being set is `templateProps`
-				if ( object?.type !== 'Identifier' ) {
-					return;
-				}
-				if ( property?.type !== 'Identifier' ) {
-					return;
-				}
-
-				const objectName = object.name;
-				const propertyName = property.name;
-
-				if ( propertyName === 'templateProps' ) {
+				if ( templateProps ) {
 					path.remove();
 				}
-
-				// Next we'll try to find the variable declaration that contains the object,
-				// If tidyOnly is set, we want to exit here, after the removal of the templateProps.
+				// If tidyOnly is set, exit here, after the removal of the templateProps.
 				if ( tidyOnly ) {
 					return;
 				}
-
-				let templateProps = [];
-				// Now process the right part of the expression and calc new props.
-				if ( right && right.type === 'ArrayExpression' ) {
-					// Then we have an array to process the props.
-					templateProps = getArrayFromExpression( right );
-				}
-
-				if ( templateProps.length === 0 ) {
-					return;
-				}
-
-				// Now we have new props to replace, we need to update the object.
-
+				const { replace: replaceProps } = templateProps;
 				// A functional component will usually be transformed something like:
 				// TODO - maybe this assumption is dangerous?
 				/*
@@ -145,33 +190,56 @@ module.exports = ( { types }, config ) => {
 					name = _ref.name,
 					...
 				*/
-				// We need to find the param name that is passed in (props)
-				// Then we need to update the properties with the template strings from the array.
-				if ( foundVariableDeclarations[ objectName ] ) {
-					const { declaration, path: decPath } = foundVariableDeclarations[ objectName ];
+				/*function findFunctionalComponent( path ) {
+					const { node } = path;
+					if ( node.type === 'FunctionDeclaration' ) {
+						return node;
+					}
+					if ( node.type === 'VariableDeclaration' ) {
+						const { declarations } = node;
+						declarations.forEach( ( declaration ) => {
+							if ( declaration.init && declaration.init.type === 'ArrowFunctionExpression' ) {
+								return findFunctionalComponent( path.get( 'init' ) );
+							}
+						} );
+					}
+					if ( node.type === 'ExpressionStatement' ) {
+						return findFunctionalComponent( path.get( 'expression' ) );
+					}
+					if ( node.type === 'AssignmentExpression' ) {
+						return findFunctionalComponent( path.get( 'right' ) );
+					}
+					if ( node.type === 'CallExpression' ) {
+						return findFunctionalComponent( path.get( 'callee' ) );
+					}
+					if ( node.type === 'MemberExpression' ) {
+						return findFunctionalComponent( path.get( 'object' ) );
+					}
+					if ( node.type === 'ObjectExpression' ) {
+						return node;
+					}
+					return null;
+				}*/
+
+				// Using props + config, update the value.
+				// const objectName = path.node.expression.left.object.name;
+				// Find the param name that is passed in (props) then update the properties with the template strings from the array.
+
+				const objectName = getObjectNameFromExpression( expression );
+
+				// Here we deal with the template tags with the plain values
+				if ( foundVariableDeclarations[ path.scope.uid ] && foundVariableDeclarations[ path.scope.uid ][ objectName ] ) {
+					const { declaration, path: decPath } = foundVariableDeclarations[ path.scope.uid ][ objectName ];
 					if ( Array.isArray( declaration.init.params ) && declaration.init.params.length > 0 ) {
 						// Get the first param name
 						const paramName = declaration.init.params[ 0 ].name; // TODO - do we need to check for multiple params?
 						decPath.traverse( {
 							VariableDeclaration: function(path) {
 								// Insert content before the first variable declaration
-								templateProps.forEach( ( prop ) => {
-									let propName;
-									let propConfig;
-									let right;
-									if ( Array.isArray( prop ) && prop.length === 2 ) {
-										propName = prop[0];
-										propConfig = prop[1];
-										right = createProp( propName, propConfig );
-										
-									} else {
-										propName = prop;
-										right = types.stringLiteral(`{{${ propName }}}` );
-									}
-
+								replaceProps.forEach( ( prop ) => {
+									const [ propName, propConfig ] = prop;
 									const left = types.identifier(`${paramName}.${propName}`);
-									
-									// const declarations = path.node.declarations;
+									const right = createPropValue( propName, propConfig );
 									path.insertBefore( buildAssignment( left, right ) );
 								} );
 								path.stop();
