@@ -9,6 +9,7 @@ const TEMPLATE_PROPS_COMMENT_ID = 'Template Props:';
 // Keep track of the funtion declarations, so we can easily look them up
 // later once we've found `templateProps`
 const foundVariableDeclarations = {};
+const foundJSXExpressionDeclarations = {};
 
 module.exports = ( { types }, config ) => {
 	const tidyOnly = config.tidyOnly ?? false;
@@ -80,6 +81,7 @@ module.exports = ( { types }, config ) => {
 		if ( ! Array.isArray( prop ) ) {
 			return [ prop, {} ];
 		}
+		return prop;
 	}
 		
 	function getConfigPropName( prop ) {
@@ -124,16 +126,15 @@ module.exports = ( { types }, config ) => {
 
 			// Build template prop queues for processing at different times.
 			templatePropsValue.forEach( ( prop ) => {
-				console.log( prop );
 				const normalisedProp = normaliseConfigProp( prop );
 				const [ propName, propConfig ] = normalisedProp;
 
 				if ( propConfig.type === 'replace' || ! propConfig.type ) {
-					templateProps.replace.push( propName );
+					templateProps.replace.push( normalisedProp );
 				} else if ( propConfig.type === 'control' ) {
-					templateProps.control.push( propName );
+					templateProps.control.push( normalisedProp );
 				} else if ( propConfig.type === 'list' ) {
-					templateProps.listvl.push( propName );
+					templateProps.listvl.push( normalisedProp );
 				}
 				
 			} );
@@ -144,6 +145,16 @@ module.exports = ( { types }, config ) => {
 	}
 	function getObjectNameFromExpression( expression ) {
 		return expression?.left?.object?.name;
+	}
+
+	function getExpressionSubject( expression ) {
+		if ( expression.left.type === 'UnaryExpression' ) {
+			return expression.left.argument.name;
+		}
+		if ( expression.left.type === 'Identifier' ) {
+			return expression.left.name;
+		}
+		return null;
 	}
 	
 	return {
@@ -156,8 +167,10 @@ module.exports = ( { types }, config ) => {
 				const { declarations } = path.node;
 				declarations.forEach( ( declaration ) => {
 					if ( declaration.id && declaration.id.type === 'Identifier' ) {
-						
-						foundVariableDeclarations[ path.scope.uid ] = [];
+						console.log("found variable declaration", path.scope.uid, declaration.id.name)
+						if ( ! foundVariableDeclarations[ path.scope.uid ] ) {
+							foundVariableDeclarations[ path.scope.uid ] = [];
+						}
 						foundVariableDeclarations[ path.scope.uid ][ declaration.id.name ] = { declaration, path };
 					}
 				} );
@@ -173,14 +186,16 @@ module.exports = ( { types }, config ) => {
 				if ( ! templateProps ) {
 					return;
 				}
-				if ( templateProps ) {
-					path.remove();
-				}
+				
+				// Remove templateProps from the source
+				path.remove();
+				
 				// If tidyOnly is set, exit here, after the removal of the templateProps.
 				if ( tidyOnly ) {
 					return;
 				}
-				const { replace: replaceProps } = templateProps;
+
+				const { replace: replaceProps, control: controlProps } = templateProps;
 				// A functional component will usually be transformed something like:
 				// TODO - maybe this assumption is dangerous?
 				/*
@@ -222,19 +237,22 @@ module.exports = ( { types }, config ) => {
 				}*/
 
 				// Using props + config, update the value.
-				// const objectName = path.node.expression.left.object.name;
 				// Find the param name that is passed in (props) then update the properties with the template strings from the array.
 
 				const objectName = getObjectNameFromExpression( expression );
+				console.log("found expression with ", path.scope.uid, objectName)
 
+				let objectScope = null;
 				// Here we deal with the template tags with the plain values
 				if ( foundVariableDeclarations[ path.scope.uid ] && foundVariableDeclarations[ path.scope.uid ][ objectName ] ) {
 					const { declaration, path: decPath } = foundVariableDeclarations[ path.scope.uid ][ objectName ];
+					objectScope = decPath.scope;
 					if ( Array.isArray( declaration.init.params ) && declaration.init.params.length > 0 ) {
 						// Get the first param name
 						const paramName = declaration.init.params[ 0 ].name; // TODO - do we need to check for multiple params?
 						decPath.traverse( {
 							VariableDeclaration: function(path) {
+								// console.log("found variable declartion");
 								// Insert content before the first variable declaration
 								replaceProps.forEach( ( prop ) => {
 									const [ propName, propConfig ] = prop;
@@ -242,14 +260,56 @@ module.exports = ( { types }, config ) => {
 									const right = createPropValue( propName, propConfig );
 									path.insertBefore( buildAssignment( left, right ) );
 								} );
-								path.stop();
-								decPath.stop();
 							},
+							/*ExpressionStatement: function(path) {
+								console.log("found an expression statement in a component with template props")
+								// Insert content before the first expression statement
+								replaceProps.forEach( ( prop ) => {
+									const [ propName, propConfig ] = prop;
+								} );
+							},
+							JSXExpressionContainer( path) {
+								// console.log("found JSX expression container", path.node?.expression)
+								
+							}*/
 						} );
+
 					}
 				}
+				// Here we deal with the template tags with the plain values
+				//console.log( "IN EXPRESSION statement", path.scope.uid, Object.keys( foundJSXExpressionDeclarations ) );
+				console.log("OBJECT SCOPE WAS: ", objectScope.uid)
+				if ( foundJSXExpressionDeclarations[ objectScope ] && foundJSXExpressionDeclarations[ objectScope ][ objectName ] ) {
+					const expressions = foundVariableDeclarations[ path.scope.uid ][ objectName ];
+					console.log( `found expressions for ${objectName}`, expressions );
+				}
 			},
-			JSXExpressionContainer( path) {
+			JSXExpressionContainer( path ) {
+				
+				// Store the found expressions for later use. 
+				// The JSX expression we want will always be parsed before templateProps is parsed.
+				
+				// TODO - expand this to support other types of JSX expressions for displaying values
+				// For now just support LogicalExpression like:
+				// { isChecked && <Checkbox checked={isChecked} /> }
+				if ( path.node?.expression?.type === 'LogicalExpression' ) {
+					const expression = path.node.expression;
+					if ( ! foundJSXExpressionDeclarations[ path.scope.uid ] ) {
+						foundJSXExpressionDeclarations[ path.scope.uid ] = [];
+					}
+					const expressionSubject = getExpressionSubject( expression );
+					console.log("found jsx expression statement ", path.scope.uid, expressionSubject)
+
+					if ( ! foundJSXExpressionDeclarations[ path.scope.uid ] ) {
+						foundJSXExpressionDeclarations[ path.scope.uid ] = {};
+					}
+					if ( ! foundJSXExpressionDeclarations[ path.scope.uid ][ expressionSubject ] ) {
+						foundJSXExpressionDeclarations[ path.scope.uid ][ expressionSubject ] = [];
+					}
+					foundJSXExpressionDeclarations[ path.scope.uid ][ expressionSubject ].push( { expression, path } );
+					//console.log( "IN EXPRESSION CONTAINER", path.scope.uid, expressionSubject );
+				}
+
 				// Look for `list-start` and `list-end` comments so we can insert the mustache strings around the repeatable elements.
 				const comments = path.node?.expression?.innerComments;
 				if ( comments && comments.length ) {
