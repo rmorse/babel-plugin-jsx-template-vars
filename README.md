@@ -18,7 +18,7 @@ Add this transform plugin to babel in your pre-render build to replace your comp
 1. Assumes you already have a React/Preact app with your development/production builds setup.
 2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
-4. Configure by adding `.templateProps` to components that have dynamic data.
+4. Configure by adding `.templateVars` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
 
 ## How to use
@@ -52,7 +52,7 @@ Then add it as it as a plugin to Babel.
 },
 ```
 
-Note: You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateProps` are removed from your production/development code:
+Note: You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateVars` are removed from your production/development code:
 
 ```js
 plugins: [
@@ -62,7 +62,7 @@ plugins: [
 
 ### Define which props will be template props
 
-Add a `templateProps` property to your components so we know which props need to be replaced with template tags, format is an array of strings:
+Add a `templateVars` property to your components so we know which props need to be replaced with template tags, format is an array of strings:
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -73,7 +73,7 @@ const Person = ( { name, favoriteColor } ) => {
         </>
     );
 };
-Person.templateProps = [ 'name', 'favoriteColor' ];
+Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
 ### Lists and repeatable elements
@@ -105,7 +105,7 @@ const Person = ( { name, favoriteColors } ) => {
     );
 };
 // Setup favoriteColors as type array with objects as children.
-Person.templateProps = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
+Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 
 This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props, resulting in the following output:
@@ -182,7 +182,7 @@ const Box = ( { size } ) => {
         </>
     );
 };
-Box.templateProps = [ 'size' ];
+Box.templateVars = [ 'size' ];
 ```
 
 However if you need to do a computation with it, and then display it, things get a bit more tricky.
@@ -196,11 +196,11 @@ const Box = ( { size } ) => {
         </>
     );
 };
-Box.templateProps = [ 'size' ];
+Box.templateVars = [ 'size' ];
 ```
 Right now this is not supported.
 
-The current workaround would be to set templateProps on the variable before and after the computation (you'll need seperate components), but this is not ideal.
+The current workaround would be to set templateVars on the variable before and after the computation (you'll need seperate components), but this is not ideal.
 
 ```jsx
 const BoxOne = ( { size } ) => {
@@ -212,18 +212,18 @@ const BoxOne = ( { size } ) => {
         </>
     );
 };
-BoxOne.templateProps = [ 'size' ];
+BoxOne.templateVars = [ 'size' ];
 
 const BoxTwo = ( { size } ) => {
     return (
         <p>Double size is { size }</p>
     );
 };
-BoxTwo.templateProps = [ 'size' ];
+BoxTwo.templateVars = [ 'size' ];
 ```
 
 #### Potential solution
-A possible solution could be to change this plugins behaviour from defining `templateProps`, and instead allow for any variable to be exposed inside the component.  `templateTags` could be used instead to reference any variable or nested prop.
+A possible solution could be to change this plugins behaviour from defining `templateVars`, and instead allow for any variable to be exposed inside the component.  `templateTags` could be used instead to reference any variable or nested prop.
 ```jsx
 const Box = ( { size } ) => {
     const doubleSize = size * 2;

@@ -3,7 +3,7 @@
  *
  * Works by replacing variables throughout a component with Mustache tags.
  *
- * Add `templateProps` to a component definition to specify which props are dynamic and need
+ * Add `templateVars` to a component definition to specify which props are dynamic and need
  * to be exposed as Mustache tags - to later be rendered with data from a server.
  *
  * Currently supports three types of variables:
@@ -18,7 +18,7 @@
  * ----
  *
  * Outline
- * - Look for `templateProps` //TODO - rename to `templateVars`
+ * - Look for `templateVars`
  * - Categorise into types (replace, control, list)
  * - Locate + visit the component definition - currently assumes it is the previous path ( sibling ( -1 ) ).
  *
@@ -61,7 +61,7 @@ function getTemplatePropsFromExpression( expression ) {
 	}
 
 	const { object, property } = left;
-	// Make sure the property being set is `templateProps`
+	// Make sure the property being set is `templateVars`
 	if ( object?.type !== 'Identifier' ) {
 		return false;
 	}
@@ -72,15 +72,15 @@ function getTemplatePropsFromExpression( expression ) {
 	const objectName = object.name;
 	const propertyName = property.name;
 
-	if ( propertyName === 'templateProps' ) {
+	if ( propertyName === 'templateVars' ) {
 		let templatePropsValue = [];
 		// Now process the right part of the expression 
-		// .templateProps = *right* and build our config object.
+		// .templateVars = *right* and build our config object.
 		if ( right && right.type === 'ArrayExpression' ) {
 			// Then we have an array to process the props.
 			templatePropsValue = getArrayFromExpression( right );
 		}
-		const templateProps = {
+		const templateVars = {
 			replace: [],
 			control: [],
 			list: [],
@@ -92,15 +92,15 @@ function getTemplatePropsFromExpression( expression ) {
 			const [ propName, propConfig ] = normalisedProp;
 
 			if ( propConfig.type === 'replace' || ! propConfig.type ) {
-				templateProps.replace.push( normalisedProp );
+				templateVars.replace.push( normalisedProp );
 			} else if ( propConfig.type === 'control' ) {
-				templateProps.control.push( normalisedProp );
+				templateVars.control.push( normalisedProp );
 			} else if ( propConfig.type === 'list' ) {
-				templateProps.listvl.push( normalisedProp );
+				templateVars.listvl.push( normalisedProp );
 			}
 			
 		} );
-		return templateProps;
+		return templateVars;
 	}
 	return false;
 }
@@ -123,31 +123,31 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 	const tidyOnly = config.tidyOnly ?? false;
 	return { 
 		ExpressionStatement( path, state ) {
-			// Try to look for the property assignment of `templateProps` and:
+			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
-			// - Remove `templateProps` from the source code
+			// - Remove `templateVars` from the source code
 
 			const { expression } = path.node;
 			
 			// Process the expression and get template props as an object
-			const templateProps = getTemplatePropsFromExpression( expression );
-			if ( ! templateProps ) {
+			const templateVars = getTemplatePropsFromExpression( expression );
+			if ( ! templateVars ) {
 				return;
 			}
 
 			// Get the previous sibling before the current path is removed.
 			const componentPath = path.getSibling( path.key - 1 );
 			
-			// Remove templateProps from the source
+			// Remove templateVars from the source
 			path.remove();
 
-			// If tidyOnly is set, exit here (immediately after the removal of the templateProps).
+			// If tidyOnly is set, exit here (immediately after the removal of the templateVars).
 			if ( tidyOnly ) {
 				return;
 			}
 
 			// Get the three types of template vars.
-			const { replace: replaceVars, control: controlVars, list: listVars } = templateProps;
+			const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 
 			// Build the map of props to replace.
 			const replacePropsMap = {};
