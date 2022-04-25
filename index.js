@@ -206,6 +206,11 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 					if ( isControlExpression( expression ) ) {
 						const expressionSubject = getExpressionSubject( expression );
 						console.log( "expression subject", expressionSubject );
+						if ( controlPropNames.includes( expressionSubject ) ) {
+							subPath.insertBefore( t.stringLiteral(`{{#BEFORE}}` ) );
+							subPath.insertAfter( t.stringLiteral(`{{/AFTER}}` ) );
+							subPath.replaceWith( expression.right );
+						}
 					}
 				}
 			} );
