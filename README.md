@@ -1,12 +1,12 @@
-# Babel JSX Template Props
+# Babel JSX Template Vars
 A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a Mustache based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
 
-## What are template props
-The idea is that this transform will replace selected props (across the components you specify) with a placeholder string such as `{{name}}`. 
+## What are template var
+The idea is that this transform will replace selected variables (across the components you specify) with a Mustache tags such as `{{name}}`. 
 
 This should be used in a pre-render build of your application, where you would save the html output to a file to be rendered later via your server.
 
-Replacing props with template tags allows you to render your application via the [Mustache](https://mustache.github.io/) templating engine, which can be processed and rendered in almost any server environment.
+Replacing variables with template tags allows you to render your application via the [Mustache](https://mustache.github.io/) templating engine, which can be processed and rendered in almost any server environment.
 
 This technique suits simpler/smaller applications as there are **a fair few limitations**.
 
@@ -20,6 +20,44 @@ Add this transform plugin to babel in your pre-render build to replace your comp
 3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
 4. Configure by adding `.templateVars` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
+
+### An example
+
+Lets take a component: 
+
+```js
+const HelloWorld = ({ name }) => (
+  <div>
+    <h1>Hello {name}</h1>
+  </div>
+);
+```
+Once we run our app, this might generate html like:
+```html
+<div>
+  <h1>Hello John</h1>
+</div>
+```
+In order to render this on the server using Mustache, we need to match the name `John`, so we need to replace it 
+with a template tag, so the output would be
+
+```html
+<div>
+    <h1>Hello {{name}}</h1>
+</div>
+```
+
+Using this plugin, adding a `.templateVars` property on your component will render it using the Mustache template tag above.
+
+```js
+const HelloWorld = ({ name }) => (
+  <div>
+    <h1>Hello { name }</h1>
+  </div>
+);
+HelloWorld.templateVars = [ 'name' ];
+```
+There are more types than just replacing strings with template tags, such as control vars and list vars.
 
 ## How to use
 

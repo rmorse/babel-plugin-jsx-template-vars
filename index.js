@@ -12,27 +12,28 @@
  *
  * Working on:
  * - *control* - a variable that controls output/generated html (such as showing/hiding content)
- * 			- limited to variables used in JSX expressions - `{ isSelected && <> ... </> }`
- * - *list* 	- lists signify repeatable content and will add list tags to the html output
+ *             - limited to variables used in JSX expressions - `{ isSelected && <> ... </> }`
+ * - *list*    - lists signify repeatable content and will add list tags to the html output
  *
  * ----
  *
  * Outline
  * - Look for `templateVars`
  * - Categorise into types (replace, control, list)
- * - Locate + visit the component definition - currently assumes it is the previous path ( sibling ( -1 ) ).
+ * - Locate + visit the component definition - assumes it is the previous path ( sibling ( -1 ) ).
  *
  * Process "replace" type vars
  * - Declare new identifiers (with new values) for all `replace` type template props at the top of the component
- * - Replace occurences of the old identifiers with the new ones so they
- *   can be used instead (exclude variable declarations, watch out for nested props)
+ * - Replace occurences of the old identifiers with the new ones, so they are in effect replaced
+ *   (exclude variable declarations and watch out for nested props)
  *
  * Process "control" type vars - in progress
  * - Look for the template var in JSX expressions (TODO: support more expression types
  * - Remove the condition so the expression is always completed (showing the related JSX)
  * - Wrap JSX in mustache tags... and try to recreate the condition in Mustache?
+ * 
+ *  * Process "list" type vars - todo...
  */
-
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -91,12 +92,13 @@ function getTemplatePropsFromExpression( expression ) {
 			const normalisedProp = normaliseConfigProp( prop );
 			const [ propName, propConfig ] = normalisedProp;
 
+			// If the type is not set assume it is `replace`
 			if ( propConfig.type === 'replace' || ! propConfig.type ) {
 				templateVars.replace.push( normalisedProp );
 			} else if ( propConfig.type === 'control' ) {
 				templateVars.control.push( normalisedProp );
 			} else if ( propConfig.type === 'list' ) {
-				templateVars.listvl.push( normalisedProp );
+				templateVars.list.push( normalisedProp );
 			}
 			
 		} );
@@ -119,7 +121,21 @@ function isControlExpression( expression ) {
 	}
 	return false;
 }
-const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
+
+// 
+function generateVarTypeUids( scope, vars ) {
+	const varMap = {};
+	const varNames = [];
+	vars.forEach( ( [ varName, propConfig ] ) => {
+		const newIdentifier = scope.generateUidIdentifier("uid");
+		varMap[ varName ] = newIdentifier.name;
+		varNames.push( varName );
+	} );
+
+	return [ varMap, varNames ];
+}
+
+function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	return { 
 		ExpressionStatement( path, state ) {
@@ -149,27 +165,14 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 			// Get the three types of template vars.
 			const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 
-			// Build the map of props to replace.
-			const replacePropsMap = {};
-			const replacePropNames = [];
-			replaceVars.forEach( ( [ propName, propConfig ] ) => {
-				const newIdentifier = path.scope.generateUidIdentifier("uid");
-				replacePropsMap[ propName ] = newIdentifier.name;
-				replacePropNames.push( propName );
-			} );
-
-			// Build the map of props to replace.
-			const controlPropsMap = {};
-			const controlPropNames = [];
-			controlVars.forEach( ( [ propName, propConfig ] ) => {
-				const newIdentifier = path.scope.generateUidIdentifier("uid");
-				controlPropsMap[ propName ] = newIdentifier.name;
-				controlPropNames.push( propName );
-			} );
-
+			// Build the map of vars to replace.
+			const [ replacePropsMap, replacePropNames ] = generateVarTypeUids( componentPath.scope, replaceVars );
+			// Build the map of var controls.
+			const [ controlPropsMap, controlPropNames ] = generateVarTypeUids( componentPath.scope, controlVars );
+			// Build the map of var lists.
+			//const [ listPropsMap, listPropNames ] = generateVarTypeUids( statementPath.scope, listVars );
 
 			// Start the main traversal of component
-			
 			componentPath.traverse( {
 				/*ReturnStatement( subPath ) {
 				},*/
@@ -179,13 +182,14 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 				},
 				JSXIdentifier( subPath ) {
 				},*/
-				BlockStatement( subPath ) {
+				BlockStatement( statementPath ) {
 					// Add the new vars to to top of the function
 					replaceVars.forEach( ( prop ) => {
 						const [ propName, propConfig ] = prop;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						subPath.node.body.unshift( parse(`let ${ replacePropsMap[ propName ] } = '{{${ propName }}}';`) );
+						statementPath.node.body.unshift( parse(`let ${ replacePropsMap[ propName ] } = '{{${ propName }}}';`) );
 					} );
+				
 				},
 				Identifier( subPath ) {
 					// We need to update all the identifiers with the new variables declared in the block statement
@@ -193,19 +197,20 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 						// Make sure we only replace identifiers that are not prop and also that
 						// they are not variable declarations.
 						// const includeTypes = [ 'UnaryExpression', 'BinaryExpression' ];
-						const excludeTypes = [ 'ObjectProperty', 'MemberExpression' ];
+						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator' ];
+						
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							subPath.node.name = replacePropsMap[ subPath.node.name ];
 						}
 					}
 
 				},
-				// Track vars in JSX expressions in case we need have any control props to process
+				// Track vars in JSX expressions in case we need have any control vars to process
 				JSXExpressionContainer( subPath ) {
 					const { expression } = subPath.node;
 					if ( isControlExpression( expression ) ) {
 						const expressionSubject = getExpressionSubject( expression );
-						console.log( "expression subject", expressionSubject );
+						// console.log( "expression subject", expressionSubject );
 						if ( controlPropNames.includes( expressionSubject ) ) {
 							subPath.insertBefore( t.stringLiteral(`{{#BEFORE}}` ) );
 							subPath.insertAfter( t.stringLiteral(`{{/AFTER}}` ) );
@@ -220,9 +225,9 @@ const templateVarsVisitor = ( { types: t, traverse, parse }, config ) => {
 
 module.exports = ( babel, config ) => {
 	return {
-		name: "template-props-plugin",
+		name: "template-vars-plugin",
 		visitor: {
-			Program(programPath) {
+			Program( programPath ) {
 				programPath.traverse( templateVarsVisitor( babel, config ) );
 			},
 		}
