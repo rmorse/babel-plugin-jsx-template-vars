@@ -16,7 +16,7 @@
     "jsx",
     "template",
     "props",
-    "mustache",
+    "handlebars",
     "ssr",
     "pre-render"
   ],

@@ -1,10 +1,10 @@
 /**
- * Generates a Mustache ready version of a JSX app for processing server side for achieving SSR.
+ * Generates a Handlebars ready version of a JSX app for processing server side for achieving SSR.
  *
- * Works by replacing variables throughout a component with Mustache tags.
+ * Works by replacing variables throughout a component with Handlebars tags.
  *
  * Add `templateVars` to a component definition to specify which props are dynamic and need
- * to be exposed as Mustache tags - to later be rendered with data from a server.
+ * to be exposed as Handlebars tags - to later be rendered with data from a server.
  *
  * Currently supports three types of variables:
  *
@@ -30,7 +30,7 @@
  * Process "control" type vars - in progress
  * - Look for the template var in JSX expressions (TODO: support more expression types
  * - Remove the condition so the expression is always completed (showing the related JSX)
- * - Wrap JSX in mustache tags... and try to recreate the condition in Mustache?
+ * - Wrap JSX in handlebars tags... and try to recreate the condition in handlebars?
  * 
  *  * Process "list" type vars - todo...
  */
@@ -41,6 +41,14 @@ const {
 	getNameFromNode,
 } = require( './utils' );
 
+
+// Figure out what the left part of the expression is doing so we can figure out if its either:
+// - a truthy condition
+// - a falsy condition
+// - a strict equality check
+function getCondition( expression ) {
+	
+}
 function normaliseConfigProp( prop ) {
 	if ( ! Array.isArray( prop ) ) {
 		return [ prop, {} ];
@@ -135,6 +143,7 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
+
 function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	return { 
@@ -194,27 +203,61 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				Identifier( subPath ) {
 					// We need to update all the identifiers with the new variables declared in the block statement
 					if ( replacePropNames.includes( subPath.node.name ) ) {
-						// Make sure we only replace identifiers that are not prop and also that
+						// Make sure we only replace identifiers that are not props and also that
 						// they are not variable declarations.
-						// const includeTypes = [ 'UnaryExpression', 'BinaryExpression' ];
 						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator' ];
-						
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							subPath.node.name = replacePropsMap[ subPath.node.name ];
 						}
 					}
-
 				},
 				// Track vars in JSX expressions in case we need have any control vars to process
 				JSXExpressionContainer( subPath ) {
-					const { expression } = subPath.node;
-					if ( isControlExpression( expression ) ) {
-						const expressionSubject = getExpressionSubject( expression );
-						// console.log( "expression subject", expressionSubject );
+					const { expression: containerExpression } = subPath.node;
+					if ( isControlExpression( containerExpression ) ) {
+						const expressionSubject = getExpressionSubject( containerExpression );
+						const expression = containerExpression.left;
+						// const condition = getCondition( containerExpression );
+						console.log( "expression", expressionSubject, expression.type );
 						if ( controlPropNames.includes( expressionSubject ) ) {
-							subPath.insertBefore( t.stringLiteral(`{{#BEFORE}}` ) );
-							subPath.insertAfter( t.stringLiteral(`{{/AFTER}}` ) );
-							subPath.replaceWith( expression.right );
+
+							let expressionOperator;
+							let expressionValue = '';
+
+							// Lets start by only supporting:
+							// truthy - `myVar && <>...</>`
+							// falsy - `! myVar && <>...</>`
+							// equals - `myVar === 'value' && <>...</>`
+							// not equals - `myVar !== 'value' && <>...</>`
+							// map these to handlebars helper functions and replace the expression with the helper tag.
+
+
+							if ( expression.type === 'Identifier' ) {
+								expressionOperator = 'if_truthy';
+							} else if ( expression.type === 'UnaryExpression' ) {
+								if ( expression.operator === '!' ) {
+									expressionOperator = 'if_falsy';
+								}
+							} else if( expression.type === 'BinaryExpression' ) {
+								if ( expression.operator && expression.right.value ) {
+									if ( expression.operator === '===' ) {
+										expressionOperator = 'if_equal';
+									} else if ( expression.operator === '!==' ) {
+										expressionOperator = 'if_not_equal';
+									}
+									expressionValue = expression.right.value;
+								}
+							}
+
+							if ( expressionOperator ) {
+								let templateExpression = `#${ expressionOperator } ${ expressionSubject }`;
+								if ( expressionValue ) {
+									templateExpression += ` "${ expressionValue }"`;
+								}
+								subPath.insertBefore( t.stringLiteral(`{{${ templateExpression }}}` ) );
+								subPath.insertAfter( t.stringLiteral(`{{/${ expressionOperator }}}` ) );
+								subPath.replaceWith( containerExpression.right );
+							}
 						}
 					}
 				}

@@ -1,23 +1,23 @@
 # Babel JSX Template Vars
-A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a Mustache based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
+A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a Handlebars based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
 
 ## What are template var
-The idea is that this transform will replace selected variables (across the components you specify) with a Mustache tags such as `{{name}}`. 
+The idea is that this transform will replace selected variables (across the components you specify) with Handlebars tags such as `{{name}}`. 
 
 This should be used in a pre-render build of your application, where you would save the html output to a file to be rendered later via your server.
 
-Replacing variables with template tags allows you to render your application via the [Mustache](https://mustache.github.io/) templating engine, which can be processed and rendered in almost any server environment.
+Replacing variables with template tags allows you to render your application via the [Handlebars](https://handlebarsjs.com/) templating engine which has plenty of server side implemenations.
 
-This technique suits simpler/smaller applications as there are **a fair few limitations**.
+There are **a fair few limitations** so your mileage may vary.
 
 ## How it works
 
-Add this transform plugin to babel in your pre-render build to replace your component props with template tags such as `{{name}}`- allowing the resulting markup to be processed as a Mustache compatible template.
+Add this transform plugin to babel in your pre-render build to replace your component variables with template tags such as `{{name}}`- allowing the resulting markup to be processed as a Handlebars compatible template.
 
 ### Workflow
 1. Assumes you already have a React/Preact app with your development/production builds setup.
 2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
-3. **Add this plugin to the pre-render build** to add the Mustache tags to the html output.
+3. **Add this plugin to the pre-render build** to add the Handlebars tags to the html output.
 4. Configure by adding `.templateVars` to components that have dynamic data.
 5. Via your server side language (eg PHP), process the saved template file and pass in your data.
 
@@ -38,8 +38,7 @@ Once we run our app, this might generate html like:
   <h1>Hello John</h1>
 </div>
 ```
-In order to render this on the server using Mustache, we need to match the name `John`, so we need to replace it 
-with a template tag, so the output would be
+In order to render this on the server using Handlebars, we need to replace the name `John` qwith a template tag, so the output would be
 
 ```html
 <div>
@@ -47,7 +46,7 @@ with a template tag, so the output would be
 </div>
 ```
 
-Using this plugin, adding a `.templateVars` property on your component will render it using the Mustache template tag above.
+Using this plugin, adding a `.templateVars` property on your component will render it using the Handlebars template tag above.
 
 ```js
 const HelloWorld = ({ name }) => (
@@ -57,7 +56,7 @@ const HelloWorld = ({ name }) => (
 );
 HelloWorld.templateVars = [ 'name' ];
 ```
-There are more types than just replacing strings with template tags, such as control vars and list vars.
+There are other types variables (not only strings to be replaced) such as control and list variables.
 
 ## How to use
 
@@ -113,10 +112,13 @@ const Person = ( { name, favoriteColor } ) => {
 };
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
+### Control variables (showing/hiding content)
 
-### Lists and repeatable elements
 
-To use repeatable elements and lists in Mustache templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
+
+### Lists (and repeatable elements)
+
+To use repeatable elements and lists in Handlebars templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
 
 ```html
     <section class="profile">
@@ -146,7 +148,7 @@ const Person = ( { name, favoriteColors } ) => {
 Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 
-This will generate an array with a single value (and Mustache tags), with an object as described by the `child` props, resulting in the following output:
+This will generate an array with a single value (and Handlebars tags), with an object as described by the `child` props, resulting in the following output:
 
 ```html
     <section class="profile">
@@ -193,7 +195,7 @@ We whould be able to track the prop (in the above example `favoriteColors`) from
 ## Caveats
 
 ### This is an experiment
-As it says, this is an exploration on a concept of semi automating the generation of Mustache templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha - 0.0.1-alpha - _feel free to help with the project / offer alternative ideas for exploration / report bugs_.
+As it says, this is an exploration on a concept of semi automating the generation of Handlebars templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha - 0.0.1-alpha - _feel free to help with the project / offer alternative ideas for exploration / report bugs_.
 
 ### Data fetching & loading
 One thing to watch out for is data fetching and loading.
@@ -273,6 +275,6 @@ const Box = ( { size } ) => {
     );
 };
 
-// This could reference any any variable inside the component and expose it to Mustache
+// This could reference any any variable inside the component and expose it to Handlebars
 Box.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
 ```
