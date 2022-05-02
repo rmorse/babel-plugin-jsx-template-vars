@@ -97,9 +97,11 @@ plugins: [
 ],
 ```
 
-### Define which props will be template props
+### Define which variables in the component will be template variables.
 
-Add a `templateVars` property to your components so we know which props need to be replaced with template tags, format is an array of strings:
+First, add a `templateVars` property to your component to specificy which should be replaced template tags. 
+
+Format is an array, of strings (or arrays with additional config):
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -112,8 +114,63 @@ const Person = ( { name, favoriteColor } ) => {
 };
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
-### Control variables (showing/hiding content)
 
+### Control variables (showing/hiding content)
+Depending on the value of certain variable, you might wish to show or hide content in your component.  We use the `control` type variable to signify this.
+
+```jsx
+const Person = ( { name, favoriteColor, show } ) => {
+    return (
+        <>
+            <h1>{ name }</h1>
+            <p>Favorite color: { favoriteColor }</p>
+            { show && <p>Show this content</p> }
+        </>
+    );
+};
+Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ] ];
+```
+By signifying the variable as a control variable, we can automatically add the correct handlebars tags to the output.
+
+The result would be:
+
+```html
+<h1>{{name}}</h1>
+<p>Favorite color: {{favoriteColor}}</p>
+{{#if_truthy show}}
+    <p>Show this content</p>
+{{/if}}
+```
+
+Note: the control variable and condition to evaluate is parsed from the source code automatically.
+
+ - only detects conditions in a JSX expression container (e.g., in a components return function)
+ - supports 4 types of expressions:
+    - `truthy` - if the value is truthy, show the content#
+        ```jsx
+            { isActive && <>...</> }
+        ```
+    - `falsy` - if the value is falsy, show the content
+        ```jsx
+            { ! isActive && <>...</> }
+        ```
+    - `equals` - if the value is equal to the specified value, show the content
+        ```jsx
+            { isActive === 'yes' && <>...</> }
+        ```
+    - `not equals` - if the value is not equal to the specified value, show the content
+        ```jsx
+            { isActive !== 'yes' && <>...</> }
+        ```
+
+Support for more expression types is planned.
+
+#### Handlebars helpers
+Handlebars doesn't come with out of the box support for conditions such as `equals` and `not equals`.
+
+`if_truthy`, `if_falsy`, `if_equal`, and `if_not_equal` should be added as custom helpers to your handlebars implementation.
+
+[An implemenation using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
 
 
 ### Lists (and repeatable elements)
@@ -123,18 +180,18 @@ To use repeatable elements and lists in Handlebars templates, our code must be c
 ```html
     <section class="profile">
         {{#favoriteColors}}
-            <p>Favorite color: {{label}}</p>
+            <p>A favorite color: {{label}}</p>
         {{/favoriteColors}}
     </section>
 ```
 
-First we need to define which prop is an array (`favoriteColors`) and then also which props we need to create template tags for.
+First we need to define which var is array like (`favoriteColors`) and then the object properties of the child.
 
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
     const favoriteColorsList = favoriteColors.map( ( color, index ) => {
         return (
-            <p key={ index }>Favorite color: { color.label }</p>
+            <p key={ index }>A favorite color: { color.label }</p>
         );
     } );
     return (
@@ -152,42 +209,11 @@ This will generate an array with a single value (and Handlebars tags), with an o
 
 ```html
     <section class="profile">
-        <p>Favorite color: {{label}}</p>
-    </section>
-```
-### Adding the opening + closing list tags (work in progress)
-
-Right now there is no way to automatically insert these tags, so the current workaround is using JSX comments to signal where they should occur:
-```jsx
-    <section class="profile">
-        { /* Template Props: list-start: favoriteColors */ }
-        { favoriteColorsList }
-        { /* Template Props: list-end: favoriteColors */ }
-    </section>
-```
-
-Will be converted to:
-
-```html
-    <section class="profile">
         {{#favoriteColors}}
-            <p>Favorite color: {{label}}</p>
+            <p>A favorite color: {{label}}</p>
         {{/favoriteColors}}
     </section>
 ```
-
-The comments must be in the format:
-1. Start with `Template Props: `
-2. Signal opening or closing list with `list-start: ` or `list-end: `
-3. The name of the variable/list (e.g. `favoriteColors`)
-
-#### The goal for a v1
-...is to have the addition of the opening and closing list tags automated (so the comments won't be necessary)
-
-We whould be able to track the prop (in the above example `favoriteColors`) from being passed into the component as a prop, all the way down to the components return (after `.map()`), and then automatically wrap it with the opening and closing list tags.  
-
-[Keep up to date on the issue here](https://github.com/rmorse/babel-plugin-jsx-template-props/issues/1).
-
 
 ## Working example
 [ ] _currently working on a new repo for a demo project..._
@@ -195,86 +221,16 @@ We whould be able to track the prop (in the above example `favoriteColors`) from
 ## Caveats
 
 ### This is an experiment
-As it says, this is an exploration on a concept of semi automating the generation of Handlebars templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha - 0.0.1-alpha - _feel free to help with the project / offer alternative ideas for exploration / report bugs_.
+As it says, this is an exploration on a concept of semi automating the generation of Handlebars templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha - 0.0.1-alpha - _I'd be grateful for any help with the project / alternative ideas for exploration / bug reports_.
 
 ### Data fetching & loading
 One thing to watch out for is data fetching and loading.
 
-In complex applications, props will often get passed down into various data fetching routines, and if they are replaced with template tags such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true render.
+In complex applications, vars/props will often get passed down into various data fetching routines, and if they are replaced with template tags too early, such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true pre-render.
 
-To work around this you can try to set your template props only on components that live underneath the data requests (futher down the tree) that use those props for data fetching.
+To work around this you can try to set your template vars only on components that live underneath the data requests (futher down the tree).  This will ensure that the data is loaded before the template vars are replaced.
 
 ### Nested props
-This transform supports nested props (arrays and objects), but only supports 1 level of depth.
+This transform supports nested vars (arrays and objects), but only supports 1 level of depth.
 
-It is recommended to set template props on components that reside further down the tree and deal with those nested props directly.
-
-### Props with computations
-Lets say you pass a prop with a number value, such as 10, replacing that should be fine if it is displayed "as is" or as part of a string.
-
-```jsx
-const Box = ( { size } ) => {
-    const doubleSize = size * 2;
-    return (
-        <>
-            <p>One Box is { size }</p>
-            <p>Two Boxes are { doubleSize }</p>
-        </>
-    );
-};
-Box.templateVars = [ 'size' ];
-```
-
-However if you need to do a computation with it, and then display it, things get a bit more tricky.
-```jsx
-const Box = ( { size } ) => {
-    const doubleSize = size * 2;
-    return (
-        <>
-            <p>Size is { size }</p>
-            <p>Double size is { doubleSize }</p>
-        </>
-    );
-};
-Box.templateVars = [ 'size' ];
-```
-Right now this is not supported.
-
-The current workaround would be to set templateVars on the variable before and after the computation (you'll need seperate components), but this is not ideal.
-
-```jsx
-const BoxOne = ( { size } ) => {
-    const doubleSize = size * 2;
-    return (
-        <>
-            <p>Size is { size }</p>
-            <BoxTwo size={ doubleSize } />
-        </>
-    );
-};
-BoxOne.templateVars = [ 'size' ];
-
-const BoxTwo = ( { size } ) => {
-    return (
-        <p>Double size is { size }</p>
-    );
-};
-BoxTwo.templateVars = [ 'size' ];
-```
-
-#### Potential solution
-A possible solution could be to change this plugins behaviour from defining `templateVars`, and instead allow for any variable to be exposed inside the component.  `templateTags` could be used instead to reference any variable or nested prop.
-```jsx
-const Box = ( { size } ) => {
-    const doubleSize = size * 2;
-    return (
-        <>
-            <p>One Box is { size }</p>
-            <p>Two Boxes are { doubleSize }</p>
-        </>
-    );
-};
-
-// This could reference any any variable inside the component and expose it to Handlebars
-Box.templateTags = [ 'size', 'doubleSize', 'nested.prop' ];
-```
+It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
