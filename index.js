@@ -9,10 +9,9 @@
  * Currently supports three types of variables:
  *
  * - *replace* - assumes the variable needs to be replaced with a template tag like `{{name}}`
- *
- * Working on:
  * - *control* - a variable that controls output/generated html (such as showing/hiding content)
  *             - limited to variables used in JSX expressions - `{ isSelected && <> ... </> }`
+ * Working on:
  * - *list*    - lists signify repeatable content and will add list tags to the html output
  *
  * ----
@@ -24,15 +23,15 @@
  *
  * Process "replace" type vars
  * - Declare new identifiers (with new values) for all `replace` type template props at the top of the component
- * - Replace occurences of the old identifiers with the new ones, so they are in effect replaced
+ * - Replace occurences of the old identifiers with the new ones
  *   (exclude variable declarations and watch out for nested props)
  *
- * Process "control" type vars - in progress
- * - Look for the template var in JSX expressions (TODO: support more expression types
+ * Process "control" type vars
+ * - Look for the template var in JSX expressions (TODO: support more expression types)
  * - Remove the condition so the expression is always completed (showing the related JSX)
- * - Wrap JSX in handlebars tags... and try to recreate the condition in handlebars?
+ * - Wrap JSX in handlebars tags using custom helpers to recreate the conditions
  * 
- *  * Process "list" type vars - todo...
+ * Process "list" type vars - in progress
  */
 const {
 	getExpressionSubject,
@@ -41,27 +40,25 @@ const {
 	getNameFromNode,
 } = require( './utils' );
 
-
-// Figure out what the left part of the expression is doing so we can figure out if its either:
-// - a truthy condition
-// - a falsy condition
-// - a strict equality check
-function getCondition( expression ) {
-	
-}
+/**
+ * Ensure the config prop is an array of two elements, with the first item being the var name and the second being the var config.
+ * 
+ * @param {Array|String} prop - The prop to normalise
+ * @returns 
+ */
 function normaliseConfigProp( prop ) {
 	if ( ! Array.isArray( prop ) ) {
 		return [ prop, {} ];
 	}
 	return prop;
 }
-function getConfigPropName( prop ) {
-	if ( Array.isArray( prop ) && prop.length === 2 ) {
-		return prop[0];
-	} else {
-		return prop;
-	}
-}
+
+/**
+ * Gets the template vars from the property definition.
+ * 
+ * @param {Object} expression 
+ * @returns 
+ */
 function getTemplatePropsFromExpression( expression ) {
 	const left = expression.left;
 	const right = expression.right;
@@ -114,6 +111,13 @@ function getTemplatePropsFromExpression( expression ) {
 	}
 	return false;
 }
+
+/**
+ * Ensures the expression being passed is a supporte control type.
+ *
+ * @param {Object} expression The expression to check
+ * @returns 
+ */
 function isControlExpression( expression ) {
 	if ( ! expression.left || ! expression.right ) {
 		return false;
@@ -130,7 +134,13 @@ function isControlExpression( expression ) {
 	return false;
 }
 
-// 
+/**
+ * Generate new uids for the current scope.
+ * 
+ * @param {Object} scope The current scope.
+ * @param {Object} vars The vars to generate uids for.
+ * @returns 
+ */
 function generateVarTypeUids( scope, vars ) {
 	const varMap = {};
 	const varNames = [];
@@ -143,7 +153,13 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
-
+/**
+ * The main visitor for the plugin.
+ * 
+ * @param {Object} param0 Babel instance.
+ * @param {Object} config Plugin config.
+ * @returns 
+ */
 function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	return { 
