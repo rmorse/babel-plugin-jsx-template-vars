@@ -1,12 +1,12 @@
 # Babel JSX Template Vars
-A Babel transform for rendering a template friendly version of your JSX app.  Useful for generating a Handlebars based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
+A Babel transform for rendering a template friendly version of your JSX app.  
 
-## What are template var
+Generates a Handlebars based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
+
+## What are template variables?
 The idea is that this transform will replace selected variables (across the components you specify) with Handlebars tags such as `{{name}}`. 
 
-This should be used in a pre-render build of your application, where you would save the html output to a file to be rendered later via your server.
-
-Replacing variables with template tags allows you to render your application via the [Handlebars](https://handlebarsjs.com/) templating engine which has plenty of server side implemenations.
+Replacing variables with template tags allows you to render your application via the [Handlebars](https://handlebarsjs.com/) templating engine, which is supported in a lot of different languages.
 
 There are **a fair few limitations** so your mileage may vary.
 
@@ -19,7 +19,7 @@ Add this transform plugin to babel in your pre-render build to replace your comp
 2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
 3. **Add this plugin to the pre-render build** to add the Handlebars tags to the html output.
 4. Configure by adding `.templateVars` to components that have dynamic data.
-5. Via your server side language (eg PHP), process the saved template file and pass in your data.
+5. Via your server side language (eg PHP), process the saved template file and pass in your data to get an SSR compatible pre-render.
 
 ### An example
 
@@ -35,10 +35,10 @@ const HelloWorld = ({ name }) => (
 Once we run our app, this might generate html like:
 ```html
 <div>
-  <h1>Hello John</h1>
+  <h1>Hello Mary</h1>
 </div>
 ```
-In order to render this on the server using Handlebars, we need to replace the name `John` qwith a template tag, so the output would be
+In order to render this on the server using Handlebars, we need to replace the name `Mary` with a template tag, so the output would be
 
 ```html
 <div>
@@ -60,13 +60,13 @@ There are other types variables (not only strings to be replaced) such as contro
 
 ## How to use
 
-First install the package:
+### 1. Install the package via npm
 
 `npm install babel-plugin-jsx-template-props`
 
-Then add it as it as a plugin to Babel.
+### 2. Add to babel as a plugin
 
-### Via .babelrc
+#### Via .babelrc
 ```js
 {
   "plugins": [
@@ -74,7 +74,7 @@ Then add it as it as a plugin to Babel.
   ]
 }
 ```
-### With babel-loader + webpack
+#### With babel-loader + webpack
 ```js
 {
     test: /\.(js|jsx|tsx|ts)$/,
@@ -89,7 +89,7 @@ Then add it as it as a plugin to Babel.
 },
 ```
 
-Note: You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateVars` are removed from your production/development code:
+**Note:** You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateVars` properties are removed from your production/development code, e.g.
 
 ```js
 plugins: [
@@ -97,7 +97,7 @@ plugins: [
 ],
 ```
 
-### Define which variables in the component will be template variables.
+### 3. Define which variables in the component will be template variables.
 
 First, add a `templateVars` property to your component to specificy which should be replaced template tags. 
 
@@ -115,7 +115,15 @@ const Person = ( { name, favoriteColor } ) => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
-### Control variables (showing/hiding content)
+There are 3 types of variables that have different behaviours:
+
+#### 1. Replacement variables
+
+Replacement variables are variables that will be replaced with a template tag, e.g. `{{name}}`, usually to display a dynamic string value.
+
+All examples above show replacement variables, and they are the default type for a variable if a type was not set.
+
+#### 2. Control variables (showing/hiding content)
 Depending on the value of certain variable, you might wish to show or hide content in your component.  We use the `control` type variable to signify this.
 
 ```jsx
@@ -139,33 +147,33 @@ The result would be:
 <p>Favorite color: {{favoriteColor}}</p>
 {{#if_truthy show}}
     <p>Show this content</p>
-{{/if}}
+{{/if_truthy}}
 ```
 
-Note: the control variable and condition to evaluate is parsed from the source code automatically.
-
+**Note:** the control variable and condition to evaluate is parsed from the source code automatically.
+##### Current behaviour
  - only detects conditions in a JSX expression container (e.g., in a components return function)
  - supports 4 types of expressions:
-    - `truthy` - if the value is truthy, show the content#
+    1. `truthy` - if the value is truthy, show the content.
         ```jsx
-            { isActive && <>...</> }
+        { isActive && <>...</> }
         ```
-    - `falsy` - if the value is falsy, show the content
+    2. `falsy` - if the value is falsy, show the content.
         ```jsx
-            { ! isActive && <>...</> }
+        { ! isActive && <>...</> }
         ```
-    - `equals` - if the value is equal to the specified value, show the content
+    3. `equals` - if the value is equal to the specified value, show the content.
         ```jsx
-            { isActive === 'yes' && <>...</> }
+        { isActive === 'yes' && <>...</> }
         ```
-    - `not equals` - if the value is not equal to the specified value, show the content
+    4. `not equals` - if the value is not equal to the specified value, show the content.
         ```jsx
-            { isActive !== 'yes' && <>...</> }
+        { isActive !== 'yes' && <>...</> }
         ```
 
 Support for more expression types is planned.
 
-#### Handlebars helpers
+##### Handlebars helpers
 Handlebars doesn't come with out of the box support for conditions such as `equals` and `not equals`.
 
 `if_truthy`, `if_falsy`, `if_equal`, and `if_not_equal` should be added as custom helpers to your handlebars implementation.
@@ -173,7 +181,7 @@ Handlebars doesn't come with out of the box support for conditions such as `equa
 [An implemenation using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
 
 
-### Lists (and repeatable elements)
+#### 3. Lists (and repeatable elements)
 
 To use repeatable elements and lists in Handlebars templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
 
