@@ -115,15 +115,18 @@ const Person = ( { name, favoriteColor } ) => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
+
+## Template variable types
+
 There are 3 types of variables that have different behaviours:
 
-#### 1. Replacement variables
+### 1. Replacement variables
 
 Replacement variables are variables that will be replaced with a template tag, e.g. `{{name}}`, usually to display a dynamic string value.
 
 All examples above show replacement variables, and they are the default type for a variable if a type was not set.
 
-#### 2. Control variables (showing/hiding content)
+### 2. Control variables (showing/hiding content)
 Depending on the value of certain variable, you might wish to show or hide content in your component.  We use the `control` type variable to signify this.
 
 ```jsx
@@ -151,7 +154,7 @@ The result would be:
 ```
 
 **Note:** the control variable and condition to evaluate is parsed from the source code automatically.
-##### Current behaviour
+#### Current behaviour
  - only detects conditions in a JSX expression container (e.g., in a components return function)
  - supports 4 types of expressions:
     1. `truthy` - if the value is truthy, show the content.
@@ -173,7 +176,7 @@ The result would be:
 
 Support for more expression types is planned.
 
-##### Handlebars helpers
+#### Handlebars helpers
 Handlebars doesn't come with out of the box support for conditions such as `equals` and `not equals`.
 
 `if_truthy`, `if_falsy`, `if_equal`, and `if_not_equal` should be added as custom helpers to your handlebars implementation.
@@ -181,7 +184,7 @@ Handlebars doesn't come with out of the box support for conditions such as `equa
 [An implemenation using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
 
 
-#### 3. Lists (and repeatable elements)
+### 3. Lists (and repeatable elements)
 
 To use repeatable elements and lists in Handlebars templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
 
