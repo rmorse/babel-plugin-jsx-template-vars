@@ -124,10 +124,12 @@ There are 3 types of variables that have different behaviours:
 
 Replacement variables are variables that will be replaced with a template tag, e.g. `{{name}}`, usually to display a dynamic string value.
 
-All examples above show replacement variables, and they are the default type for a variable if a type was not set.
+All examples above show replacement variables, and they are the default type for a variable if a type is not set.
 
 ### 2. Control variables (showing/hiding content)
-Depending on the value of certain variable, you might wish to show or hide content in your component.  We use the `control` type variable to signify this.
+Depending on the value of a specific variable, you might wish to show or hide content in your component.  Use the `control` type variable to signify this.
+
+In the below example `show` is used as a control type variable.
 
 ```jsx
 const Person = ( { name, favoriteColor, show } ) => {
@@ -141,7 +143,7 @@ const Person = ( { name, favoriteColor, show } ) => {
 };
 Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ] ];
 ```
-By signifying the variable as a control variable, we can automatically add the correct handlebars tags to the output.
+By signifying the variable as a control variable, the correct handlebars tags (and expression) is added to the output.
 
 The result would be:
 
@@ -153,10 +155,10 @@ The result would be:
 {{/if_truthy}}
 ```
 
-**Note:** the control variable and condition to evaluate is parsed from the source code automatically.
-#### Current behaviour
- - only detects conditions in a JSX expression container (e.g., in a components return function)
- - supports 4 types of expressions:
+**Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitation.
+#### Current limitations of control variables
+ - Only detects conditions in a JSX expression container (e.g., in a components return function)
+ - Supports 4 types of expressions:
     1. `truthy` - if the value is truthy, show the content.
         ```jsx
         { isActive && <>...</> }
