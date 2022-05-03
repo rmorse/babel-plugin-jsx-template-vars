@@ -248,7 +248,7 @@ const Person = () => {
 };
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
-Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the properties as variables:
+Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the object properties as template variables:
 
 ```jsx
 const aPerson = {
