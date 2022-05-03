@@ -264,6 +264,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							}
 
 							if ( expressionOperator ) {
+								// Build the opening and closing expression tags.
 								let templateExpression = `#${ expressionOperator } ${ expressionSubject }`;
 								if ( expressionValue ) {
 									templateExpression += ` "${ expressionValue }"`;

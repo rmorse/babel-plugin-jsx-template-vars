@@ -176,6 +176,7 @@ The result would be:
         ```jsx
         { isActive !== 'yes' && <>...</> }
         ```
+ - The subject (or template var) must on the left of the expression - e.g., `{ isActive === 'yes' && <>...</> }`... not `{ 'yes' === isActive && <>...</> }`.
 
 Support for more expression types is planned.
 
