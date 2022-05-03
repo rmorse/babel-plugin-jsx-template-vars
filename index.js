@@ -221,7 +221,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( replacePropNames.includes( subPath.node.name ) ) {
 						// Make sure we only replace identifiers that are not props and also that
 						// they are not variable declarations.
-						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator' ];
+						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							subPath.node.name = replacePropsMap[ subPath.node.name ];
 						}
@@ -234,7 +234,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const expressionSubject = getExpressionSubject( containerExpression );
 						const expression = containerExpression.left;
 						// const condition = getCondition( containerExpression );
-						console.log( "expression", expressionSubject, expression.type );
 						if ( controlPropNames.includes( expressionSubject ) ) {
 
 							let expressionOperator;

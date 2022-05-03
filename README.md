@@ -284,7 +284,9 @@ In complex applications, vars/props will often get passed down into various data
 
 To work around this you can try to set your template vars only on components that live underneath the data requests (futher down the tree).  This will ensure that the data is loaded before the template vars are replaced.
 
+In some cases, you might need the template variable passed into the data fetching routine - this is not supported and a limitation of this approach.
+
 ### Nested props in `list` type variables
-This transform supports nested vars (arrays and objects), but only supports 1 level of depth.
+This transform supports nested vars for children (arrays and objects), but only supports 1 level of depth.
 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
