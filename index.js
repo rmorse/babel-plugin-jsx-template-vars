@@ -170,7 +170,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 
 			const { expression } = path.node;
 			
-			// Process the expression and get template props as an object
+			// Process the expression and get template vars as an object
 			const templateVars = getTemplatePropsFromExpression( expression );
 			if ( ! templateVars ) {
 				return;
@@ -195,7 +195,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			// Build the map of var controls.
 			const [ controlPropsMap, controlPropNames ] = generateVarTypeUids( componentPath.scope, controlVars );
 			// Build the map of var lists.
-			//const [ listPropsMap, listPropNames ] = generateVarTypeUids( statementPath.scope, listVars );
+			const [ listPropsMap, listPropNames ] = generateVarTypeUids( componentPath.scope, listVars );
 
 			// Start the main traversal of component
 			componentPath.traverse( {
@@ -246,7 +246,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							// equals - `myVar === 'value' && <>...</>`
 							// not equals - `myVar !== 'value' && <>...</>`
 							// map these to handlebars helper functions and replace the expression with the helper tag.
-
 
 							if ( expression.type === 'Identifier' ) {
 								expressionOperator = 'if_truthy';

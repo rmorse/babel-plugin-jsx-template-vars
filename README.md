@@ -155,9 +155,10 @@ The result would be:
 {{/if_truthy}}
 ```
 
-**Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitation.
+**Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitations.
 #### Current limitations of control variables
- - Only detects conditions in a JSX expression container (e.g., in a components return function)
+ - Only detects conditions in a JSX expression container (e.g., in a components return function, or between opening and closing JSX tags `<>...</>`) 
+ - JSX expressions must use `&&` to evaluate the condition and [show the JSX content as recommended in the React JS docs](https://reactjs.org/docs/conditional-rendering.html).
  - Supports 4 types of expressions:
     1. `truthy` - if the value is truthy, show the content.
         ```jsx
@@ -183,7 +184,7 @@ Handlebars doesn't come with out of the box support for conditions such as `equa
 
 `if_truthy`, `if_falsy`, `if_equal`, and `if_not_equal` should be added as custom helpers to your handlebars implementation.
 
-[An implemenation using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
+[An implemenation of these helpers using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
 
 
 ### 3. Lists (and repeatable elements)
@@ -198,7 +199,7 @@ To use repeatable elements and lists in Handlebars templates, our code must be c
     </section>
 ```
 
-First we need to define which var is array like (`favoriteColors`) and then the object properties of the child.
+First we need to define which var is array like (`favoriteColors`) and then the object properties of the child to be iterated (or no properties if the child is a JavaScript primitive).
 
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
@@ -227,23 +228,63 @@ This will generate an array with a single value (and Handlebars tags), with an o
         {{/favoriteColors}}
     </section>
 ```
+## Exposing variables
+
+The above examples have all used variables derived from `props` passed into a component. 
+
+Any variable (identifier) that resides directly in the components scope can be used:
+
+```jsx
+const Person = () => {
+    const [ name, setName ] = useState( '' );
+    let favoriteColor = 'green';
+
+    return (
+        <>
+            <h1>{ name }</h1>
+            <p>Favorite color: { favoriteColor }</p>
+        </>
+    );
+};
+Person.templateVars = [ 'name', 'favoriteColor' ];
+```
+Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destruct the object and use the properties as variables:
+
+```jsx
+const aPerson = {
+    name: 'Mary',
+    favoriteColor: 'green'
+};
+const Person = () => {
+    const { name, favoriteColor } = aPerson;
+    return (
+        <>
+            <h1>{ name }</h1>
+            <p>Favorite color: { favoriteColor }</p>
+        </>
+    );
+};
+Person.templateVars = [ 'name', 'favoriteColor' ];
+```
 
 ## Working example
 [ ] _currently working on a new repo for a demo project..._
 
 ## Caveats
 
-### This is an experiment
-As it says, this is an exploration on a concept of semi automating the generation of Handlebars templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha - 0.0.1-alpha - _I'd be grateful for any help with the project / alternative ideas for exploration / bug reports_.
+### This is currently experimental
+This is an exploration on a concept of semi automating the generation of Handlebars templates from JSX apps - its a first pass with a lot of holes and things to do as such its marked as alpha.
 
-### Data fetching & loading
+_I'd be grateful for any help with the project / suggestions and alternative ideas for exploration / bug reports_.
+
+### Data fetching & loading with `replace` type variables
 One thing to watch out for is data fetching and loading.
 
 In complex applications, vars/props will often get passed down into various data fetching routines, and if they are replaced with template tags too early, such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true pre-render.
 
 To work around this you can try to set your template vars only on components that live underneath the data requests (futher down the tree).  This will ensure that the data is loaded before the template vars are replaced.
 
-### Nested props
+### Nested props in `list` type variables
 This transform supports nested vars (arrays and objects), but only supports 1 level of depth.
 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
