@@ -99,7 +99,7 @@ plugins: [
 
 ### 3. Define which variables in the component will be template variables.
 
-First, add a `templateVars` property to your component to specificy which should be replaced template tags. 
+Add a `templateVars` property to your component to specificy which should be replaced template tags. 
 
 Format is an array, of strings (or arrays with additional config):
 
@@ -248,7 +248,7 @@ const Person = () => {
 };
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
-Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destruct the object and use the properties as variables:
+Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the properties as variables:
 
 ```jsx
 const aPerson = {
