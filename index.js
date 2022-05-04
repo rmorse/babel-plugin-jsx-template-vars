@@ -97,14 +97,14 @@ function getTemplateVarsFromExpression( expression, t ) {
 		// Build template prop queues for processing at different times.
 		templatePropsValue.forEach( ( prop ) => {
 			const normalisedProp = normaliseConfigProp( prop );
-			const [ propName, propConfig ] = normalisedProp;
+			const [ varName, varConfig ] = normalisedProp;
 
 			// If the type is not set assume it is `replace`
-			if ( propConfig.type === 'replace' || ! propConfig.type ) {
+			if ( varConfig.type === 'replace' || ! varConfig.type ) {
 				templateVars.replace.push( normalisedProp );
-			} else if ( propConfig.type === 'control' ) {
+			} else if ( varConfig.type === 'control' ) {
 				templateVars.control.push( normalisedProp );
-			} else if ( propConfig.type === 'list' ) {
+			} else if ( varConfig.type === 'list' ) {
 				templateVars.list.push( normalisedProp );
 			}
 			
@@ -136,6 +136,29 @@ function isControlExpression( expression ) {
 	return false;
 }
 
+// Build the object for the replacement var in list type vars.
+function buildListVarDeclaration( varName, varConfig, t ) {
+	const { type, props } = varConfig.child;
+	const newProp = [];
+	if ( type === 'object' ) {
+		const childProp = {};
+		const propsArr = [];
+		props.forEach( ( propName ) => {
+			propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( `{{${ propName }}}` ) ) );
+		} );
+		newProp.push( childProp );
+		const templateObject = t.objectExpression( propsArr )
+		const right = t.arrayExpression( [ templateObject ] );
+		
+		const left = t.identifier( varName );
+		console.log(`left`, left);
+		return t.variableDeclaration('let', [
+			t.variableDeclarator(left, right),
+		]);
+	}
+	return null;
+}
+
 /**
  * Generate new uids for the provided scope.
  * 
@@ -146,7 +169,7 @@ function isControlExpression( expression ) {
 function generateVarTypeUids( scope, vars ) {
 	const varMap = {};
 	const varNames = [];
-	vars.forEach( ( [ varName, propConfig ] ) => {
+	vars.forEach( ( [ varName, varConfig ] ) => {
 		const newIdentifier = scope.generateUidIdentifier("uid");
 		varMap[ varName ] = newIdentifier.name;
 		varNames.push( varName );
@@ -235,8 +258,13 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
+						console.log("found a list var to create / replace", varName, varConfig );
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						statementPath.node.body.unshift( parse(`let ${ listVarsMap[ varName ] } = '{{${ varName }}}';`) );
+						
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t );
+						if ( newAssignmentExpression ) {
+							statementPath.node.body.unshift( newAssignmentExpression );
+						}
 
 						// Track these new list vars in JSX experssion / component return so we can add tags around them.
 						// console.log("templateVar", templateVar);
