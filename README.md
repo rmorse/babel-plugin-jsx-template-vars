@@ -158,7 +158,7 @@ The result would be:
 **Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitations.
 #### Current limitations of control variables
  - Only detects conditions in a JSX expression container (e.g., in a components return function, or between opening and closing JSX tags `<>...</>`) 
- - JSX expressions must use `&&` to evaluate the condition and [show the JSX content as recommended in the React JS docs](https://reactjs.org/docs/conditional-rendering.html).
+ - JSX expressions must use `&&` to evaluate the condition and [show the JSX content as shown in the React JS docs](https://reactjs.org/docs/conditional-rendering.html).
  - Supports 4 types of expressions:
     1. `truthy` - if the value is truthy, show the content.
         ```jsx

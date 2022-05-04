@@ -56,10 +56,12 @@ function normaliseConfigProp( prop ) {
 /**
  * Gets the template vars from the property definition.
  * 
- * @param {Object} expression 
+ * @param {Object} expression The expression
+ * @param {Object} t The babel types object
+ * 
  * @returns 
  */
-function getTemplatePropsFromExpression( expression ) {
+function getTemplateVarsFromExpression( expression, t ) {
 	const left = expression.left;
 	const right = expression.right;
 	if ( ! left || ! right ) {
@@ -68,10 +70,10 @@ function getTemplatePropsFromExpression( expression ) {
 
 	const { object, property } = left;
 	// Make sure the property being set is `templateVars`
-	if ( object?.type !== 'Identifier' ) {
+	if ( ! t.isIdentifier( object ) ) {
 		return false;
 	}
-	if ( property?.type !== 'Identifier' ) {
+	if ( ! t.isIdentifier( property ) ) {
 		return false;
 	}
 
@@ -135,7 +137,7 @@ function isControlExpression( expression ) {
 }
 
 /**
- * Generate new uids for the current scope.
+ * Generate new uids for the provided scope.
  * 
  * @param {Object} scope The current scope.
  * @param {Object} vars The vars to generate uids for.
@@ -167,15 +169,14 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
 			// - Remove `templateVars` from the source code
-
+			
 			const { expression } = path.node;
 			
 			// Process the expression and get template vars as an object
-			const templateVars = getTemplatePropsFromExpression( expression );
+			const templateVars = getTemplateVarsFromExpression( expression, t );
 			if ( ! templateVars ) {
 				return;
 			}
-
 			// Get the previous sibling before the current path is removed.
 			const componentPath = path.getSibling( path.key - 1 );
 			
@@ -191,12 +192,16 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 
 			// Build the map of vars to replace.
-			const [ replacePropsMap, replacePropNames ] = generateVarTypeUids( componentPath.scope, replaceVars );
-			// Build the map of var controls.
-			const [ controlPropsMap, controlPropNames ] = generateVarTypeUids( componentPath.scope, controlVars );
+			const [ replaceVarsMap, replaceVarsNames ] = generateVarTypeUids( componentPath.scope, replaceVars );
+			// Get the control vars names
+			const [ controlVarsMap, controlVarsNames ] = generateVarTypeUids( componentPath.scope, controlVars );
 			// Build the map of var lists.
-			const [ listPropsMap, listPropNames ] = generateVarTypeUids( componentPath.scope, listVars );
+			const [ listVarsMap, listVarsNames ] = generateVarTypeUids( componentPath.scope, listVars );
+			
+			// All the list variable names we need to look for in JSX expressions
+			let listVarsToTag = {};
 
+			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 			// Start the main traversal of component
 			componentPath.traverse( {
 				/*ReturnStatement( subPath ) {
@@ -207,23 +212,86 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				},
 				JSXIdentifier( subPath ) {
 				},*/
+				/*JSXIdentifier( subPath ) {
+				},*/
+				/*ExpressionStatement( subPath ) {
+					// Check if the expression is a control expression.
+				},*/
 				BlockStatement( statementPath ) {
-					// Add the new vars to to top of the function
-					replaceVars.forEach( ( prop ) => {
-						const [ propName, propConfig ] = prop;
+					// Hacky way of making sure we only catch the first block statement - we should be able to check
+					// something on the parent to make this more reliable.
+					if ( blockStatementDepth !== 0 ) {
+						return;
+					}
+					blockStatementDepth++;
+
+					// Add the new replace vars to to top of the block statement.
+					replaceVars.forEach( ( templateVar ) => {
+						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						statementPath.node.body.unshift( parse(`let ${ replacePropsMap[ propName ] } = '{{${ propName }}}';`) );
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
 					} );
 				
+					// Add the new list vars to to top of the block statement.
+					listVars.forEach( ( templateVar, index ) => {
+						const [ varName, varConfig ] = templateVar;
+						// Alway declare as `let` so we don't need to worry about its usage later.
+						statementPath.node.body.unshift( parse(`let ${ listVarsMap[ varName ] } = '{{${ varName }}}';`) );
+
+						// Track these new list vars in JSX experssion / component return so we can add tags around them.
+						// console.log("templateVar", templateVar);
+
+						// Now keep track of the list vars and aliaes we need to tag (and keep track of their original source var)
+						listVarsToTag[ varName ] = varName;
+						if ( varConfig.aliases ) {
+							varConfig.aliases.forEach( ( alias ) => {
+								listVarsToTag[ alias ] = varName;
+							} );
+						}
+						console.log(listVarsToTag);
+						//listVarsToTag[ varName ] = [ ...listVarsMap[ varName ], ...varConfig.aliases ] ];
+						
+					} );
 				},
 				Identifier( subPath ) {
 					// We need to update all the identifiers with the new variables declared in the block statement
-					if ( replacePropNames.includes( subPath.node.name ) ) {
+					if ( replaceVarsNames.includes( subPath.node.name ) ) {
 						// Make sure we only replace identifiers that are not props and also that
 						// they are not variable declarations.
 						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
-							subPath.node.name = replacePropsMap[ subPath.node.name ];
+							subPath.node.name = replaceVarsMap[ subPath.node.name ];
+						}
+					}
+					
+					// We also need to replace any lists / arrays with our own templatevars version.
+					if ( listVarsNames.includes( subPath.node.name ) ) {
+						const sourceVarName = subPath.node.name;
+						//console.log("FOUND A LIST PROP TO REPLACE", subPath.node.name, subPath.parentPath.node.type);
+						// Make sure we only replace identifiers that are not props and also that
+						// they are not variable declarations.
+						const excludeTypes = [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern' ];
+						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
+							// console.log("folow through?")
+
+							// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
+							if ( t.isMemberExpression( subPath.parentPath.node ) ) {
+								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
+								if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
+									subPath.node.name = listVarsMap[ subPath.node.name ];
+									// If we found a map, we want to track which identifier it was assigned to...
+									const parentDeclaration = path.findParent( (path) => path.isVariableDeclarator() );
+									if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
+										// Check if its an identifier and if so, add it to the listVars to tag.
+										if ( t.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
+											const identifierName = subPath.parentPath.parentPath.parentPath.node.id.name;
+											listVarsToTag[ identifierName ] = sourceVarName;
+										}
+									}
+								}
+							} else {
+								subPath.node.name = listVarsMap[ subPath.node.name ];
+							}
 						}
 					}
 				},
@@ -234,7 +302,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const expressionSubject = getExpressionSubject( containerExpression );
 						const expression = containerExpression.left;
 						// const condition = getCondition( containerExpression );
-						if ( controlPropNames.includes( expressionSubject ) ) {
+						if ( controlVarsNames.includes( expressionSubject ) ) {
 
 							let expressionOperator;
 							let expressionValue = '';
@@ -273,6 +341,15 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								subPath.insertAfter( t.stringLiteral(`{{/${ expressionOperator }}}` ) );
 								subPath.replaceWith( containerExpression.right );
 							}
+						}
+					}
+
+					// Now look for identifers only, so we can look for list vars that need tagging.
+					if ( t.isIdentifier( containerExpression ) ) {
+						// Then we should be looking at something like: `{ myVar }`
+						if ( listVarsToTag[ containerExpression.name ] ) {
+							subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ containerExpression.name ] }}}` ) );
+							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
 						}
 					}
 				}
