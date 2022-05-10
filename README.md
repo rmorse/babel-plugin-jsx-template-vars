@@ -269,7 +269,8 @@ Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
 ## Working example
-[ ] _currently working on a new repo for a demo project..._
+
+[There is a working example using PHP provided here.](https://github.com/rmorse/ssr-preact-php)
 
 ## Caveats
 
