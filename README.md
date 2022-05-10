@@ -62,7 +62,7 @@ There are other types variables (not only strings to be replaced) such as contro
 
 ### 1. Install the package via npm
 
-`npm install babel-plugin-jsx-template-props`
+`npm install babel-plugin-jsx-template-vars`
 
 ### 2. Add to babel as a plugin
 
@@ -70,7 +70,7 @@ There are other types variables (not only strings to be replaced) such as contro
 ```js
 {
   "plugins": [
-    "babel-plugin-jsx-template-props"
+    "babel-plugin-jsx-template-vars"
   ]
 }
 ```
@@ -82,7 +82,7 @@ There are other types variables (not only strings to be replaced) such as contro
     loader: "babel-loader",
     options: {
         plugins: [
-            'babel-plugin-jsx-template-props'
+            'babel-plugin-jsx-template-vars'
         ],
         presets: []
     }
@@ -93,7 +93,7 @@ There are other types variables (not only strings to be replaced) such as contro
 
 ```js
 plugins: [
-    [ 'babel-plugin-jsx-template-props', { tidyOnly: true } ]
+    [ 'babel-plugin-jsx-template-vars', { tidyOnly: true } ]
 ],
 ```
 

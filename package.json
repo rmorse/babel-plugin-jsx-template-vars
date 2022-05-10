@@ -1,6 +1,6 @@
 {
   "name": "babel-plugin-jsx-template-vars",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A Babel transform for rendering a Handlebars compatible pre-render of your React / Preact app for Server Side Rendering.",
   "main": "index.js",
   "scripts": {
