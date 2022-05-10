@@ -1,6 +1,6 @@
 {
-  "name": "babel-plugin-jsx-template-props",
-  "version": "0.0.12-alpha",
+  "name": "babel-plugin-jsx-template-vars",
+  "version": "0.0.1",
   "description": "A Babel transform for rendering a template friendly version of your React / Preact app for generating pre-renders.",
   "main": "index.js",
   "scripts": {
@@ -8,23 +8,26 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rmorse/babel-plugin-jsx-template-props.git"
+    "url": "git+https://github.com/rmorse/babel-plugin-jsx-template-vars.git"
   },
   "keywords": [
     "babel",
     "transform",
     "jsx",
     "template",
+    "vars",
     "props",
-    "mustache",
+    "handlebars",
     "ssr",
     "pre-render"
   ],
   "author": "rmorse",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/rmorse/babel-plugin-jsx-template-props/issues"
+    "url": "https://github.com/rmorse/babel-plugin-jsx-template-vars/issues"
   },
-  "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-props#readme",
-  "devDependencies": {}
+  "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-vars#readme",
+  "devDependencies": {
+    "@babel/traverse": "^7.17.9"
+  }
 }
