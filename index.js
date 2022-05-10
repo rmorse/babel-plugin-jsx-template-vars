@@ -151,7 +151,6 @@ function buildListVarDeclaration( varName, varConfig, t ) {
 		const right = t.arrayExpression( [ templateObject ] );
 		
 		const left = t.identifier( varName );
-		console.log(`left`, left);
 		return t.variableDeclaration('let', [
 			t.variableDeclarator(left, right),
 		]);
@@ -258,16 +257,12 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
-						console.log("found a list var to create / replace", varName, varConfig );
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						
 						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
-
-						// Track these new list vars in JSX experssion / component return so we can add tags around them.
-						// console.log("templateVar", templateVar);
 
 						// Now keep track of the list vars and aliaes we need to tag (and keep track of their original source var)
 						listVarsToTag[ varName ] = varName;
@@ -276,9 +271,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								listVarsToTag[ alias ] = varName;
 							} );
 						}
-						console.log(listVarsToTag);
-						//listVarsToTag[ varName ] = [ ...listVarsMap[ varName ], ...varConfig.aliases ] ];
-						
+		
 					} );
 				},
 				Identifier( subPath ) {
@@ -295,20 +288,16 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					// We also need to replace any lists / arrays with our own templatevars version.
 					if ( listVarsNames.includes( subPath.node.name ) ) {
 						const sourceVarName = subPath.node.name;
-						//console.log("FOUND A LIST PROP TO REPLACE", subPath.node.name, subPath.parentPath.node.type);
 						// Make sure we only replace identifiers that are not props and also that
 						// they are not variable declarations.
 						const excludeTypes = [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
-							// console.log("folow through?")
-
 							// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
 							if ( t.isMemberExpression( subPath.parentPath.node ) ) {
 								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
 								if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
 									subPath.node.name = listVarsMap[ subPath.node.name ];
 									// If we found a map, we want to track which identifier it was assigned to...
-									const parentDeclaration = path.findParent( (path) => path.isVariableDeclarator() );
 									if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
 										// Check if its an identifier and if so, add it to the listVars to tag.
 										if ( t.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
