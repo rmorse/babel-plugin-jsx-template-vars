@@ -136,9 +136,17 @@ function isControlExpression( expression ) {
 	return false;
 }
 
+const normaliseListVar = ( varName, varConfig ) => {
+	let normalisedConfig = { type: 'primitive' };
+	if ( varConfig ) {
+		normalisedConfig = varConfig;
+	}
+	return normalisedConfig;
+};
 // Build the object for the replacement var in list type vars.
 function buildListVarDeclaration( varName, varConfig, t ) {
-	const { type, props } = varConfig.child;
+	const normalisedConfig = normaliseListVar( varConfig );
+	const { type, props } = normalisedConfig;
 	const newProp = [];
 	if ( type === 'object' ) {
 		const childProp = {};
@@ -154,6 +162,9 @@ function buildListVarDeclaration( varName, varConfig, t ) {
 		return t.variableDeclaration('let', [
 			t.variableDeclarator(left, right),
 		]);
+	} else if ( type === 'primitive' ) {
+		// Then we're dealing with a normal array.
+		// TODO: maybe "primitive" is not the best name for this type.
 	}
 	return null;
 }
@@ -369,6 +380,16 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
 						}
 					}
+					// Also, lets support list vars that have .map() directly in the JSX (ie, they are not re-assigned to variable before being added to the output)
+					// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
+					if ( t.isMemberExpression( subPath.parentPath.node ) ) {
+						// then we want to make sure its a `.map` otherwise we don't want to support it for now.
+						if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
+							// subPath.node.name = listVarsMap[ subPath.node.name ];
+							console.log("we cound a map in the JSX");
+						}
+					}
+
 				}
 			} );
 		}
