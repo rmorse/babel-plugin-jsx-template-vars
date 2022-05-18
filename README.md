@@ -216,8 +216,8 @@ const Person = ( { name, favoriteColors } ) => {
         </>
     );
 };
-// Setup favoriteColors as type array with objects as children.
-Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'array', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
+// Setup favoriteColors as type list with objects as children.
+Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 
 This will generate an array with a single value (and Handlebars tags), with an object as described by the `child` props, resulting in the following output:
@@ -229,6 +229,23 @@ This will generate an array with a single value (and Handlebars tags), with an o
         {{/favoriteColors}}
     </section>
 ```
+
+Array mapping is also supported in JSX expressions.
+
+```jsx
+const Person = ( { name, favoriteColors } ) => {
+    return (
+        <>
+            <h1>{ name }</h1>
+            { favoriteColors.map( ( color, index ) => {
+                return (
+                    <p key={ index }>A favorite color: { color.label }</p>
+                );
+            } ) }
+        </>
+    );
+};
+
 ## Exposing variables
 
 The above examples have all used variables derived from `props` passed into a component. 
