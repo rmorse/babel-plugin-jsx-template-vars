@@ -136,17 +136,25 @@ function isControlExpression( expression ) {
 	return false;
 }
 
-const normaliseListVar = ( varName, varConfig ) => {
-	let normalisedConfig = { type: 'primitive' };
+const normaliseListVar = ( varConfig ) => {
+	let normalisedConfig = { 
+		type: 'list',
+		child: { type: 'primitive' }
+	};
 	if ( varConfig ) {
 		normalisedConfig = varConfig;
+		if ( ! varConfig.child ) {
+			normalisedConfig.child = { type: 'primitive' }
+		}
 	}
+	
 	return normalisedConfig;
 };
 // Build the object for the replacement var in list type vars.
 function buildListVarDeclaration( varName, varConfig, t ) {
 	const normalisedConfig = normaliseListVar( varConfig );
-	const { type, props } = normalisedConfig;
+	const { type, props } = normalisedConfig.child;
+
 	const newProp = [];
 	if ( type === 'object' ) {
 		const childProp = {};
@@ -264,12 +272,10 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
 					} );
-				
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						
 						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
@@ -380,16 +386,18 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
 						}
 					}
+
 					// Also, lets support list vars that have .map() directly in the JSX (ie, they are not re-assigned to variable before being added to the output)
-					// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
-					if ( t.isMemberExpression( subPath.parentPath.node ) ) {
-						// then we want to make sure its a `.map` otherwise we don't want to support it for now.
-						if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
-							// subPath.node.name = listVarsMap[ subPath.node.name ];
-							console.log("we cound a map in the JSX");
+					if ( t.isCallExpression( containerExpression ) && t.isMemberExpression( containerExpression.callee ) ) {
+						const memberExpression = containerExpression.callee;
+						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
+							const objectName = memberExpression.object.name;
+							if ( listVarsToTag[ objectName ] ) {
+								subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
+								subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+							}
 						}
 					}
-
 				}
 			} );
 		}
