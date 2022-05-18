@@ -31,8 +31,17 @@
  * - Remove the condition so the expression is always completed (showing the related JSX)
  * - Wrap JSX in handlebars tags using custom helpers to recreate the conditions
  * 
- * Process "list" type vars - in progress
- */
+ * Process "list" type vars
+ * - Declare new arrays with a template style version - eg `[ '{{.}}' ]` or `[ { value: '{{value}}', label: '{{label}}' } ]`
+ *   for objects. 
+ * - The new arrays will always have a length of 1.
+ * - Look for any member expressions in the component definition that use the identifier + a `.map()` and track the new
+ *   identifier name / assignment as well as the original identifier name.
+ * - Look for the list vars (and any new identifiers from an earlier `.map()`) in JSX expressions - either on their
+ *   own as an identifier or combined with `.map()` and wrap them in template tags.
+ * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
+ *   and wrap them in template tags.
+  */
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -136,9 +145,25 @@ function isControlExpression( expression ) {
 	return false;
 }
 
+const normaliseListVar = ( varConfig ) => {
+	let normalisedConfig = { 
+		type: 'list',
+		child: { type: 'primitive' }
+	};
+	if ( varConfig ) {
+		normalisedConfig = varConfig;
+		if ( ! varConfig.child ) {
+			normalisedConfig.child = { type: 'primitive' }
+		}
+	}
+	
+	return normalisedConfig;
+};
 // Build the object for the replacement var in list type vars.
-function buildListVarDeclaration( varName, varConfig, t ) {
-	const { type, props } = varConfig.child;
+function buildListVarDeclaration( varName, varConfig, t, parse ) {
+	const normalisedConfig = normaliseListVar( varConfig );
+	const { type, props } = normalisedConfig.child;
+
 	const newProp = [];
 	if ( type === 'object' ) {
 		const childProp = {};
@@ -150,6 +175,15 @@ function buildListVarDeclaration( varName, varConfig, t ) {
 		const templateObject = t.objectExpression( propsArr )
 		const right = t.arrayExpression( [ templateObject ] );
 		
+		const left = t.identifier( varName );
+		return t.variableDeclaration('let', [
+			t.variableDeclarator(left, right),
+		]);
+	} else if ( type === 'primitive' ) {
+		// Then we're dealing with a normal array.
+		// TODO: maybe "primitive" is not the best name for this type.
+
+		const right = t.arrayExpression( [ t.stringLiteral( `{{.}}` ) ] );
 		const left = t.identifier( varName );
 		return t.variableDeclaration('let', [
 			t.variableDeclarator(left, right),
@@ -253,13 +287,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
 					} );
-				
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t, parse );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -354,8 +386,20 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								if ( expressionValue ) {
 									templateExpression += ` "${ expressionValue }"`;
 								}
-								subPath.insertBefore( t.stringLiteral(`{{${ templateExpression }}}` ) );
-								subPath.insertAfter( t.stringLiteral(`{{/${ expressionOperator }}}` ) );
+								subPath.insertBefore( t.stringLiteral( `{{${ templateExpression }}}` ) );
+								subPath.insertAfter( t.stringLiteral( `{{/${ expressionOperator }}}` ) );
+
+								// Now check to see if the right of the expression is a list variable, as we need to wrap them
+								// in helper tags.
+								if ( t.isIdentifier( containerExpression.right ) ) {
+									const objectName = containerExpression.right.name;
+									if ( listVarsToTag[ objectName ] ) {
+										subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
+										subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+									}
+								}
+								
+								// Now replace the whole expression with the right part (remove any conditions to display it)
 								subPath.replaceWith( containerExpression.right );
 							}
 						}
@@ -367,6 +411,18 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						if ( listVarsToTag[ containerExpression.name ] ) {
 							subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ containerExpression.name ] }}}` ) );
 							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
+						}
+					}
+
+					// Also, lets support list vars that have .map() directly in the JSX (ie, they are not re-assigned to variable before being added to the output)
+					if ( t.isCallExpression( containerExpression ) && t.isMemberExpression( containerExpression.callee ) ) {
+						const memberExpression = containerExpression.callee;
+						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
+							const objectName = memberExpression.object.name;
+							if ( listVarsToTag[ objectName ] ) {
+								subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
+								subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+							}
 						}
 					}
 				}
