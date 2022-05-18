@@ -328,7 +328,6 @@ const Person = ( { name, dob, favoriteColors, favoriteArtists, traits, showColor
 		<section class="profile">
 			<h1>{ name }</h1>
 			<p>Date of birth: { dob }</p>
-			{ /* showColors && favoriteColorsList */ }
 			{ showColors && (
 				<>
 					<h2>Favorite Colors</h2>
