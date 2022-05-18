@@ -386,8 +386,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								if ( expressionValue ) {
 									templateExpression += ` "${ expressionValue }"`;
 								}
-								subPath.insertBefore( t.stringLiteral(`{{${ templateExpression }}}` ) );
-								subPath.insertAfter( t.stringLiteral(`{{/${ expressionOperator }}}` ) );
+								subPath.insertBefore( t.stringLiteral( `{{${ templateExpression }}}` ) );
+								subPath.insertAfter( t.stringLiteral( `{{/${ expressionOperator }}}` ) );
 
 								// Now check to see if the right of the expression is a list variable, as we need to wrap them
 								// in helper tags.

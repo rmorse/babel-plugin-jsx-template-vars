@@ -309,3 +309,109 @@ In some cases, you might need the template variable passed into the data fetchin
 This transform supports nested vars for children (arrays and objects), but only supports 1 level of depth.
 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
+
+
+## An example showing all possible usage options (todo: move to proper documentation)
+
+```jsx
+const Person = ( { name, dob, favoriteColors, favoriteArtists, traits, showColors = true, showArtists = true, ...props } ) => {
+	const showTest = 'yes';
+	const favoriteColorsList = favoriteColors.map( ( color, index ) => {
+		return (
+			<div key={ index }>
+				{ color.label }
+			</div>
+		);
+	} );
+	return (
+		<section class="profile">
+			<h1>{ name }</h1>
+			<p>Date of birth: { dob }</p>
+			{ /* showColors && favoriteColorsList */ }
+			{ showColors && (
+				<>
+					<h2>Favorite Colors</h2>
+					<div>{ favoriteColorsList }</div>
+				</>
+			) }
+			{ showArtists && (
+				<>
+					<h2>Favorite Artists</h2>
+					<div>
+						{ favoriteArtists.map( ( artist, index ) => {
+							return (
+								<div key={ index }>
+									{ artist.name } | { artist.genre }
+								</div>
+							)
+						} ) }
+					</div>
+				</>
+			) }
+			<h2>Character traits</h2>
+			{ traits.map( ( trait, index ) => {
+				return (
+					<div>A trait: { trait }</div>
+				);
+			} ) }
+			<h2>Character traits raw</h2>
+			{ traits }
+			<h2>Combining control + replace variables</h2> 
+			{ showTest === 'yes' && name }
+			<h2>Combining control + list variables</h2> 
+			{ showTest === 'yes' && traits }
+		</section>
+	);
+}
+Person.templateVars = [
+	'name',
+	'dob',
+	[ 'showColors', { type: 'control' } ],
+	[ 'showArtists', { type: 'control' } ],
+	[ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ],
+	[ 'favoriteArtists', { type: 'list', child: { type: 'object', props: [ 'name', 'genre' ] } } ],
+	[ 'traits', { type: 'list' } ],
+	[ 'showTest', { type: 'control' } ],
+];
+```
+### This will output handlebars code
+```handlebars
+<section class="profile">
+    <h1>{{name}}</h1>
+    <p>Date of birth: {{dob}}</p>
+    {{#if_truthy showColors}}
+        <h2>Favorite Colors</h2>
+        <div>
+            {{#favoriteColors}}
+                <div>{{label}}</div>
+            {{/favoriteColors}}
+        </div>
+    {{/if_truthy}}
+    {{#if_truthy showArtists}}
+        <h2>Favorite Artists</h2>
+        <div>
+            {{#favoriteArtists}}
+                <div>{{name}} | {{genre}}</div>
+            {{/favoriteArtists}}
+        </div>
+    {{/if_truthy}}
+    <h2>Character traits</h2>
+    {{#traits}}
+        <div>A trait: {{.}}</div>
+    {{/traits}}
+    <h2>Character traits raw</h2>
+    {{#traits}}
+        {{.}}
+    {{/traits}}
+    <h2>Combining control + replace variables</h2>
+    {{#if_equal showTest "yes"}}
+        {{name}}
+    {{/if_equal}}
+    <h2>Combining control + list variables</h2>
+    {{#if_equal showTest "yes"}}
+        {{#traits}}
+            {{.}}
+        {{/traits}}
+    {{/if_equal}}
+</section>
+```
