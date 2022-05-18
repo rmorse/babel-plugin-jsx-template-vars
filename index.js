@@ -31,8 +31,17 @@
  * - Remove the condition so the expression is always completed (showing the related JSX)
  * - Wrap JSX in handlebars tags using custom helpers to recreate the conditions
  * 
- * Process "list" type vars - in progress
- */
+ * Process "list" type vars
+ * - Declare new arrays with a template style version - eg `[ '{{.}}' ]` or `[ { value: '{{value}}', label: '{{label}}' } ]`
+ *   for objects. 
+ * - The new arrays will always have a length of 1.
+ * - Look for any member expressions in the component definition that use the identifier + a `.map()` and track the new
+ *   identifier name / assignment as well as the original identifier name.
+ * - Look for the list vars (and any new identifiers from an earlier `.map()`) in JSX expressions - either on their
+ *   own as an identifier or combined with `.map()` and wrap them in template tags.
+ * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
+ *   and wrap them in template tags.
+  */
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -379,6 +388,18 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								}
 								subPath.insertBefore( t.stringLiteral(`{{${ templateExpression }}}` ) );
 								subPath.insertAfter( t.stringLiteral(`{{/${ expressionOperator }}}` ) );
+
+								// Now check to see if the right of the expression is a list variable, as we need to wrap them
+								// in helper tags.
+								if ( t.isIdentifier( containerExpression.right ) ) {
+									const objectName = containerExpression.right.name;
+									if ( listVarsToTag[ objectName ] ) {
+										subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
+										subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+									}
+								}
+								
+								// Now replace the whole expression with the right part (remove any conditions to display it)
 								subPath.replaceWith( containerExpression.right );
 							}
 						}
