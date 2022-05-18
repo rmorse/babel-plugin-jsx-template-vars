@@ -151,7 +151,7 @@ const normaliseListVar = ( varConfig ) => {
 	return normalisedConfig;
 };
 // Build the object for the replacement var in list type vars.
-function buildListVarDeclaration( varName, varConfig, t ) {
+function buildListVarDeclaration( varName, varConfig, t, parse ) {
 	const normalisedConfig = normaliseListVar( varConfig );
 	const { type, props } = normalisedConfig.child;
 
@@ -173,6 +173,12 @@ function buildListVarDeclaration( varName, varConfig, t ) {
 	} else if ( type === 'primitive' ) {
 		// Then we're dealing with a normal array.
 		// TODO: maybe "primitive" is not the best name for this type.
+
+		const right = t.arrayExpression( [ t.stringLiteral( `{{.}}` ) ] );
+		const left = t.identifier( varName );
+		return t.variableDeclaration('let', [
+			t.variableDeclarator(left, right),
+		]);
 	}
 	return null;
 }
@@ -276,7 +282,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t, parse );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
