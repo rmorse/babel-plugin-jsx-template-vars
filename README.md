@@ -311,7 +311,7 @@ This transform supports nested vars for children (arrays and objects), but only 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
 
 
-## An example showing all possible usage options
+## An example showing all currently possible options
 **TODO: move to proper documentation**
 
 ```jsx
