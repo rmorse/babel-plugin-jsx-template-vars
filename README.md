@@ -312,7 +312,7 @@ It is recommended to set template vars on components that reside further down th
 
 
 ## An example showing all possible usage options
-**TODO: move to proper documentation)**
+**TODO: move to proper documentation**
 
 ```jsx
 const Person = ( { name, dob, favoriteColors, favoriteArtists, traits, showColors = true, showArtists = true, ...props } ) => {
