@@ -10,9 +10,6 @@
     "type": "git",
     "url": "git+https://github.com/rmorse/babel-plugin-jsx-template-vars.git"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "keywords": [
     "babel",
     "transform",

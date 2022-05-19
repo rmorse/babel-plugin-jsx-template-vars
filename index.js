@@ -42,6 +42,7 @@
  * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
  *   and wrap them in template tags.
   */
+const { getLanguageList, getLanguageReplace, getLanguageControl } = require('./languages');
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -285,7 +286,9 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					replaceVars.forEach( ( templateVar ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
+						//statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
+						const replaceString = getLanguageReplace( 'php', 'format', varName );
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '${ replaceString }';`) );
 					} );
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
@@ -353,7 +356,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// const condition = getCondition( containerExpression );
 						if ( controlVarsNames.includes( expressionSubject ) ) {
 
-							let expressionOperator;
+							let statementType;
 							let expressionValue = '';
 
 							// Lets start by only supporting:
@@ -364,38 +367,45 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							// map these to handlebars helper functions and replace the expression with the helper tag.
 
 							if ( expression.type === 'Identifier' ) {
-								expressionOperator = 'if_truthy';
+								statementType = 'ifTruthy';
 							} else if ( expression.type === 'UnaryExpression' ) {
 								if ( expression.operator === '!' ) {
-									expressionOperator = 'if_falsy';
+									statementType = 'ifFalsy';
 								}
 							} else if( expression.type === 'BinaryExpression' ) {
 								if ( expression.operator && expression.right.value ) {
 									if ( expression.operator === '===' ) {
-										expressionOperator = 'if_equal';
+										statementType = 'ifEqual';
 									} else if ( expression.operator === '!==' ) {
-										expressionOperator = 'if_not_equal';
+										statementType = 'ifNotEqual';
 									}
-									expressionValue = expression.right.value;
+									// Add quotes around the value to signify its a string.
+									expressionValue = `'${ expression.right.value }'`;
 								}
 							}
 
-							if ( expressionOperator ) {
+							if ( statementType ) {
 								// Build the opening and closing expression tags.
-								let templateExpression = `#${ expressionOperator } ${ expressionSubject }`;
+								const expressionArgs = [ expressionSubject ];
 								if ( expressionValue ) {
-									templateExpression += ` "${ expressionValue }"`;
+									expressionArgs.push( expressionValue );
 								}
-								subPath.insertBefore( t.stringLiteral( `{{${ templateExpression }}}` ) );
-								subPath.insertAfter( t.stringLiteral( `{{/${ expressionOperator }}}` ) );
+								console.log("statementType", statementType);
+								const controlStartString = getLanguageControl( 'php', [ statementType, 'open' ], expressionArgs );
+								const controlStopString = getLanguageControl( 'php', [ statementType, 'close' ], expressionArgs );
+								subPath.insertBefore( t.stringLiteral( controlStartString ) );
+								subPath.insertAfter( t.stringLiteral( controlStopString ) );
 
 								// Now check to see if the right of the expression is a list variable, as we need to wrap them
 								// in helper tags.
 								if ( t.isIdentifier( containerExpression.right ) ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
-										subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
-										subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+										const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ objectName ] );
+										const listClose = getLanguageList( 'php', 'close', listVarsToTag[ objectName ] );
+			
+										subPath.insertBefore( t.stringLiteral( listOpen ) );
+										subPath.insertAfter( t.stringLiteral( listClose ) );
 									}
 								}
 								
@@ -409,8 +419,12 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( t.isIdentifier( containerExpression ) ) {
 						// Then we should be looking at something like: `{ myVar }`
 						if ( listVarsToTag[ containerExpression.name ] ) {
-							subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ containerExpression.name ] }}}` ) );
-							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
+							
+							const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ containerExpression.name ] );
+							const listClose = getLanguageList( 'php', 'close', listVarsToTag[ containerExpression.name ] );
+
+							subPath.insertBefore( t.stringLiteral( listOpen ) );
+							subPath.insertAfter( t.stringLiteral( listClose ) );
 						}
 					}
 
@@ -420,8 +434,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
 							const objectName = memberExpression.object.name;
 							if ( listVarsToTag[ objectName ] ) {
-								subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
-								subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+								const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ objectName ] );
+								const listClose = getLanguageList( 'php', 'close', listVarsToTag[ objectName ] );
+
+								subPath.insertBefore( t.stringLiteral( listOpen ) );
+								subPath.insertAfter( t.stringLiteral( listClose ) );
 							}
 						}
 					}
