@@ -93,9 +93,6 @@ function createLanguageString( string, argsArray ) {
  * @returns {String} The string with the arguments replaced
  */
 function getLanguageString( language, type, targetString = [], argsArray ) {
-	if( type === 'control') {
-		console.log(" foudn control requeset", targetString, argsArray)
-	}
 	let languageWithPath = languages[ language ][ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {

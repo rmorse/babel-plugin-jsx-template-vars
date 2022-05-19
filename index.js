@@ -63,6 +63,7 @@ function normaliseConfigProp( prop ) {
 	return prop;
 }
 
+const defaultLanguage = 'handlebars';
 /**
  * Gets the template vars from the property definition.
  * 
@@ -221,6 +222,7 @@ function generateVarTypeUids( scope, vars ) {
  */
 function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
+	const language = config.language ?? defaultLanguage;
 	return { 
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
@@ -287,7 +289,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						//statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
-						const replaceString = getLanguageReplace( 'php', 'format', varName );
+						const replaceString = getLanguageReplace( language, 'format', varName );
 						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '${ replaceString }';`) );
 					} );
 					// Add the new list vars to to top of the block statement.
@@ -380,7 +382,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 										statementType = 'ifNotEqual';
 									}
 									// Add quotes around the value to signify its a string.
-									expressionValue = `'${ expression.right.value }'`;
+									expressionValue = `"${ expression.right.value }"`;
 								}
 							}
 
@@ -390,9 +392,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								if ( expressionValue ) {
 									expressionArgs.push( expressionValue );
 								}
-								console.log("statementType", statementType);
-								const controlStartString = getLanguageControl( 'php', [ statementType, 'open' ], expressionArgs );
-								const controlStopString = getLanguageControl( 'php', [ statementType, 'close' ], expressionArgs );
+								const controlStartString = getLanguageControl( language, [ statementType, 'open' ], expressionArgs );
+								const controlStopString = getLanguageControl( language, [ statementType, 'close' ], expressionArgs );
 								subPath.insertBefore( t.stringLiteral( controlStartString ) );
 								subPath.insertAfter( t.stringLiteral( controlStopString ) );
 
@@ -401,8 +402,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								if ( t.isIdentifier( containerExpression.right ) ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
-										const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ objectName ] );
-										const listClose = getLanguageList( 'php', 'close', listVarsToTag[ objectName ] );
+										const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
+										const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
 			
 										subPath.insertBefore( t.stringLiteral( listOpen ) );
 										subPath.insertAfter( t.stringLiteral( listClose ) );
@@ -420,8 +421,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// Then we should be looking at something like: `{ myVar }`
 						if ( listVarsToTag[ containerExpression.name ] ) {
 							
-							const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ containerExpression.name ] );
-							const listClose = getLanguageList( 'php', 'close', listVarsToTag[ containerExpression.name ] );
+							const listOpen = getLanguageList( language, 'open', listVarsToTag[ containerExpression.name ] );
+							const listClose = getLanguageList( language, 'close', listVarsToTag[ containerExpression.name ] );
 
 							subPath.insertBefore( t.stringLiteral( listOpen ) );
 							subPath.insertAfter( t.stringLiteral( listClose ) );
@@ -434,8 +435,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
 							const objectName = memberExpression.object.name;
 							if ( listVarsToTag[ objectName ] ) {
-								const listOpen = getLanguageList( 'php', 'open', listVarsToTag[ objectName ] );
-								const listClose = getLanguageList( 'php', 'close', listVarsToTag[ objectName ] );
+								const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
+								const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
 
 								subPath.insertBefore( t.stringLiteral( listOpen ) );
 								subPath.insertAfter( t.stringLiteral( listClose ) );
