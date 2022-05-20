@@ -72,7 +72,7 @@ If using PHP, the output would be:
 
 ```php
 <div>
-    <h1>Hello <?php echo $name ?></h1>
+    <h1>Hello <?php echo $data['name'] ?></h1>
 </div>
 ```
 
@@ -143,7 +143,9 @@ There are 3 types of variables that have different behaviours:
 
 ### 1. Replacement variables
 
-Replacement variables are variables that will be replaced with a template tag, e.g. `{{name}}`, usually to display a dynamic string value.
+Replacement variables are variables that will need to be replaced by a dynamic variable.
+
+In Handlebars this would be: `{{name}}`, and if using PHP this would be: `<?php echo $data['name'] ?>`.
 
 All examples above show replacement variables, and they are the default type for a variable if a type is not set.
 
@@ -164,9 +166,9 @@ const Person = ( { name, favoriteColor, show } ) => {
 };
 Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ] ];
 ```
-By signifying the variable as a control variable, the correct handlebars tags (and expression) is added to the output.
+By signifying the variable as a control variable, the statement and expression is added to the output.
 
-If using Handlebars the result would be:
+If using Handlebars the output would be:
 
 ```handlebars
 <h1>{{name}}</h1>
@@ -176,40 +178,17 @@ If using Handlebars the result would be:
 {{/if_truthy}}
 ```
 
-If using PHP, the output would be:
+If you are using PHP the output would be:
 ```php
-<h1><?php echo $name; ?></h1>
-<p>Favorite color: <?php echo $favoriteColor; ?></p>
-<?php if ($show) { ?>
+<h1><?php echo $data['name']; ?></h1>
+<p>Favorite color: <?php echo $data['favoriteColor']; ?></p>
+<?php if ($data['show']) { ?>
     <p>Show this content</p>
 <?php } ?>
 ```
 
-**Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitations.
-#### Current limitations of control variables
- - Only detects conditions in a JSX expression container (e.g., in a components return function, or between opening and closing JSX tags `<>...</>`) 
- - JSX expressions must use `&&` to evaluate the condition and [show the JSX content as shown in the React JS docs](https://reactjs.org/docs/conditional-rendering.html).
- - Supports 4 types of expressions:
-    1. `truthy` - if the value is truthy, show the content.
-        ```jsx
-        { isActive && <>...</> }
-        ```
-    2. `falsy` - if the value is falsy, show the content.
-        ```jsx
-        { ! isActive && <>...</> }
-        ```
-    3. `equals` - if the value is equal to the specified value, show the content.
-        ```jsx
-        { isActive === 'yes' && <>...</> }
-        ```
-    4. `not equals` - if the value is not equal to the specified value, show the content.
-        ```jsx
-        { isActive !== 'yes' && <>...</> }
-        ```
- - The subject (or template var) must on the left of the expression - e.g., `{ isActive === 'yes' && <>...</> }`
-   Do not do this: `{ 'yes' === isActive && <>...</> }`.
+**Note:** the control variable and condition to evaluate is parsed from the source code automatically but **has significant limitations**.
 
-Support for more expression types is planned.
 
 ### 3. Lists (and repeatable elements)
 
@@ -252,7 +231,7 @@ const Person = ( { name, favoriteColors } ) => {
 Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 
-Array mapping is also supported in JSX expressions:
+Array mapping in JSX expressions is also supported:
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
     return (
@@ -308,9 +287,10 @@ const Person = () => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
-## Working example
+## Working examples
 
 [There is a working example using PHP output provided here.](https://github.com/rmorse/ssr-preact-php)
+
 [There is a working example using Handlebars output provided here](https://github.com/rmorse/ssr-preact-php-handlebars) (also, using PHP).
 
 **Open an issue if you have a demo project in other languages and we'll add it here.**
