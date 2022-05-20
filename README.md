@@ -9,7 +9,7 @@ Custom language definitions are also supported.
 
 ## What are template variables?
 
-Template variables are variables in your components which you want to expose so that they can used in another templating langauage.
+Template variables are variables in your components which you want to expose so that they can be used in another templating langauage.
 
 They will usually be variables coming from an external data source, such as a database or API.
 
@@ -17,7 +17,7 @@ The idea is that this transform will replace selected variables (across the comp
 
 In Handlebars this might be: ```{{name}}``` and in PHP it might look like this: ```<?php echo $name ?>```.
 
-Using this transform you will be able to use the same code JSX code you've written, to output a Handlebars or PHP version of the same application.  
+Using this transform you will be able to use the same JSX code you've written, to output a Handlebars or PHP version of the same application.  
 
 Remember, it won't be interactive, this is only for generating an initial pre-render to achieve SSR.
 
@@ -32,7 +32,7 @@ There are **a fair few limitations** so your mileage may vary.
 4. Configure by adding `.templateVars` to components that have dynamic data.
 5. Via your server side language, process the saved template file and pass in your data to get an SSR compatible pre-render.
 
-### An example using Handlebars
+### An example
 
 Lets take a component: 
 
@@ -49,15 +49,8 @@ Once we run our app, this might generate html like:
   <h1>Hello Mary</h1>
 </div>
 ```
-In order to render this on the server using Handlebars, we need to replace the name `Mary` with a template tag, so the output would be
 
-```handlebars
-<div>
-    <h1>Hello {{name}}</h1>
-</div>
-```
-
-Using this plugin, adding a `.templateVars` property on your component will render it using the Handlebars template tag above.
+Using this plugin, adding a `.templateVars` property on your component will expose the variable to you chosen output language.
 
 ```js
 const HelloWorld = ({ name }) => (
@@ -67,6 +60,23 @@ const HelloWorld = ({ name }) => (
 );
 HelloWorld.templateVars = [ 'name' ];
 ```
+
+If using Handlebars, the output would be:
+```handlebars
+<div>
+    <h1>Hello {{name}}</h1>
+</div>
+```
+
+If using PHP, the output would be:
+
+```php
+<div>
+    <h1>Hello <?php echo $name ?></h1>
+</div>
+```
+
+
 There are other types variables (not only strings to be replaced) such as control and list variables.
 
 ## How to use
