@@ -92,7 +92,7 @@ function createLanguageString( string, argsArray ) {
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
-function getLanguageString( language, type, targetString = [], argsArray ) {
+function getLanguageString( language, type, targetString = [], argsArray = [] ) {
 	let languageWithPath = languages[ language ][ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {
