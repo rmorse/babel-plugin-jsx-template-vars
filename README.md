@@ -1,27 +1,38 @@
 # Babel JSX Template Vars
 A Babel transform for rendering a template friendly version of your JSX app.  
 
-Generates a Handlebars based pre-render for achieving SSR in environments which don't support JavaScript rendering (e.g. PHP).
+Generates a pre-render for achieving SSR in environments which don't support JavaScript rendering.
+
+Currently supports 2 output languages: Handlebars and PHP.
+
+Custom language definitions are also supported.
 
 ## What are template variables?
-The idea is that this transform will replace selected variables (across the components you specify) with Handlebars tags such as `{{name}}`. 
 
-Replacing variables with template tags allows you to render your application via the [Handlebars](https://handlebarsjs.com/) templating engine, which is supported in a lot of different languages.
+Template variables are variables in your components which you want to expose so that they can used in another templating langauage.
+
+They will usually be variables coming from an external data source, such as a database or API.
+
+The idea is that this transform will replace selected variables (across the components you specify) with the correct code or tag corresponding to your chosen language.
+
+In Handlebars this might be: ```{{name}}``` and in PHP it might look like this: ```<?php echo $name ?>```.
+
+Using this transform you will be able to use the same code JSX code you've written, to output a Handlebars or PHP version of the same application.  
+
+Remember, it won't be interactive, this is only for generating an initial pre-render to achieve SSR.
 
 There are **a fair few limitations** so your mileage may vary.
 
 ## How it works
 
-Add this transform plugin to babel in your pre-render build to replace your component variables with template tags such as `{{name}}`- allowing the resulting markup to be processed as a Handlebars compatible template.
-
 ### Workflow
 1. Assumes you already have a React/Preact app with your development/production builds setup.
 2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
-3. **Add this plugin to the pre-render build** to add the Handlebars tags to the html output.
+3. **Add this plugin to the pre-render build** to add the template vars to the html output.
 4. Configure by adding `.templateVars` to components that have dynamic data.
-5. Via your server side language (eg PHP), process the saved template file and pass in your data to get an SSR compatible pre-render.
+5. Via your server side language, process the saved template file and pass in your data to get an SSR compatible pre-render.
 
-### An example
+### An example using Handlebars
 
 Lets take a component: 
 
@@ -40,7 +51,7 @@ Once we run our app, this might generate html like:
 ```
 In order to render this on the server using Handlebars, we need to replace the name `Mary` with a template tag, so the output would be
 
-```html
+```handlebars
 <div>
     <h1>Hello {{name}}</h1>
 </div>
@@ -97,11 +108,11 @@ plugins: [
 ],
 ```
 
-### 3. Define which variables in the component will be template variables.
+### 3. Define which variables in your components will be template variables.
 
-Add a `templateVars` property to your component to specificy which should be replaced template tags. 
+Add a `templateVars` property to your component to specificy which variable will be exposed.
 
-Format is an array, of strings (or arrays with additional config):
+The format is an array, of strings (or arrays with additional config):
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -145,14 +156,23 @@ Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ]
 ```
 By signifying the variable as a control variable, the correct handlebars tags (and expression) is added to the output.
 
-The result would be:
+If using Handlebars the result would be:
 
-```html
+```handlebars
 <h1>{{name}}</h1>
 <p>Favorite color: {{favoriteColor}}</p>
 {{#if_truthy show}}
     <p>Show this content</p>
 {{/if_truthy}}
+```
+
+If using PHP, the output would be:
+```php
+<h1><?php echo $name; ?></h1>
+<p>Favorite color: <?php echo $favoriteColor; ?></p>
+<?php if ($show) { ?>
+    <p>Show this content</p>
+<?php } ?>
 ```
 
 **Note:** the control variable and condition to evaluate is parsed from the source code automatically but has some limitations.
@@ -176,31 +196,33 @@ The result would be:
         ```jsx
         { isActive !== 'yes' && <>...</> }
         ```
- - The subject (or template var) must on the left of the expression - e.g., `{ isActive === 'yes' && <>...</> }`... not `{ 'yes' === isActive && <>...</> }`.
+ - The subject (or template var) must on the left of the expression - e.g., `{ isActive === 'yes' && <>...</> }`
+   Do not do this: `{ 'yes' === isActive && <>...</> }`.
 
 Support for more expression types is planned.
 
-#### Handlebars helpers
-Handlebars doesn't come with out of the box support for conditions such as `equals` and `not equals`.
-
-`if_truthy`, `if_falsy`, `if_equal`, and `if_not_equal` should be added as custom helpers to your handlebars implementation.
-
-[An implemenation of these helpers using the Handlebars PHP package is provided here](https://gist.github.com/rmorse/3653f811407ef3a3ec649c8de315085f).
-
-
 ### 3. Lists (and repeatable elements)
 
-To use repeatable elements and lists in Handlebars templates, our code must be contain special tags, before and after the list, with the single repeatable item in between.
+To use repeatable elements and lists we have to use Handlebars tags, or a PHP `foreach` loop to iterate over the list items.
 
-```html
+Generated handlebars code would look like this:
+```handlebars
     <section class="profile">
         {{#favoriteColors}}
             <p>A favorite color: {{label}}</p>
         {{/favoriteColors}}
     </section>
 ```
+Generated PHP code would look like this:
+```php
+    <section class="profile">
+        <?php foreach ($data['favoriteColors'] as $item) { ?>
+            <p>A favorite color: <?php echo $item['label']; ?></p>
+        <?php } ?>
+    </section>
+```
 
-First we need to define which var is array like (`favoriteColors`) and then the object properties of the child to be iterated (or no properties if the child is a JavaScript primitive).
+To achieve this, first we need to define which variable is array like (`favoriteColors`) and then the object properties of the child to be iterated (or no properties if the child is a JavaScript primitive).
 
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
@@ -220,18 +242,7 @@ const Person = ( { name, favoriteColors } ) => {
 Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
 ```
 
-This will generate an array with a single value (and Handlebars tags), with an object as described by the `child` props, resulting in the following output:
-
-```html
-    <section class="profile">
-        {{#favoriteColors}}
-            <p>A favorite color: {{label}}</p>
-        {{/favoriteColors}}
-    </section>
-```
-
-Array mapping is also supported in JSX expressions.
-
+Array mapping is also supported in JSX expressions:
 ```jsx
 const Person = ( { name, favoriteColors } ) => {
     return (
@@ -245,10 +256,11 @@ const Person = ( { name, favoriteColors } ) => {
         </>
     );
 };
+```
 
 ## Exposing variables
 
-The above examples have all used variables derived from `props` passed into a component. 
+The above examples have all used variables derived from desctructured `props` passed into a component. 
 
 Any variable (identifier) that resides directly in the components scope can be used:
 
@@ -266,6 +278,7 @@ const Person = () => {
 };
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
+
 Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the object properties as template variables:
 
 ```jsx
@@ -287,7 +300,10 @@ Person.templateVars = [ 'name', 'favoriteColor' ];
 
 ## Working example
 
-[There is a working example using PHP provided here.](https://github.com/rmorse/ssr-preact-php)
+[There is a working example using PHP output provided here.](https://github.com/rmorse/ssr-preact-php)
+[There is a working example using Handlebars output provided here](https://github.com/rmorse/ssr-preact-php-handlebars) (also, using PHP).
+
+**Open an issue if you have a demo project in other languages and we'll add it here.**
 
 ## Caveats
 
@@ -310,108 +326,3 @@ This transform supports nested vars for children (arrays and objects), but only 
 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
 
-
-## An example showing all currently possible options
-**TODO: move to proper documentation**
-
-```jsx
-const Person = ( { name, dob, favoriteColors, favoriteArtists, traits, showColors = true, showArtists = true, ...props } ) => {
-	const showTest = 'yes';
-	const favoriteColorsList = favoriteColors.map( ( color, index ) => {
-		return (
-			<div key={ index }>
-				{ color.label }
-			</div>
-		);
-	} );
-	return (
-		<section class="profile">
-			<h1>{ name }</h1>
-			<p>Date of birth: { dob }</p>
-			{ showColors && (
-				<>
-					<h2>Favorite Colors</h2>
-					<div>{ favoriteColorsList }</div>
-				</>
-			) }
-			{ showArtists && (
-				<>
-					<h2>Favorite Artists</h2>
-					<div>
-						{ favoriteArtists.map( ( artist, index ) => {
-							return (
-								<div key={ index }>
-									{ artist.name } | { artist.genre }
-								</div>
-							)
-						} ) }
-					</div>
-				</>
-			) }
-			<h2>Character traits</h2>
-			{ traits.map( ( trait, index ) => {
-				return (
-					<div>A trait: { trait }</div>
-				);
-			} ) }
-			<h2>Character traits raw</h2>
-			{ traits }
-			<h2>Combining control + replace variables</h2> 
-			{ showTest === 'yes' && name }
-			<h2>Combining control + list variables</h2> 
-			{ showTest === 'yes' && traits }
-		</section>
-	);
-}
-Person.templateVars = [
-	'name',
-	'dob',
-	[ 'showColors', { type: 'control' } ],
-	[ 'showArtists', { type: 'control' } ],
-	[ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ],
-	[ 'favoriteArtists', { type: 'list', child: { type: 'object', props: [ 'name', 'genre' ] } } ],
-	[ 'traits', { type: 'list' } ],
-	[ 'showTest', { type: 'control' } ],
-];
-```
-### This will output handlebars code
-```handlebars
-<section class="profile">
-    <h1>{{name}}</h1>
-    <p>Date of birth: {{dob}}</p>
-    {{#if_truthy showColors}}
-        <h2>Favorite Colors</h2>
-        <div>
-            {{#favoriteColors}}
-                <div>{{label}}</div>
-            {{/favoriteColors}}
-        </div>
-    {{/if_truthy}}
-    {{#if_truthy showArtists}}
-        <h2>Favorite Artists</h2>
-        <div>
-            {{#favoriteArtists}}
-                <div>{{name}} | {{genre}}</div>
-            {{/favoriteArtists}}
-        </div>
-    {{/if_truthy}}
-    <h2>Character traits</h2>
-    {{#traits}}
-        <div>A trait: {{.}}</div>
-    {{/traits}}
-    <h2>Character traits raw</h2>
-    {{#traits}}
-        {{.}}
-    {{/traits}}
-    <h2>Combining control + replace variables</h2>
-    {{#if_equal showTest "yes"}}
-        {{name}}
-    {{/if_equal}}
-    <h2>Combining control + list variables</h2>
-    {{#if_equal showTest "yes"}}
-        {{#traits}}
-            {{.}}
-        {{/traits}}
-    {{/if_equal}}
-</section>
-```
