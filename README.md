@@ -61,15 +61,14 @@ const HelloWorld = ({ name }) => (
 HelloWorld.templateVars = [ 'name' ];
 ```
 
-If using Handlebars, the output would be:
+**If using Handlebars, the output would be:**
 ```handlebars
 <div>
     <h1>Hello {{name}}</h1>
 </div>
 ```
 
-If using PHP, the output would be:
-
+**If using PHP, the output would be:**
 ```php
 <div>
     <h1>Hello <?php echo $data['name'] ?></h1>
@@ -168,7 +167,7 @@ Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ]
 ```
 By signifying the variable as a control variable, the statement and expression is added to the output.
 
-If using Handlebars the output would be:
+**If using Handlebars the output would be:**
 
 ```handlebars
 <h1>{{name}}</h1>
@@ -178,7 +177,7 @@ If using Handlebars the output would be:
 {{/if_truthy}}
 ```
 
-If you are using PHP the output would be:
+**If you are using PHP the output would be:**
 ```php
 <h1><?php echo $data['name']; ?></h1>
 <p>Favorite color: <?php echo $data['favoriteColor']; ?></p>
@@ -194,7 +193,7 @@ If you are using PHP the output would be:
 
 To use repeatable elements and lists we have to use Handlebars tags, or a PHP `foreach` loop to iterate over the list items.
 
-Generated handlebars code would look like this:
+**Generated handlebars code would look like this:**
 ```handlebars
     <section class="profile">
         {{#favoriteColors}}
@@ -202,7 +201,7 @@ Generated handlebars code would look like this:
         {{/favoriteColors}}
     </section>
 ```
-Generated PHP code would look like this:
+**Generated PHP code would look like this:**
 ```php
     <section class="profile">
         <?php foreach ($data['favoriteColors'] as $item) { ?>
