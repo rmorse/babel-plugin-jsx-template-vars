@@ -42,7 +42,7 @@
  * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
  *   and wrap them in template tags.
   */
-const { getLanguageList, getLanguageReplace, getLanguageControl } = require('./languages');
+const { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } = require('./language');
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -224,6 +224,9 @@ function generateVarTypeUids( scope, vars ) {
 function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	const language = config.language ?? defaultLanguage;
+	if ( config.customLanguage ) {
+		registerLanguage( config.customLanguage );
+	}
 	return { 
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
