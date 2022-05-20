@@ -42,16 +42,16 @@ function getLanguageString( language, type, targetString = [], argsArray = [] ) 
 	return createLanguageString( languageWithPath, argsArray );
 }
 
-function getLanguageReplace( language, target, subject ) {
-	return getLanguageString( language, 'replace', [ target ], [ subject ] );
+function getLanguageReplace( language, target, arg ) {
+	return getLanguageString( language, 'replace', [ target ], [ arg ] );
 }
 
-function getLanguageList( language, target, subject ) {
-	return getLanguageString( language, 'list', [ target ], [ subject ] );
+function getLanguageList( language, target, arg ) {
+	return getLanguageString( language, 'list', [ target ], [ arg ] );
 }
 
-function getLanguageControl( language, targets, subjects ) {
-	return getLanguageString( language, 'control', targets, subjects );
+function getLanguageControl( language, targets, args ) {
+	return getLanguageString( language, 'control', targets, args );
 }
 
 function registerLanguage( language ) {
