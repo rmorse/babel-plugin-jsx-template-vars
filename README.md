@@ -176,6 +176,14 @@ Person.templateVars = [ 'name', 'favoriteColor' ];
 
 **Please [open an issue](https://github.com/rmorse/babel-plugin-jsx-template-vars/issues/new) if you have a demo project in other languages and we'll add it here.**
 
+## Output languages
+
+Currently supports outputting to:
+
+ * [Handlebars](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Handlebars)
+ * [PHP](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/PHP)
+ * [Custom languages](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Custom-languages)
+
 ## Documentation
 
 I think I mentioned that there are **significant limitations** with the different variable types - its important to understand how these work in order to use this transform effectively.
