@@ -42,6 +42,7 @@
  * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
  *   and wrap them in template tags.
   */
+const { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } = require('./language');
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -62,6 +63,7 @@ function normaliseConfigProp( prop ) {
 	return prop;
 }
 
+const defaultLanguage = 'handlebars';
 /**
  * Gets the template vars from the property definition.
  * 
@@ -160,7 +162,7 @@ const normaliseListVar = ( varConfig ) => {
 	return normalisedConfig;
 };
 // Build the object for the replacement var in list type vars.
-function buildListVarDeclaration( varName, varConfig, t, parse ) {
+function buildListVarDeclaration( varName, varConfig, t, language ) {
 	const normalisedConfig = normaliseListVar( varConfig );
 	const { type, props } = normalisedConfig.child;
 
@@ -169,7 +171,8 @@ function buildListVarDeclaration( varName, varConfig, t, parse ) {
 		const childProp = {};
 		const propsArr = [];
 		props.forEach( ( propName ) => {
-			propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( `{{${ propName }}}` ) ) );
+			const listObjectString = getLanguageList( language, 'formatObjectProperty', propName );
+			propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( listObjectString ) ) );
 		} );
 		newProp.push( childProp );
 		const templateObject = t.objectExpression( propsArr )
@@ -182,8 +185,8 @@ function buildListVarDeclaration( varName, varConfig, t, parse ) {
 	} else if ( type === 'primitive' ) {
 		// Then we're dealing with a normal array.
 		// TODO: maybe "primitive" is not the best name for this type.
-
-		const right = t.arrayExpression( [ t.stringLiteral( `{{.}}` ) ] );
+		const listPrimitiveString = getLanguageList( language, 'formatPrimitive' );
+		const right = t.arrayExpression( [ t.stringLiteral( listPrimitiveString ) ] );
 		const left = t.identifier( varName );
 		return t.variableDeclaration('let', [
 			t.variableDeclarator(left, right),
@@ -220,6 +223,10 @@ function generateVarTypeUids( scope, vars ) {
  */
 function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
+	const language = config.language ?? defaultLanguage;
+	if ( config.customLanguage ) {
+		registerLanguage( config.customLanguage );
+	}
 	return { 
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
@@ -285,13 +292,15 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					replaceVars.forEach( ( templateVar ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
+						//statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
+						const replaceString = getLanguageReplace( language, 'format', varName );
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '${ replaceString }';`) );
 					} );
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t, parse );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t, language );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -353,7 +362,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// const condition = getCondition( containerExpression );
 						if ( controlVarsNames.includes( expressionSubject ) ) {
 
-							let expressionOperator;
+							let statementType;
 							let expressionValue = '';
 
 							// Lets start by only supporting:
@@ -364,38 +373,44 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							// map these to handlebars helper functions and replace the expression with the helper tag.
 
 							if ( expression.type === 'Identifier' ) {
-								expressionOperator = 'if_truthy';
+								statementType = 'ifTruthy';
 							} else if ( expression.type === 'UnaryExpression' ) {
 								if ( expression.operator === '!' ) {
-									expressionOperator = 'if_falsy';
+									statementType = 'ifFalsy';
 								}
 							} else if( expression.type === 'BinaryExpression' ) {
 								if ( expression.operator && expression.right.value ) {
 									if ( expression.operator === '===' ) {
-										expressionOperator = 'if_equal';
+										statementType = 'ifEqual';
 									} else if ( expression.operator === '!==' ) {
-										expressionOperator = 'if_not_equal';
+										statementType = 'ifNotEqual';
 									}
-									expressionValue = expression.right.value;
+									// Add quotes around the value to signify its a string.
+									expressionValue = `"${ expression.right.value }"`;
 								}
 							}
 
-							if ( expressionOperator ) {
+							if ( statementType ) {
 								// Build the opening and closing expression tags.
-								let templateExpression = `#${ expressionOperator } ${ expressionSubject }`;
+								const expressionArgs = [ expressionSubject ];
 								if ( expressionValue ) {
-									templateExpression += ` "${ expressionValue }"`;
+									expressionArgs.push( expressionValue );
 								}
-								subPath.insertBefore( t.stringLiteral( `{{${ templateExpression }}}` ) );
-								subPath.insertAfter( t.stringLiteral( `{{/${ expressionOperator }}}` ) );
+								const controlStartString = getLanguageControl( language, [ statementType, 'open' ], expressionArgs );
+								const controlStopString = getLanguageControl( language, [ statementType, 'close' ], expressionArgs );
+								subPath.insertBefore( t.stringLiteral( controlStartString ) );
+								subPath.insertAfter( t.stringLiteral( controlStopString ) );
 
 								// Now check to see if the right of the expression is a list variable, as we need to wrap them
 								// in helper tags.
 								if ( t.isIdentifier( containerExpression.right ) ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
-										subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
-										subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+										const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
+										const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
+			
+										subPath.insertBefore( t.stringLiteral( listOpen ) );
+										subPath.insertAfter( t.stringLiteral( listClose ) );
 									}
 								}
 								
@@ -409,8 +424,12 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( t.isIdentifier( containerExpression ) ) {
 						// Then we should be looking at something like: `{ myVar }`
 						if ( listVarsToTag[ containerExpression.name ] ) {
-							subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ containerExpression.name ] }}}` ) );
-							subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ containerExpression.name ] }}}` ) );
+							
+							const listOpen = getLanguageList( language, 'open', listVarsToTag[ containerExpression.name ] );
+							const listClose = getLanguageList( language, 'close', listVarsToTag[ containerExpression.name ] );
+
+							subPath.insertBefore( t.stringLiteral( listOpen ) );
+							subPath.insertAfter( t.stringLiteral( listClose ) );
 						}
 					}
 
@@ -420,8 +439,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
 							const objectName = memberExpression.object.name;
 							if ( listVarsToTag[ objectName ] ) {
-								subPath.insertBefore( t.stringLiteral(`{{#${ listVarsToTag[ objectName ] }}}` ) );
-								subPath.insertAfter( t.stringLiteral(`{{/${ listVarsToTag[ objectName ] }}}` ) );
+								const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
+								const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
+
+								subPath.insertBefore( t.stringLiteral( listOpen ) );
+								subPath.insertAfter( t.stringLiteral( listClose ) );
 							}
 						}
 					}

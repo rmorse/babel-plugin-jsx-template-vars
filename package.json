@@ -1,6 +1,6 @@
 {
   "name": "babel-plugin-jsx-template-vars",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A Babel transform for rendering a Handlebars compatible pre-render of your React / Preact app for Server Side Rendering.",
   "main": "index.js",
   "scripts": {
@@ -9,9 +9,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rmorse/babel-plugin-jsx-template-vars.git"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
   },
   "keywords": [
     "babel",
