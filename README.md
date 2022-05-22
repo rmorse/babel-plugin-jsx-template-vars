@@ -184,6 +184,8 @@ Currently supports outputting to:
  * [PHP](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/PHP)
  * [Custom languages](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Custom-languages)
 
+More information on languages can be found in the [wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Output-languages).
+
 ## Documentation
 
 I think I mentioned that there are **significant limitations** with the different variable types - its important to understand how these work in order to use this transform effectively.
