@@ -1,17 +1,19 @@
 # Babel JSX Template Vars
-A Babel transform for rendering a template friendly version of your JSX app.  
+This is a Babel transform for rendering a template friendly version of your JSX app.  
 
-Generates a pre-render for achieving SSR in environments which don't support JavaScript rendering.
+It generates the markup + code to be used in a **pre-render build** for achieving SSR in environments which don't support JavaScript rendering.
 
-Currently supports 2 output languages: Handlebars and PHP.
+Currently supports 2 output languages: 
+* [Handlebars](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Handlebars)
+* [PHP](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/PHP)
 
-Custom language definitions are also supported.
+[Custom language definitions are also supported](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Custom-languages).
 
 ## What are template variables?
 
 Template variables are variables in your components which you want to expose so that they can be used in another templating langauage.
 
-They will usually be variables coming from an external data source, such as a database or API.
+They will usually be variables coming from an external data source, such as a database or an API.
 
 The idea is that this transform will replace selected variables (across the components you specify) with the correct code or tag corresponding to your chosen language.
 
@@ -19,64 +21,16 @@ In Handlebars this might be: ```{{name}}``` and in PHP it might look like this: 
 
 Using this transform you will be able to use the same JSX code you've written, to output a Handlebars or PHP version of the same application.  
 
-Remember, it won't be interactive, this is only for generating an initial pre-render to achieve SSR.
+_Remember, it won't be interactive, this is only for generating an initial pre-render to achieve SSR._
 
-There are **a fair few limitations** so your mileage may vary.
+> There are **a fair few limitations** so your mileage may vary.
 
-## How it works
-
-### Workflow
+## Workflow
 1. Assumes you already have a React/Preact app with your development/production builds setup.
-2. Create an additional build, a **pre-render** - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
-3. **Add this plugin to the pre-render build** to add the template vars to the html output.
+2. Create an additional build, a pre-render - which renders your app and extracts the rendered html (markup after running your app) into a file so it can be processed later on your server.
+3. **Add this plugin to the pre-render build to add the template vars to the html output.**
 4. Configure by adding `.templateVars` to components that have dynamic data.
 5. Via your server side language, process the saved template file and pass in your data to get an SSR compatible pre-render.
-
-### An example
-
-Lets take a component: 
-
-```js
-const HelloWorld = ({ name }) => (
-  <div>
-    <h1>Hello {name}</h1>
-  </div>
-);
-```
-Once we run our app, this might generate html like:
-```html
-<div>
-  <h1>Hello Mary</h1>
-</div>
-```
-
-Using this plugin, adding a `.templateVars` property on your component will expose the variable to you chosen output language.
-
-```js
-const HelloWorld = ({ name }) => (
-  <div>
-    <h1>Hello { name }</h1>
-  </div>
-);
-HelloWorld.templateVars = [ 'name' ];
-```
-
-**If using Handlebars, the output would be:**
-```handlebars
-<div>
-    <h1>Hello {{name}}</h1>
-</div>
-```
-
-**If using PHP, the output would be:**
-```php
-<div>
-    <h1>Hello <?php echo $data['name'] ?></h1>
-</div>
-```
-
-
-There are other types variables (not only strings to be replaced) such as control and list variables.
 
 ## How to use
 
@@ -84,17 +38,10 @@ There are other types variables (not only strings to be replaced) such as contro
 
 `npm install babel-plugin-jsx-template-vars`
 
-### 2. Add to babel as a plugin
+### 2. Add to babel as a plugin to your pre-render build
 
-#### Via .babelrc
-```js
-{
-  "plugins": [
-    "babel-plugin-jsx-template-vars"
-  ]
-}
-```
-#### With babel-loader + webpack
+#### E.g. With babel-loader + webpack
+_This should only be added to your **pre-render** build._
 ```js
 {
     test: /\.(js|jsx|tsx|ts)$/,
@@ -108,18 +55,11 @@ There are other types variables (not only strings to be replaced) such as contro
     }
 },
 ```
-
-**Note:** You will still need to add this transform to your existing builds (with the option `tidyOnly: true`) so that the `.templateVars` properties are removed from your production/development code, e.g.
-
-```js
-plugins: [
-    [ 'babel-plugin-jsx-template-vars', { tidyOnly: true } ]
-],
-```
+[There are some additional initialisation options and things to watch out for](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Installation).
 
 ### 3. Define which variables in your components will be template variables.
 
-Add a `templateVars` property to your component to specificy which variable will be exposed.
+Add a `templateVars` property to your component to specificy which variables will be exposed.
 
 The format is an array, of strings (or arrays with additional config):
 
@@ -138,7 +78,10 @@ Person.templateVars = [ 'name', 'favoriteColor' ];
 
 ## Template variable types
 
-There are 3 types of variables that have different behaviours:
+There are 3 types of variables that have different behaviours.
+
+> **Note**
+> **There are significant limitations with `control` and `list` type variables, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ### 1. Replacement variables
 
@@ -146,109 +89,48 @@ Replacement variables are variables that will need to be replaced by a dynamic v
 
 In Handlebars this would be: `{{name}}`, and if using PHP this would be: `<?php echo $data['name'] ?>`.
 
-All examples above show replacement variables, and they are the default type for a variable if a type is not set.
+The default variable type is a replacement variable:
+
+```js
+Person.templateVars = [ 'name' ];
+```
+
+The type can also be passed as an argument:
+
+```js
+Person.templateVars = [ [ 'name', { type: 'replace' } ] ];
+```
+
 
 ### 2. Control variables (showing/hiding content)
 Depending on the value of a specific variable, you might wish to show or hide content in your component.  Use the `control` type variable to signify this.
 
-In the below example `show` is used as a control type variable.
-
-```jsx
-const Person = ( { name, favoriteColor, show } ) => {
-    return (
-        <>
-            <h1>{ name }</h1>
-            <p>Favorite color: { favoriteColor }</p>
-            { show && <p>Show this content</p> }
-        </>
-    );
-};
-Person.templateVars = [ 'name', 'favoriteColor', [ 'show', { type: 'control' } ] ];
-```
-By signifying the variable as a control variable, the statement and expression is added to the output.
-
-**If using Handlebars the output would be:**
-
-```handlebars
-<h1>{{name}}</h1>
-<p>Favorite color: {{favoriteColor}}</p>
-{{#if_truthy show}}
-    <p>Show this content</p>
-{{/if_truthy}}
+E.g.:
+```js
+Person.templateVars = [ 'name', [ 'show', { type: 'control' } ] ];
 ```
 
-**If you are using PHP the output would be:**
-```php
-<h1><?php echo $data['name']; ?></h1>
-<p>Favorite color: <?php echo $data['favoriteColor']; ?></p>
-<?php if ($data['show']) { ?>
-    <p>Show this content</p>
-<?php } ?>
-```
-
-**Note:** the control variable and condition to evaluate is parsed from the source code automatically but **has significant limitations**.
+In this example `show` is used a control variable.
 
 
 ### 3. Lists (and repeatable elements)
 
-To use repeatable elements and lists we have to use Handlebars tags, or a PHP `foreach` loop to iterate over the list items.
+It is important to have a mechanism for showing repeatable content like arrays or lists. 
 
-**Generated handlebars code would look like this:**
-```handlebars
-    <section class="profile">
-        {{#favoriteColors}}
-            <p>A favorite color: {{label}}</p>
-        {{/favoriteColors}}
-    </section>
-```
-**Generated PHP code would look like this:**
-```php
-    <section class="profile">
-        <?php foreach ($data['favoriteColors'] as $item) { ?>
-            <p>A favorite color: <?php echo $item['label']; ?></p>
-        <?php } ?>
-    </section>
+This is supported with some limitations, and is signified by the `list` variable type:
+
+```js
+Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list' } ] ];
 ```
 
-To achieve this, first we need to define which variable is array like (`favoriteColors`) and then the object properties of the child to be iterated (or no properties if the child is a JavaScript primitive).
 
-```jsx
-const Person = ( { name, favoriteColors } ) => {
-    const favoriteColorsList = favoriteColors.map( ( color, index ) => {
-        return (
-            <p key={ index }>A favorite color: { color.label }</p>
-        );
-    } );
-    return (
-        <>
-            <h1>{ name }</h1>
-            { favoriteColorsList }
-        </>
-    );
-};
-// Setup favoriteColors as type list with objects as children.
-Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } } ] ];
-```
+***
 
-Array mapping in JSX expressions is also supported:
-```jsx
-const Person = ( { name, favoriteColors } ) => {
-    return (
-        <>
-            <h1>{ name }</h1>
-            { favoriteColors.map( ( color, index ) => {
-                return (
-                    <p key={ index }>A favorite color: { color.label }</p>
-                );
-            } ) }
-        </>
-    );
-};
-```
+**[More information on Variable Types can be found in the Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ## Exposing variables
 
-The above examples have all used variables derived from desctructured `props` passed into a component. 
+The above example uses variables derived from destructured `props` passed into a component. 
 
 Any variable (identifier) that resides directly in the components scope can be used:
 
@@ -292,7 +174,13 @@ Person.templateVars = [ 'name', 'favoriteColor' ];
 
 [There is a working example using Handlebars output provided here](https://github.com/rmorse/ssr-preact-php-handlebars) (also, using PHP).
 
-**Open an issue if you have a demo project in other languages and we'll add it here.**
+**Please [open an issue](https://github.com/rmorse/babel-plugin-jsx-template-vars/issues/new) if you have a demo project in other languages and we'll add it here.**
+
+## Documentation
+
+I think I mentioned that there are **significant limitations** with the different variable types - its important to understand how these work in order to use this transform effectively.
+
+[More information is being added to the docs, currently on our github Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki).
 
 ## Caveats
 

@@ -171,7 +171,7 @@ function buildListVarDeclaration( varName, varConfig, t, language ) {
 		const childProp = {};
 		const propsArr = [];
 		props.forEach( ( propName ) => {
-			const listObjectString = getLanguageList( language, 'formatObject', propName );
+			const listObjectString = getLanguageList( language, 'formatObjectProperty', propName );
 			propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( listObjectString ) ) );
 		} );
 		newProp.push( childProp );

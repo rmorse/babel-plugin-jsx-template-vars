@@ -7,7 +7,7 @@ const handlebars = {
 	list: {
 		open: '{{#||%1||}}',
 		close: '{{/||%1||}}',
-		formatObject: `{{||%1||}}`,
+		formatObjectProperty: `{{||%1||}}`,
 		formatPrimitive: `{{.}}`,
 	},
 	control: {

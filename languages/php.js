@@ -7,7 +7,7 @@ const php = {
 	list: {
 		open: `<?php foreach ( $data[ "||%1||" ] as $item ) { ?>`,
 		close: `<?php } ?>`,
-		formatObject: `<?php echo htmlspecialchars( $item[ "||%1||" ], ENT_QUOTES ); ?>`,
+		formatObjectProperty: `<?php echo htmlspecialchars( $item[ "||%1||" ], ENT_QUOTES ); ?>`,
 		formatPrimitive: `<?php echo htmlspecialchars( $item, ENT_QUOTES ); ?>`,
 	},
 	control: {
