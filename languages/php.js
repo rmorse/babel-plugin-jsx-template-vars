@@ -2,29 +2,29 @@
 const php = {
 	name: 'php',
 	replace: {
-		format: `<?php echo htmlspecialchars( $data[ "||%1||" ], ENT_QUOTES ); ?>`,
+		format: `<?php echo htmlspecialchars( $data[ '||%1||' ], ENT_QUOTES ); ?>`,
 	},
 	list: {
-		open: `<?php foreach ( $data[ "||%1||" ] as $item ) { ?>`,
+		open: `<?php foreach ( $data[ '||%1||' ] as $item ) { ?>`,
 		close: `<?php } ?>`,
-		formatObjectProperty: `<?php echo htmlspecialchars( $item[ "||%1||" ], ENT_QUOTES ); ?>`,
+		formatObjectProperty: `<?php echo htmlspecialchars( $item[ '||%1||' ], ENT_QUOTES ); ?>`,
 		formatPrimitive: `<?php echo htmlspecialchars( $item, ENT_QUOTES ); ?>`,
 	},
 	control: {
 		ifTruthy: {
-			open: `<?php if ( $data[ "||%1||" ] ) { ?>`,
+			open: `<?php if ( $data[ '||%1||' ] ) { ?>`,
 			close: '<?php } ?>',
 		},
 		ifFalsy: {
-			open: `<?php if ( ! $data[ "||%1||" ] ) { ?>`,
+			open: `<?php if ( ! $data[ '||%1||' ] ) { ?>`,
 			close: '<?php } ?>',
 		},
 		ifEqual: {
-			open: `<?php if ( $data[ "||%1||" ] === ||%2|| ) { ?>`,
+			open: `<?php if ( $data[ '||%1||' ] === ||%2|| ) { ?>`,
 			close: '<?php } ?>',
 		},
 		ifNotEqual: {
-			open: `<?php if ( $data[ "||%1||" ] !== ||%2|| ) { ?>`,
+			open: `<?php if ( $data[ '||%1||' ] !== ||%2|| ) { ?>`,
 			close: '<?php } ?>',
 		},
 	}

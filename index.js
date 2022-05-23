@@ -294,7 +294,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						//statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
 						const replaceString = getLanguageReplace( language, 'format', varName );
-						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '${ replaceString }';`) );
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = "${ replaceString }";`) );
 					} );
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
@@ -386,7 +386,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 										statementType = 'ifNotEqual';
 									}
 									// Add quotes around the value to signify its a string.
-									expressionValue = `"${ expression.right.value }"`;
+									expressionValue = `'${ expression.right.value }'`;
 								}
 							}
 
