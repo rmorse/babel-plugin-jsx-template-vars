@@ -62,7 +62,6 @@ function normaliseConfigProp( prop ) {
 	}
 	return prop;
 }
-
 const defaultLanguage = 'handlebars';
 /**
  * Gets the template vars from the property definition.
@@ -240,14 +239,21 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			if ( ! templateVars ) {
 				return;
 			}
-			// Get the previous sibling before the current path is removed.
-			const componentPath = path.getSibling( path.key - 1 );
+
+			// We know this exists because it was checked in getTemplateVarsFromExpression
+			const componentName = path.node.expression.left.object.name;
+			// Find the component path by name
+			const componentPath = getComponentPath( path.parentPath, componentName );
 			
 			// Remove templateVars from the source
 			path.remove();
 
 			// If tidyOnly is set, exit here (immediately after the removal of the templateVars).
 			if ( tidyOnly ) {
+				return;
+			}
+
+			if ( ! componentPath ) {
 				return;
 			}
 
@@ -267,19 +273,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 			// Start the main traversal of component
 			componentPath.traverse( {
-				/*ReturnStatement( subPath ) {
-				},*/
-				/*JSXElement(subPath){ 
-				},
-				JSXOpeningElement( subPath ) {
-				},
-				JSXIdentifier( subPath ) {
-				},*/
-				/*JSXIdentifier( subPath ) {
-				},*/
-				/*ExpressionStatement( subPath ) {
-					// Check if the expression is a control expression.
-				},*/
 				BlockStatement( statementPath ) {
 					// Hacky way of making sure we only catch the first block statement - we should be able to check
 					// something on the parent to make this more reliable.
@@ -292,7 +285,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					replaceVars.forEach( ( templateVar ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						//statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = '{{${ varName }}}';`) );
 						const replaceString = getLanguageReplace( language, 'format', varName );
 						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = "${ replaceString }";`) );
 					} );
@@ -304,7 +296,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
-
 						// Now keep track of the list vars and aliaes we need to tag (and keep track of their original source var)
 						listVarsToTag[ varName ] = varName;
 						if ( varConfig.aliases ) {
@@ -438,6 +429,16 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const memberExpression = containerExpression.callee;
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
 							const objectName = memberExpression.object.name;
+							subPath.traverse( {
+								JSXElement(subPath){
+									// If we find a JSX element, check to see if it's a component,
+									// and if so, inject a `__context` JSXAttribute.
+									if ( isJSXElementComponent( subPath ) ) {
+										const contextAttribute = t.jSXAttribute( t.jSXIdentifier( '__context' ), t.stringLiteral( "list" ) );
+										subPath.node.openingElement.attributes.push( contextAttribute );
+									}
+								}
+							} );
 							if ( listVarsToTag[ objectName ] ) {
 								const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
 								const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
@@ -452,6 +453,39 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 		}
 	}
 };
+
+
+// Find and return a component (variable declaration) path via traversal by its name.
+function getComponentPath( path, componentName ) {
+	let componentPath;
+	path.traverse( {
+		VariableDeclaration( subPath ) {
+			const declarationName = subPath.node.declarations[0].id.name
+			if ( declarationName === componentName ) {
+				componentPath = subPath;
+			}
+			subPath.skip();
+		}
+	} );
+	return componentPath;
+}
+function getJSXElementName( path ) {
+	return path.node.openingElement?.name?.name
+}
+
+function isJSXElementComponent( path ) {
+	const elementName = getJSXElementName( path );
+	if ( typeof elementName === 'string' ) {
+		// Find out if we're dealing with a component or regular html element.
+		// Assume that a capital letter means a component.
+		// TODO - Double check this - pretty sure its a JSX rule.
+		const elementIntialLetter = elementName.substring(0, 1);
+		if ( elementIntialLetter.toUpperCase() === elementIntialLetter ) {
+			return true;
+		}
+	}
+	return false;
+}
 
 module.exports = ( babel, config ) => {
 	return {
