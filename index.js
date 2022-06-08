@@ -48,6 +48,7 @@ const {
 	getArrayFromExpression,
 	getObjectFromExpression,
 	getNameFromNode,
+	injectContextToJSXElementComponents,
 } = require( './utils' );
 
 /**
@@ -328,6 +329,9 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 							if ( t.isMemberExpression( subPath.parentPath.node ) ) {
 								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
 								if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
+									// Inject list context to components inside the map
+									injectContextToJSXElementComponents( subPath.parentPath.parentPath, 'list', t );
+
 									subPath.node.name = listVarsMap[ subPath.node.name ];
 									// If we found a map, we want to track which identifier it was assigned to...
 									if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
@@ -428,17 +432,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( t.isCallExpression( containerExpression ) && t.isMemberExpression( containerExpression.callee ) ) {
 						const memberExpression = containerExpression.callee;
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
+							// Inject list context to components inside the map
+							injectContextToJSXElementComponents( subPath, 'list', t );
+
+							// Add the before / after tags to the list.
 							const objectName = memberExpression.object.name;
-							subPath.traverse( {
-								JSXElement(subPath){
-									// If we find a JSX element, check to see if it's a component,
-									// and if so, inject a `__context` JSXAttribute.
-									if ( isJSXElementComponent( subPath ) ) {
-										const contextAttribute = t.jSXAttribute( t.jSXIdentifier( '__context' ), t.stringLiteral( "list" ) );
-										subPath.node.openingElement.attributes.push( contextAttribute );
-									}
-								}
-							} );
 							if ( listVarsToTag[ objectName ] ) {
 								const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
 								const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
@@ -468,23 +466,6 @@ function getComponentPath( path, componentName ) {
 		}
 	} );
 	return componentPath;
-}
-function getJSXElementName( path ) {
-	return path.node.openingElement?.name?.name
-}
-
-function isJSXElementComponent( path ) {
-	const elementName = getJSXElementName( path );
-	if ( typeof elementName === 'string' ) {
-		// Find out if we're dealing with a component or regular html element.
-		// Assume that a capital letter means a component.
-		// TODO - Double check this - pretty sure its a JSX rule.
-		const elementIntialLetter = elementName.substring(0, 1);
-		if ( elementIntialLetter.toUpperCase() === elementIntialLetter ) {
-			return true;
-		}
-	}
-	return false;
 }
 
 module.exports = ( babel, config ) => {

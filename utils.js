@@ -71,9 +71,45 @@ function getExpressionSubject( expression ) {
 	return null;
 }
 
+
+
+
+function injectContextToJSXElementComponents( path, context, t ) {
+	path.traverse( {
+		JSXElement(subPath){
+			// If we find a JSX element, check to see if it's a component,
+			// and if so, inject a `__context` JSXAttribute.
+			if ( isJSXElementComponent( subPath ) ) {
+				const contextAttribute = t.jSXAttribute( t.jSXIdentifier( '__context' ), t.stringLiteral( context ) );
+				subPath.node.openingElement.attributes.push( contextAttribute );
+			}
+		}
+	} );
+}
+
+function getJSXElementName( path ) {
+	return path.node.openingElement?.name?.name
+}
+
+function isJSXElementComponent( path ) {
+	const elementName = getJSXElementName( path );
+	if ( typeof elementName === 'string' ) {
+		// Find out if we're dealing with a component or regular html element.
+		// Assume that a capital letter means a component.
+		// TODO - Double check this - pretty sure its a JSX rule.
+		const elementIntialLetter = elementName.substring(0, 1);
+		if ( elementIntialLetter.toUpperCase() === elementIntialLetter ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+
 module.exports = {
 	getExpressionSubject,
 	getArrayFromExpression,
 	getObjectFromExpression,
 	getNameFromNode,
+	injectContextToJSXElementComponents,
 };
