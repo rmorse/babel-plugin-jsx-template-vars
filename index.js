@@ -273,14 +273,44 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 
 			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 			// Start the main traversal of component
+
+			// TODO - we should look through the params and apply the same logic...
+			const componentParam = componentPath.node.declarations[0].init.params[0];
+
+			let hasContext = false;
+			let propsName = null;
+			// If the param is an object pattern, we want to add `__context__` as a property to it.
+			if ( t.isObjectPattern( componentParam ) ) {
+				// Then we are probably looking at props passed through as an object.
+				// Add __context__ as a property to the object.
+				componentParam.properties.push( t.objectProperty( t.identifier( '__context__' ), t.identifier( '__context__' ), false, true ) );
+				hasContext = true;
+			} else if ( t.isIdentifier( componentParam ) ) {
+				// If it's an identifier we need to declare it in the block statement.
+				propsName = componentParam.name;
+			}
+			
 			componentPath.traverse( {
 				BlockStatement( statementPath ) {
-					// Hacky way of making sure we only catch the first block statement - we should be able to check
+					// TODO: Hacky way of making sure we only catch the first block statement - we should be able to check
 					// something on the parent to make this more reliable.
 					if ( blockStatementDepth !== 0 ) {
 						return;
 					}
 					blockStatementDepth++;
+
+					// Start by figuring out if we need to add a __context__ variable.
+					const localBindings = Object.keys( statementPath.scope.bindings );
+					// If context is not already set, and its not a local binding, we need to add it.
+					if ( ! hasContext && ! localBindings.includes( '__context__' ) ) {
+						if ( propsName ) {
+							statementPath.node.body.unshift( parse(`let __context__ = ${ propsName }.__context__;`) );
+						} else {
+							statementPath.node.body.unshift( parse(`let __context__;`) );
+						}
+					}
+
+					// Get identifier name of props passed in
 
 					// Add the new replace vars to to top of the block statement.
 					replaceVars.forEach( ( templateVar ) => {
