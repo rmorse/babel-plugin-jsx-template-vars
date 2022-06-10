@@ -78,9 +78,9 @@ function injectContextToJSXElementComponents( path, context, t ) {
 	path.traverse( {
 		JSXElement(subPath){
 			// If we find a JSX element, check to see if it's a component,
-			// and if so, inject a `__context` JSXAttribute.
+			// and if so, inject a `__context__` JSXAttribute.
 			if ( isJSXElementComponent( subPath ) ) {
-				const contextAttribute = t.jSXAttribute( t.jSXIdentifier( '__context' ), t.stringLiteral( context ) );
+				const contextAttribute = t.jSXAttribute( t.jSXIdentifier( '__context__' ), t.stringLiteral( context ) );
 				subPath.node.openingElement.attributes.push( contextAttribute );
 			}
 		}
