@@ -254,6 +254,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				return;
 			}
 
+			// If the component path is not found, exit here.
 			if ( ! componentPath ) {
 				return;
 			}
@@ -316,8 +317,10 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					replaceVars.forEach( ( templateVar ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const replaceString = getLanguageReplace( language, 'format', varName );
-						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = "${ replaceString }";`) );
+						const replaceString = getLanguageReplace( language, 'format', varName ); 
+						const listReplaceString = getLanguageList( language, 'formatObjectProperty', varName );
+
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = __context__ === 'list' ? "${ listReplaceString }" : "${ replaceString }";`) );
 					} );
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
