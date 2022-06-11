@@ -50,6 +50,7 @@ const {
 	getNameFromNode,
 	injectContextToJSXElementComponents,
 } = require( './utils' );
+const fs = require('fs')
 
 /**
  * Ensure the config prop is an array of two elements, with the first item being the var name and the second being the var config.
@@ -64,6 +65,20 @@ function normaliseConfigProp( prop ) {
 	return prop;
 }
 const defaultLanguage = 'handlebars';
+
+/** We want to pass our language functions directly into the application code
+  * so we can use them in the components.
+  */
+let languageFunctions = null;
+fs.readFile( __dirname + '/language-functions.js', 'utf8' , (err, data) => {
+	if (err) {
+		console.error(err)
+		return
+	} else {
+		languageFunctions = data;
+	}
+})
+
 /**
  * Gets the template vars from the property definition.
  * 
@@ -195,6 +210,11 @@ function buildListVarDeclaration( varName, varConfig, t, language ) {
 	return null;
 }
 
+let uid = 1;
+function getUid() {
+	return 'item_' + uid++;
+}
+
 /**
  * Generate new uids for the provided scope.
  * 
@@ -214,6 +234,30 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
+
+/**
+ * Generate new uids for the provided scope for list vars
+ * and all track context vars related to the list vars
+ * 
+ * @param {Object} scope The current scope.
+ * @param {Object} vars The vars to generate uids for.
+ * @returns 
+ */
+ function generateListVarTypeUids( scope, vars ) {
+	const varMap = {};
+	const varNames = [];
+	vars.forEach( ( [ varName, varConfig ] ) => {
+		const newIdentifier = scope.generateUidIdentifier("uid");
+		varMap[ varName ] = {
+			name: newIdentifier.name,
+			context: getUid(),
+		};
+		varNames.push( varName );
+	} );
+
+	return [ varMap, varNames ];
+}
+
 /**
  * The main visitor for the plugin.
  * 
@@ -227,7 +271,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	if ( config.customLanguage ) {
 		registerLanguage( config.customLanguage );
 	}
-	return { 
+	return {
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
@@ -259,6 +303,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				return;
 			}
 
+			const contextUid = getUid();
+			// TODO - the generation and passing of context must be done in hte actual component (so we need to add getUid() to the app)
+			// Which then means, the language translation stuff also needs to be added to the app - and it must be done inside the compoent
+			// rather than generated at build time...
+
 			// Get the three types of template vars.
 			const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 
@@ -267,7 +316,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			// Get the control vars names
 			const [ controlVarsMap, controlVarsNames ] = generateVarTypeUids( componentPath.scope, controlVars );
 			// Build the map of var lists.
-			const [ listVarsMap, listVarsNames ] = generateVarTypeUids( componentPath.scope, listVars );
+			const [ listVarsMap, listVarsNames ] = generateListVarTypeUids( componentPath.scope, listVars );
 			
 			// All the list variable names we need to look for in JSX expressions
 			let listVarsToTag = {};
@@ -320,13 +369,14 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const replaceString = getLanguageReplace( language, 'format', varName ); 
 						const listReplaceString = getLanguageList( language, 'formatObjectProperty', varName );
 
-						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = __context__ === 'list' ? "${ listReplaceString }" : "${ replaceString }";`) );
+						// statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = __context__ === 'list' ? "${ listReplaceString }" : "${ replaceString }";`) );
+						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = "${ listReplaceString }";`) );
 					} );
 					// Add the new list vars to to top of the block statement.
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, t, language );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, t, language );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -363,20 +413,23 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
 								if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
 									// Inject list context to components inside the map
-									injectContextToJSXElementComponents( subPath.parentPath.parentPath, 'list', t );
 
-									subPath.node.name = listVarsMap[ subPath.node.name ];
-									// If we found a map, we want to track which identifier it was assigned to...
-									if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
-										// Check if its an identifier and if so, add it to the listVars to tag.
-										if ( t.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
-											const identifierName = subPath.parentPath.parentPath.parentPath.node.id.name;
-											listVarsToTag[ identifierName ] = sourceVarName;
+									if ( listVarsMap[ subPath.node.name ] ) {
+										injectContextToJSXElementComponents( subPath.parentPath.parentPath, listVarsMap[ subPath.node.name ].context, t );
+										
+										subPath.node.name = listVarsMap[ subPath.node.name ].name;
+										// If we found a map, we want to track which identifier it was assigned to...
+										if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
+											// Check if its an identifier and if so, add it to the listVars to tag.
+											if ( t.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
+												const identifierName = subPath.parentPath.parentPath.parentPath.node.id.name;
+												listVarsToTag[ identifierName ] = sourceVarName;
+											}
 										}
 									}
 								}
 							} else {
-								subPath.node.name = listVarsMap[ subPath.node.name ];
+								subPath.node.name = listVarsMap[ subPath.node.name ].name;
 							}
 						}
 					}
@@ -434,8 +487,11 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								if ( t.isIdentifier( containerExpression.right ) ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
-										const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
-										const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
+										const listVarSourceName = listVarsToTag[ objectName ];
+										const listVarContext = listVarsMap[ listVarSourceName ].context;
+										
+										const listOpen = getLanguageList( language, 'open', listVarSourceName );
+										const listClose = getLanguageList( language, 'close', listVarSourceName );
 			
 										subPath.insertBefore( t.stringLiteral( listOpen ) );
 										subPath.insertAfter( t.stringLiteral( listClose ) );
@@ -465,14 +521,18 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( t.isCallExpression( containerExpression ) && t.isMemberExpression( containerExpression.callee ) ) {
 						const memberExpression = containerExpression.callee;
 						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
-							// Inject list context to components inside the map
-							injectContextToJSXElementComponents( subPath, 'list', t );
-
 							// Add the before / after tags to the list.
 							const objectName = memberExpression.object.name;
+
 							if ( listVarsToTag[ objectName ] ) {
-								const listOpen = getLanguageList( language, 'open', listVarsToTag[ objectName ] );
-								const listClose = getLanguageList( language, 'close', listVarsToTag[ objectName ] );
+								// Inject list context to components inside the map
+								injectContextToJSXElementComponents( subPath, listVarsMap[ listVarsToTag[ objectName ] ].context, t );
+
+							
+								const listVarSourceName = listVarsToTag[ objectName ];
+								const listVarContext = listVarsMap[ listVarSourceName ].context;
+								const listOpen = getLanguageList( language, 'open', listVarSourceName );
+								const listClose = getLanguageList( language, 'close', listVarSourceName );
 
 								subPath.insertBefore( t.stringLiteral( listOpen ) );
 								subPath.insertAfter( t.stringLiteral( listClose ) );
@@ -501,13 +561,29 @@ function getComponentPath( path, componentName ) {
 	return componentPath;
 }
 
+let addedFunctions = false;
 module.exports = ( babel, config ) => {
 	return {
 		name: "template-vars-plugin",
 		visitor: {
-			Program( programPath ) {
-				programPath.traverse( templateVarsVisitor( babel, config ) );
+			Program: {
+				enter: ( programPath, parent ) => {
+					// The main visitor function.
+					programPath.traverse( templateVarsVisitor( babel, config ) );
+					//addSideEffect(programPath, 'source__');
+					
+					// Because Program might be visited multiple times, we need to make sure we only insert the functions once.
+					if ( addedFunctions === false ) {
+						parent.file.path.node.body.unshift(
+							babel.parse( languageFunctions )
+						);
+						addedFunctions = true;
+					}
+				},
+				exit:  ( programPath, parent ) => {
+					// Only on exit do we want to insert our functions into the app.
+				}
 			},
-		}
+		},
 	};
 };

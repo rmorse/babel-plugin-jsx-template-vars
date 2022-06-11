@@ -27,7 +27,8 @@ const handlebars = {
 			open: '{{#if_not_equal ||%1|| ||%2||}}',
 			close: '{{/if_not_equal}}',
 		},
-	}
+	},
+	supportsContext: false,
 };
 
 module.exports = handlebars;
