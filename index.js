@@ -177,7 +177,7 @@ const normaliseListVar = ( varConfig ) => {
 	return normalisedConfig;
 };
 // Build the object for the replacement var in list type vars.
-function buildListVarDeclaration( varName, varConfig, t, parse, language ) {
+function buildListVarDeclaration( varName, varConfig, t, parse, language, contextName ) {
 	const normalisedConfig = normaliseListVar( varConfig );
 	const { type, props } = normalisedConfig.child;
 
@@ -186,7 +186,7 @@ function buildListVarDeclaration( varName, varConfig, t, parse, language ) {
 		const childProp = {};
 		const propsArr = [];
 		props.forEach( ( propName ) => {
-			const listObjectString = `getLanguageList( '${ language }', 'formatObjectProperty', '${ propName }' )`;
+			const listObjectString = `getLanguageList( '${ language }', 'formatObjectProperty', '${ propName }', ${ contextName } )`;
 			// propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( listObjectString ) ) );
 			propsArr.push( t.objectProperty( t.identifier( propName ), parse( listObjectString ) ) );
 		} );
@@ -201,7 +201,7 @@ function buildListVarDeclaration( varName, varConfig, t, parse, language ) {
 	} else if ( type === 'primitive' ) {
 		// Then we're dealing with a normal array.
 		// TODO: maybe "primitive" is not the best name for this type.
-		const listPrimitiveString = `let ${ varName } = [ getLanguageList( '${ language }', 'formatPrimitive' ) ];`;
+		const listPrimitiveString = `let ${ varName } = [ getLanguageList( '${ language }', 'formatPrimitive', ${ contextName } ) ];`;
 		return parse( listPrimitiveString );
 	}
 	return null;
@@ -231,6 +231,9 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
+function createListTag( varName, varConfig, t, parse, language ) {
+
+}
 
 /**
  * Generate new uids for the provided scope for list vars
@@ -300,7 +303,6 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				return;
 			}
 
-			const contextUid = getUid();
 			// TODO - the generation and passing of context must be done in hte actual component (so we need to add getUid() to the app)
 			// Which then means, the language translation stuff also needs to be added to the app - and it must be done inside the compoent
 			// rather than generated at build time...
@@ -336,7 +338,9 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 				// If it's an identifier we need to declare it in the block statement.
 				propsName = componentParam.name;
 			}
-			
+
+			const contextIdentifier = componentPath.scope.generateUidIdentifier("uid");
+
 			componentPath.traverse( {
 				BlockStatement( statementPath ) {
 					// TODO: Hacky way of making sure we only catch the first block statement - we should be able to check
@@ -346,24 +350,13 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					}
 					blockStatementDepth++;
 
-					// Start by figuring out if we need to add a __context__ variable.
-					const localBindings = Object.keys( statementPath.scope.bindings );
-					// If context is not already set, and its not a local binding, we need to add it.
-					if ( ! hasContext && ! localBindings.includes( '__context__' ) ) {
-						if ( propsName ) {
-							statementPath.node.body.unshift( parse(`let __context__ = ${ propsName }.__context__;`) );
-						} else {
-							statementPath.node.body.unshift( parse(`let __context__;`) );
-						}
-					}
-
 					// Get identifier name of props passed in
 
 					// Add the new replace vars to to top of the block statement.
 					replaceVars.forEach( ( templateVar ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const replaceString = `getLanguageReplace( '${ language }', 'format', '${ varName }' );`; 
+						const replaceString = `getLanguageReplace( '${ language }', 'format', '${ varName }', ${ contextIdentifier.name } )`; 
 						// const listReplaceString = getLanguageList( language, 'formatObjectProperty', varName );
 
 						// statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = __context__ === 'list' ? "${ listReplaceString }" : "${ replaceString }";`) );
@@ -373,7 +366,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, t, parse, language );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, t, parse, language, contextIdentifier.name );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -384,8 +377,38 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								listVarsToTag[ alias ] = varName;
 							} );
 						}
-		
 					} );
+
+					
+					// Figure out if we need to add a __context__ variable.
+					const localBindings = Object.keys( statementPath.scope.bindings );
+					// If context is not already set, and its not a local binding, we need to add it.
+
+					// Figure out what we need to do before doing it
+					// as we're unshifting our statements, we need to put them in reverse order.
+
+
+					let contextAction = '';
+					if ( ! hasContext && ! localBindings.includes( '__context__' ) ) {
+						if ( propsName ) {
+							contextAction = 'set_from_props';
+						} else {
+							contextAction = 'init';
+						}
+					}
+
+					statementPath.node.body.unshift( parse( `console.log( "${ componentName } " + ${ contextIdentifier.name } )` ) );
+					if ( contextAction !== 'init' ) {
+						statementPath.node.body.unshift( parse(`${ contextIdentifier.name }++;`) );
+					}
+					if ( contextAction === 'set_from_props' ) {
+						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = ${ propsName }.__context__;`) );
+					} else if ( contextAction === 'init' ) {
+						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = 0;`) );
+					} else {
+						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = __context__;`) );
+					}
+				
 				},
 				Identifier( subPath ) {
 					// We need to update all the identifiers with the new variables declared in the block statement
@@ -412,7 +435,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 									// Inject list context to components inside the map
 
 									if ( listVarsMap[ subPath.node.name ] ) {
-										injectContextToJSXElementComponents( subPath.parentPath.parentPath, listVarsMap[ subPath.node.name ].context, t );
+										injectContextToJSXElementComponents( subPath.parentPath.parentPath, contextIdentifier.name, t );
 										
 										subPath.node.name = listVarsMap[ subPath.node.name ].name;
 										// If we found a map, we want to track which identifier it was assigned to...
@@ -487,8 +510,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 										const listVarSourceName = listVarsToTag[ objectName ];
 										const listVarContext = listVarsMap[ listVarSourceName ].context;
 										
-										const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ) ] ) );
-										const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ) ] ) );
+										const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
+										const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
 										
 										subPath.insertBefore( listOpen );
 										subPath.insertAfter( listClose );
@@ -505,8 +528,8 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					if ( t.isIdentifier( containerExpression ) ) {
 						// Then we should be looking at something like: `{ myVar }`
 						if ( listVarsToTag[ containerExpression.name ] ) {
-							const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ) ] ) );
-							const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ) ] ) );
+							const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ), t.identifier( contextIdentifier.name ) ] ) );
+							const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ), t.identifier( contextIdentifier.name ) ] ) );
 							
 							subPath.insertBefore( listOpen );
 							subPath.insertAfter( listClose );
@@ -522,13 +545,12 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 
 							if ( listVarsToTag[ objectName ] ) {
 								// Inject list context to components inside the map
-								injectContextToJSXElementComponents( subPath, listVarsMap[ listVarsToTag[ objectName ] ].context, t );
-
+								injectContextToJSXElementComponents( subPath, contextIdentifier.name, t );
 							
 								const listVarSourceName = listVarsToTag[ objectName ];
 								const listVarContext = listVarsMap[ listVarSourceName ].context;
-								const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ) ] ) );
-								const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ) ] ) );
+								const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
+								const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
 								subPath.insertBefore( listOpen );
 								subPath.insertAfter( listClose );
 							}

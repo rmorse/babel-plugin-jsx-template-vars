@@ -2,30 +2,31 @@
 const languages = {
 	php: {
 		name: 'php',
+		varName: '$data',
 		replace: {
-			format: `<?php echo htmlspecialchars( $||%parent||[ '||%1||' ], ENT_QUOTES ); ?>`,
+			format: `<?php echo htmlspecialchars( $||%var||[ '||%1||' ], ENT_QUOTES ); ?>`,
 		},
 		list: {
-			open: `<?php foreach ( $||%parent||[ '||%1||' ] as $||%child|| ) { ?>`,
+			open: `<?php foreach ( $||%var||[ '||%1||' ] as $||%subVar|| ) { ?>`,
 			close: `<?php } ?>`,
 			formatObjectProperty: `<?php echo htmlspecialchars( $item[ '||%1||' ], ENT_QUOTES ); ?>`,
 			formatPrimitive: `<?php echo htmlspecialchars( $item, ENT_QUOTES ); ?>`,
 		},
 		control: {
 			ifTruthy: {
-				open: `<?php if ( $||%parent||[ '||%1||' ] ) { ?>`,
+				open: `<?php if ( $||%var||[ '||%1||' ] ) { ?>`,
 				close: '<?php } ?>',
 			},
 			ifFalsy: {
-				open: `<?php if ( ! $||%parent||[ '||%1||' ] ) { ?>`,
+				open: `<?php if ( ! $||%var||[ '||%1||' ] ) { ?>`,
 				close: '<?php } ?>',
 			},
 			ifEqual: {
-				open: `<?php if ( $||%parent||[ '||%1||' ] === ||%2|| ) { ?>`,
+				open: `<?php if ( $||%var||[ '||%1||' ] === ||%2|| ) { ?>`,
 				close: '<?php } ?>',
 			},
 			ifNotEqual: {
-				open: `<?php if ( $||%parent||[ '||%1||' ] !== ||%2|| ) { ?>`,
+				open: `<?php if ( $||%var||[ '||%1||' ] !== ||%2|| ) { ?>`,
 				close: '<?php } ?>',
 			},
 		},
@@ -43,10 +44,22 @@ const languages = {
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
-function createLanguageString( string, argsArray ) {
-	return string.replace( /\|\|\%(\d+)\|\|/g, ( match, key ) => {
+function createLanguageString( string, argsArray, context ) {
+	let str = string.replace( /\|\|\%(\d+)\|\|/g, ( match, key ) => {
 		const matchIndex = parseInt( match.replace( /\D/g, '' ) );
 		return argsArray[ matchIndex -1 ];
+	} );
+
+	// Now replace the var with the context
+	str = str.replace( /\|\|\%(var)\|\|/g, ( match, key ) => {
+		if ( context === 0 ) {
+			return `data`;
+		}
+		return `data_${ context }`;
+	} );
+
+	return str.replace( /\|\|\%(subVar)\|\|/g, ( match, key ) => {
+		return `data_${ context + 1 }`;
 	} );
 }
 
@@ -58,7 +71,7 @@ function createLanguageString( string, argsArray ) {
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
-function getLanguageString( language, type, targetString = [], argsArray = [] ) {
+function getLanguageString( language, type, targetString = [], argsArray = [], context ) {
 	let languageWithPath = languages[ language ][ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {
@@ -66,19 +79,19 @@ function getLanguageString( language, type, targetString = [], argsArray = [] ) 
 		}
 	} );
 
-	return createLanguageString( languageWithPath, argsArray );
+	return createLanguageString( languageWithPath, argsArray, context );
 }
 
-function getLanguageReplace( language, target, arg ) {
-	return getLanguageString( language, 'replace', [ target ], [ arg ] );
+function getLanguageReplace( language, target, arg, context ) {
+	return getLanguageString( language, 'replace', [ target ], [ arg ], context );
 }
 
-function getLanguageList( language, target, arg ) {
-	return getLanguageString( language, 'list', [ target ], [ arg ] );
+function getLanguageList( language, target, arg, context ) {
+	return getLanguageString( language, 'list', [ target ], [ arg ], context );
 }
 
-function getLanguageControl( language, targets, args ) {
-	return getLanguageString( language, 'control', targets, args );
+function getLanguageControl( language, targets, args, context ) {
+	return getLanguageString( language, 'control', targets, args, context );
 }
 
 function registerLanguage( language ) {
