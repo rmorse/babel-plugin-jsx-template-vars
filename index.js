@@ -42,7 +42,6 @@
  * - Also check for any control variables in JSX expressions which use list variables on the right of the experssion
  *   and wrap them in template tags.
   */
-const { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } = require('./language');
 const {
 	getExpressionSubject,
 	getArrayFromExpression,
@@ -67,19 +66,6 @@ function normaliseConfigProp( prop ) {
 	return prop;
 }
 const defaultLanguage = 'handlebars';
-
-/** We want to pass our language functions directly into the application code
-  * so we can use them in the components.
-  */
-let languageFunctions = null;
-fs.readFile( __dirname + '/language-functions.js', 'utf8' , (err, data) => {
-	if (err) {
-		console.error(err)
-		return
-	} else {
-		languageFunctions = data;
-	}
-})
 
 /**
  * Gets the template vars from the property definition.
@@ -490,10 +476,11 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 								if ( expressionValue ) {
 									expressionArgs.push( expressionValue );
 								}
-								const controlStartString = getLanguageControl( language, [ statementType, 'open' ], expressionArgs );
-								const controlStopString = getLanguageControl( language, [ statementType, 'close' ], expressionArgs );
-								subPath.insertBefore( types.stringLiteral( controlStartString ) );
-								subPath.insertAfter( types.stringLiteral( controlStopString ) );
+
+								const controlStartString = getLanguageControlCallExpression( language, [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
+								const controlStopString = getLanguageControlCallExpression( language, [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
+								subPath.insertBefore( controlStartString );
+								subPath.insertAfter( controlStopString );
 
 								// Now check to see if the right of the expression is a list variable, as we need to wrap them
 								// in helper tags.
@@ -553,6 +540,11 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 	}
 };
 
+function getLanguageControlCallExpression( language, targets, args, context, types ) {
+	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
+	const argsNodes = args.map( arg => types.stringLiteral( arg ) );
+	return types.callExpression( types.identifier( 'getLanguageControl' ), [ types.stringLiteral( language ), types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
+}
 function getLanguageListCallExpression( language, action, name, context, types ) {
 	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( language ), types.stringLiteral( action ), types.stringLiteral( name ), types.identifier( context ) ] );
 }

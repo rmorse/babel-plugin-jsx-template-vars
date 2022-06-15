@@ -34,7 +34,6 @@ const languages = {
 	},
 };
 
-
 /**
  * Replaces tokens such as ||%1|| and ||%2|| with the arguments passed in.
  *
