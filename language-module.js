@@ -9,8 +9,8 @@ const languages = {
 		list: {
 			open: `<?php foreach ( $||%var||[ '||%1||' ] as $||%subVar|| ) { ?>`,
 			close: `<?php } ?>`,
-			formatObjectProperty: `<?php echo htmlspecialchars( $item[ '||%1||' ], ENT_QUOTES ); ?>`,
-			formatPrimitive: `<?php echo htmlspecialchars( $item, ENT_QUOTES ); ?>`,
+			formatObjectProperty: `<?php echo htmlspecialchars( $||%subVar||[ '||%1||' ], ENT_QUOTES ); ?>`,
+			formatPrimitive: `<?php echo htmlspecialchars( $||%subVar||, ENT_QUOTES ); ?>`,
 		},
 		control: {
 			ifTruthy: {
@@ -44,7 +44,7 @@ const languages = {
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
-function createLanguageString( string, argsArray, context ) {
+export function createLanguageString( string, argsArray, context ) {
 	let str = string.replace( /\|\|\%(\d+)\|\|/g, ( match, key ) => {
 		const matchIndex = parseInt( match.replace( /\D/g, '' ) );
 		return argsArray[ matchIndex -1 ];
@@ -71,7 +71,7 @@ function createLanguageString( string, argsArray, context ) {
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
-function getLanguageString( language, type, targetString = [], argsArray = [], context ) {
+ export function getLanguageString( language, type, targetString = [], argsArray = [], context ) {
 	let languageWithPath = languages[ language ][ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {
@@ -82,18 +82,18 @@ function getLanguageString( language, type, targetString = [], argsArray = [], c
 	return createLanguageString( languageWithPath, argsArray, context );
 }
 
-function getLanguageReplace( language, target, arg, context ) {
+export function getLanguageReplace( language, target, arg, context ) {
 	return getLanguageString( language, 'replace', [ target ], [ arg ], context );
 }
 
-function getLanguageList( language, target, arg, context ) {
+export function getLanguageList( language, target, arg, context ) {
 	return getLanguageString( language, 'list', [ target ], [ arg ], context );
 }
 
-function getLanguageControl( language, targets, args, context ) {
+export function getLanguageControl( language, targets, args, context ) {
 	return getLanguageString( language, 'control', targets, args, context );
 }
 
-function registerLanguage( language ) {
+export function registerLanguage( language ) {
 	languages[ language.name ] = language;
 }

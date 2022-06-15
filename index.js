@@ -51,6 +51,8 @@ const {
 	injectContextToJSXElementComponents,
 } = require( './utils' );
 const fs = require('fs')
+const { fileURLToPath, pathToFileURL, format } = require( 'url' );
+const path = require( 'path' );
 
 /**
  * Ensure the config prop is an array of two elements, with the first item being the var name and the second being the var config.
@@ -83,11 +85,11 @@ fs.readFile( __dirname + '/language-functions.js', 'utf8' , (err, data) => {
  * Gets the template vars from the property definition.
  * 
  * @param {Object} expression The expression
- * @param {Object} t The babel types object
+ * @param {Object} types The babel types object
  * 
  * @returns 
  */
-function getTemplateVarsFromExpression( expression, t ) {
+function getTemplateVarsFromExpression( expression, types ) {
 	const left = expression.left;
 	const right = expression.right;
 	if ( ! left || ! right ) {
@@ -96,10 +98,10 @@ function getTemplateVarsFromExpression( expression, t ) {
 
 	const { object, property } = left;
 	// Make sure the property being set is `templateVars`
-	if ( ! t.isIdentifier( object ) ) {
+	if ( ! types.isIdentifier( object ) ) {
 		return false;
 	}
-	if ( ! t.isIdentifier( property ) ) {
+	if ( ! types.isIdentifier( property ) ) {
 		return false;
 	}
 
@@ -177,7 +179,7 @@ const normaliseListVar = ( varConfig ) => {
 	return normalisedConfig;
 };
 // Build the object for the replacement var in list type vars.
-function buildListVarDeclaration( varName, varConfig, t, parse, language, contextName ) {
+function buildListVarDeclaration( varName, varConfig, types, parse, language, contextName ) {
 	const normalisedConfig = normaliseListVar( varConfig );
 	const { type, props } = normalisedConfig.child;
 
@@ -186,22 +188,21 @@ function buildListVarDeclaration( varName, varConfig, t, parse, language, contex
 		const childProp = {};
 		const propsArr = [];
 		props.forEach( ( propName ) => {
-			const listObjectString = `getLanguageList( '${ language }', 'formatObjectProperty', '${ propName }', ${ contextName } )`;
-			// propsArr.push( t.objectProperty( t.identifier( propName ), t.stringLiteral( listObjectString ) ) );
-			propsArr.push( t.objectProperty( t.identifier( propName ), parse( listObjectString ) ) );
+			const listObject = getLanguageListCallExpression( language, 'formatObjectProperty', propName, contextName, types );
+			propsArr.push( types.objectProperty( types.identifier( propName ), listObject ) );
 		} );
 		newProp.push( childProp );
-		const templateObject = t.objectExpression( propsArr )
-		const right = t.arrayExpression( [ templateObject ] );
+		const templateObject = types.objectExpression( propsArr )
+		const right = types.arrayExpression( [ templateObject ] );
 		
-		const left = t.identifier( varName );
-		return t.variableDeclaration('let', [
-			t.variableDeclarator(left, right),
+		const left = types.identifier( varName );
+		return types.variableDeclaration('let', [
+			types.variableDeclarator(left, right),
 		]);
 	} else if ( type === 'primitive' ) {
 		// Then we're dealing with a normal array.
 		// TODO: maybe "primitive" is not the best name for this type.
-		const listPrimitiveString = `let ${ varName } = [ getLanguageList( '${ language }', 'formatPrimitive', ${ contextName } ) ];`;
+		const listPrimitiveString = `let ${ varName } = [ getLanguageList( '${ language }', 'formatPrimitive', null, ${ contextName } ) ];`;
 		return parse( listPrimitiveString );
 	}
 	return null;
@@ -265,7 +266,7 @@ function createListTag( varName, varConfig, t, parse, language ) {
  * @param {Object} config Plugin config.
  * @returns 
  */
-function templateVarsVisitor( { types: t, traverse, parse }, config ) {
+function templateVarsVisitor( { types, traverse, parse }, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	const language = config.language ?? defaultLanguage;
 	if ( config.customLanguage ) {
@@ -280,7 +281,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			const { expression } = path.node;
 			
 			// Process the expression and get template vars as an object
-			const templateVars = getTemplateVarsFromExpression( expression, t );
+			const templateVars = getTemplateVarsFromExpression( expression, types );
 			if ( ! templateVars ) {
 				return;
 			}
@@ -320,26 +321,30 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 			// All the list variable names we need to look for in JSX expressions
 			let listVarsToTag = {};
 
-			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 			// Start the main traversal of component
 
 			// TODO - we should look through the params and apply the same logic...
 			const componentParam = componentPath.node.declarations[0].init.params[0];
 
-			let hasContext = false;
 			let propsName = null;
 			// If the param is an object pattern, we want to add `__context__` as a property to it.
-			if ( t.isObjectPattern( componentParam ) ) {
-				// Then we are probably looking at props passed through as an object.
+			if ( componentPath.node.declarations[0].init.params.length === 0 ) {
+				// Then there are no params, so lets add an object pattern with one param, __context__.
+				componentPath.node.declarations[0].init.params.push( types.objectPattern( [ types.objectProperty( types.identifier( '__context__' ), types.identifier( '__context__' ), false, true ) ] ) );
+			} else if ( types.isObjectPattern( componentParam ) ) {
+				// Then we at the first param - which is *probably* props passed through as an object.
+				// For now lets assume it is, but this means we likely can't work with HOC components which have multiple params.
+				// TODO - maybe we should test again the last param as it is usually the props object in HOCs.
+
 				// Add __context__ as a property to the object.
-				componentParam.properties.push( t.objectProperty( t.identifier( '__context__' ), t.identifier( '__context__' ), false, true ) );
-				hasContext = true;
-			} else if ( t.isIdentifier( componentParam ) ) {
+				componentParam.properties.push( types.objectProperty( types.identifier( '__context__' ), types.identifier( '__context__' ), false, true ) );
+			} else if ( types.isIdentifier( componentParam ) ) {
 				// If it's an identifier we need to declare it in the block statement.
 				propsName = componentParam.name;
 			}
 
 			const contextIdentifier = componentPath.scope.generateUidIdentifier("uid");
+			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
 			componentPath.traverse( {
 				BlockStatement( statementPath ) {
@@ -366,7 +371,7 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, t, parse, language, contextIdentifier.name );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, types, parse, language, contextIdentifier.name );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -381,34 +386,22 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 
 					
 					// Figure out if we need to add a __context__ variable.
-					const localBindings = Object.keys( statementPath.scope.bindings );
+					// const localBindings = Object.keys( statementPath.scope.bindings );
+					// ! localBindings.includes( '__context__' )
 					// If context is not already set, and its not a local binding, we need to add it.
 
 					// Figure out what we need to do before doing it
 					// as we're unshifting our statements, we need to put them in reverse order.
-
-
-					let contextAction = '';
-					if ( ! hasContext && ! localBindings.includes( '__context__' ) ) {
-						if ( propsName ) {
-							contextAction = 'set_from_props';
-						} else {
-							contextAction = 'init';
-						}
-					}
-
-					statementPath.node.body.unshift( parse( `console.log( "${ componentName } " + ${ contextIdentifier.name } )` ) );
-					if ( contextAction !== 'init' ) {
-						statementPath.node.body.unshift( parse(`${ contextIdentifier.name }++;`) );
-					}
-					if ( contextAction === 'set_from_props' ) {
-						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = ${ propsName }.__context__;`) );
-					} else if ( contextAction === 'init' ) {
-						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = 0;`) );
+					const nodesToAdd = [];
+					if ( propsName ) {
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = ${ propsName }.__context__ ?? 0;` ) );
 					} else {
-						statementPath.node.body.unshift( parse(`let ${ contextIdentifier.name } = __context__;`) );
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = __context__ ?? 0;` ) );
 					}
-				
+					nodesToAdd.reverse();
+					nodesToAdd.forEach( ( node ) => {
+						statementPath.node.body.unshift( node );
+					} );
 				},
 				Identifier( subPath ) {
 					// We need to update all the identifiers with the new variables declared in the block statement
@@ -429,19 +422,19 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 						const excludeTypes = [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
-							if ( t.isMemberExpression( subPath.parentPath.node ) ) {
+							if ( types.isMemberExpression( subPath.parentPath.node ) ) {
 								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
-								if ( t.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
+								if ( types.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
 									// Inject list context to components inside the map
 
 									if ( listVarsMap[ subPath.node.name ] ) {
-										injectContextToJSXElementComponents( subPath.parentPath.parentPath, contextIdentifier.name, t );
+										injectContextToJSXElementComponents( subPath.parentPath.parentPath, contextIdentifier.name, types );
 										
 										subPath.node.name = listVarsMap[ subPath.node.name ].name;
 										// If we found a map, we want to track which identifier it was assigned to...
-										if ( t.isCallExpression( subPath.parentPath.parentPath.node ) && t.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
+										if ( types.isCallExpression( subPath.parentPath.parentPath.node ) && types.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
 											// Check if its an identifier and if so, add it to the listVars to tag.
-											if ( t.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
+											if ( types.isIdentifier( subPath.parentPath.parentPath.parentPath.node.id ) ) {
 												const identifierName = subPath.parentPath.parentPath.parentPath.node.id.name;
 												listVarsToTag[ identifierName ] = sourceVarName;
 											}
@@ -499,20 +492,19 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 								}
 								const controlStartString = getLanguageControl( language, [ statementType, 'open' ], expressionArgs );
 								const controlStopString = getLanguageControl( language, [ statementType, 'close' ], expressionArgs );
-								subPath.insertBefore( t.stringLiteral( controlStartString ) );
-								subPath.insertAfter( t.stringLiteral( controlStopString ) );
+								subPath.insertBefore( types.stringLiteral( controlStartString ) );
+								subPath.insertAfter( types.stringLiteral( controlStopString ) );
 
 								// Now check to see if the right of the expression is a list variable, as we need to wrap them
 								// in helper tags.
-								if ( t.isIdentifier( containerExpression.right ) ) {
+								if ( types.isIdentifier( containerExpression.right ) ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
 										const listVarSourceName = listVarsToTag[ objectName ];
 										const listVarContext = listVarsMap[ listVarSourceName ].context;
-										
-										const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
-										const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
-										
+										const listOpen = getLanguageListCallExpression( language, 'open', listVarSourceName, contextIdentifier.name, types );
+										const listClose = getLanguageListCallExpression( language, 'close', listVarSourceName, contextIdentifier.name, types );
+								
 										subPath.insertBefore( listOpen );
 										subPath.insertAfter( listClose );
 									}
@@ -525,32 +517,31 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 					}
 
 					// Now look for identifers only, so we can look for list vars that need tagging.
-					if ( t.isIdentifier( containerExpression ) ) {
+					if ( types.isIdentifier( containerExpression ) ) {
 						// Then we should be looking at something like: `{ myVar }`
 						if ( listVarsToTag[ containerExpression.name ] ) {
-							const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ), t.identifier( contextIdentifier.name ) ] ) );
-							const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarsToTag[ containerExpression.name ] ), t.identifier( contextIdentifier.name ) ] ) );
-							
+							const listOpen = getLanguageListCallExpression( language, 'open', listVarsToTag[ containerExpression.name ], contextIdentifier.name, types );
+							const listClose = getLanguageListCallExpression( language, 'close', listVarsToTag[ containerExpression.name ], contextIdentifier.name, types );
 							subPath.insertBefore( listOpen );
 							subPath.insertAfter( listClose );
 						}
 					}
 
 					// Also, lets support list vars that have .map() directly in the JSX (ie, they are not re-assigned to variable before being added to the output)
-					if ( t.isCallExpression( containerExpression ) && t.isMemberExpression( containerExpression.callee ) ) {
+					if ( types.isCallExpression( containerExpression ) && types.isMemberExpression( containerExpression.callee ) ) {
 						const memberExpression = containerExpression.callee;
-						if ( t.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
+						if ( types.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
 							// Add the before / after tags to the list.
 							const objectName = memberExpression.object.name;
 
 							if ( listVarsToTag[ objectName ] ) {
 								// Inject list context to components inside the map
-								injectContextToJSXElementComponents( subPath, contextIdentifier.name, t );
+								injectContextToJSXElementComponents( subPath, contextIdentifier.name, types );
 							
 								const listVarSourceName = listVarsToTag[ objectName ];
 								const listVarContext = listVarsMap[ listVarSourceName ].context;
-								const listOpen = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'open' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
-								const listClose = t.JSXExpressionContainer( t.callExpression( t.identifier( 'getLanguageList' ), [ t.stringLiteral( language ), t.stringLiteral( 'close' ), t.stringLiteral( listVarSourceName ), t.identifier( contextIdentifier.name ) ] ) );
+								const listOpen = getLanguageListCallExpression( language, 'open', listVarSourceName, contextIdentifier.name, types );
+								const listClose = getLanguageListCallExpression( language, 'close', listVarSourceName, contextIdentifier.name, types );
 								subPath.insertBefore( listOpen );
 								subPath.insertAfter( listClose );
 							}
@@ -562,7 +553,9 @@ function templateVarsVisitor( { types: t, traverse, parse }, config ) {
 	}
 };
 
-
+function getLanguageListCallExpression( language, action, name, context, types ) {
+	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( language ), types.stringLiteral( action ), types.stringLiteral( name ), types.identifier( context ) ] );
+}
 // Find and return a component (variable declaration) path via traversal by its name.
 function getComponentPath( path, componentName ) {
 	let componentPath;
@@ -579,28 +572,34 @@ function getComponentPath( path, componentName ) {
 }
 
 let addedFunctions = false;
+
+const injectedFiles = [];
+const filePath = pathToFileURL( __dirname ).href;
 module.exports = ( babel, config ) => {
+	// Creat custom import template for injecting language functions into components.
+	const buildImport = babel.template(`
+		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } from "${ filePath }/language-module.js";
+	`);
+	const languageImportDeclaration = buildImport();
+
 	return {
 		name: "template-vars-plugin",
 		visitor: {
-			Program: {
-				enter: ( programPath, parent ) => {
-					// The main visitor function.
-					programPath.traverse( templateVarsVisitor( babel, config ) );
-					//addSideEffect(programPath, 'source__');
-					
-					// Because Program might be visited multiple times, we need to make sure we only insert the functions once.
-					if ( addedFunctions === false ) {
-						parent.file.path.node.body.unshift(
-							babel.parse( languageFunctions )
-						);
-						addedFunctions = true;
+			Program(path, state) {
+				const root = path;
+				// The main plugin visitor.
+				path.traverse( templateVarsVisitor( babel, config ) );
+
+				// Inject our language functions to existing files via imports.
+				// Make sure we haven't already added to the current file.
+				if ( ! injectedFiles.includes( state.file.opts.filename ) ) {
+					// And don't add an import to the file we're importing.
+					if ( state.file.opts.filename.indexOf( 'language-module.js' ) === -1 ) {
+						injectedFiles.push( state.file.opts.filename );
+						root.node.body.unshift( languageImportDeclaration );
 					}
-				},
-				exit:  ( programPath, parent ) => {
-					// Only on exit do we want to insert our functions into the app.
 				}
-			},
+			}
 		},
 	};
 };
