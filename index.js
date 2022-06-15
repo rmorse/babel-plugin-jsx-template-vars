@@ -380,10 +380,12 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 					// as we're unshifting our statements, we need to put them in reverse order.
 					const nodesToAdd = [];
 					if ( propsName ) {
-						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = ${ propsName }.__context__ ?? 0;` ) );
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof ${ propsName }.__context__ === 'number' ? ${ propsName }.__context__ + 1 : 0;` ) );
 					} else {
-						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = __context__ ?? 0;` ) );
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof __context__ === 'number' ? __context__ + 1 : 0;` ) );
 					}
+					statementPath.node.body.unshift( parse( `console.log( "${ componentName } " + ${ contextIdentifier.name } )` ) );
+
 					nodesToAdd.reverse();
 					nodesToAdd.forEach( ( node ) => {
 						statementPath.node.body.unshift( node );
