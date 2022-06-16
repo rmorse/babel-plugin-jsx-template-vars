@@ -109,4 +109,5 @@ module.exports = {
 	getObjectFromExpression,
 	getNameFromNode,
 	injectContextToJSXElementComponents,
+	isJSXElementComponent,
 };

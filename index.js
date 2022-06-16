@@ -48,6 +48,7 @@ const {
 	getObjectFromExpression,
 	getNameFromNode,
 	injectContextToJSXElementComponents,
+	isJSXElementComponent,
 } = require( './utils' );
 const fs = require('fs')
 const { fileURLToPath, pathToFileURL, format } = require( 'url' );
@@ -302,7 +303,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 			// Get the control vars names
 			const [ controlVarsMap, controlVarsNames ] = generateVarTypeUids( componentPath.scope, controlVars );
 			// Build the map of var lists.
-			const [ listVarsMap, listVarsNames ] = generateListVarTypeUids( componentPath.scope, listVars );
+			const [ listVarsMap, listVarsNames ] = generateVarTypeUids( componentPath.scope, listVars );
 			
 			// All the list variable names we need to look for in JSX expressions
 			let listVarsToTag = {};
@@ -333,6 +334,22 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 			let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
 			componentPath.traverse( {
+				// Inject context into all components
+				JSXElement(subPath){
+					// If we find a JSX element, check to see if it's a component,
+					// and if so, inject a `__context__` JSXAttribute.
+					if ( isJSXElementComponent( subPath ) ) {
+						let expression;
+						// check if the component is inside a `map` and increase the context by 1
+						if ( parentPathHasMap( subPath, types ) ) {
+							expression = types.binaryExpression( '+', contextIdentifier, types.numericLiteral( 1 ) );
+						} else {
+							expression = types.identifier( contextIdentifier.name );
+						}
+						const contextAttribute = types.jSXAttribute( types.jSXIdentifier( '__context__' ), types.jSXExpressionContainer( expression ) );
+						subPath.node.openingElement.attributes.push( contextAttribute );
+					}
+				},
 				BlockStatement( statementPath ) {
 					// TODO: Hacky way of making sure we only catch the first block statement - we should be able to check
 					// something on the parent to make this more reliable.
@@ -357,7 +374,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 					listVars.forEach( ( templateVar, index ) => {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
-						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ].name, varConfig, types, parse, language, contextIdentifier.name );
+						const newAssignmentExpression = buildListVarDeclaration( listVarsMap[ varName ], varConfig, types, parse, language, contextIdentifier.name );
 						if ( newAssignmentExpression ) {
 							statementPath.node.body.unshift( newAssignmentExpression );
 						}
@@ -370,22 +387,16 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						}
 					} );
 
+					// Log context depth
+					statementPath.node.body.unshift( parse( `console.log( "${ componentName } " + ${ contextIdentifier.name } )` ) );
 					
-					// Figure out if we need to add a __context__ variable.
-					// const localBindings = Object.keys( statementPath.scope.bindings );
-					// ! localBindings.includes( '__context__' )
-					// If context is not already set, and its not a local binding, we need to add it.
-
-					// Figure out what we need to do before doing it
-					// as we're unshifting our statements, we need to put them in reverse order.
+					// Figure out if we need to add a __context__ variable to the local scope.
 					const nodesToAdd = [];
 					if ( propsName ) {
-						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof ${ propsName }.__context__ === 'number' ? ${ propsName }.__context__ + 1 : 0;` ) );
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof ${ propsName }.__context__ === 'number' ? ${ propsName }.__context__ : 0;` ) );
 					} else {
-						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof __context__ === 'number' ? __context__ + 1 : 0;` ) );
+						nodesToAdd.push( parse(`let ${ contextIdentifier.name } = typeof __context__ === 'number' ? __context__ : 0;` ) );
 					}
-					statementPath.node.body.unshift( parse( `console.log( "${ componentName } " + ${ contextIdentifier.name } )` ) );
-
 					nodesToAdd.reverse();
 					nodesToAdd.forEach( ( node ) => {
 						statementPath.node.body.unshift( node );
@@ -399,6 +410,18 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							subPath.node.name = replaceVarsMap[ subPath.node.name ];
+						}
+
+						// Now lets carefully update the node in 'ObjectProperty' types.
+						// We can only re-assign the property value name, not the property key name
+						// So we want { varName } to become { varName: _uid } or { something: varName } to become { something: _uid }
+						if ( types.isObjectProperty( subPath.parentPath.node ) ) {
+							if ( types.isIdentifier( subPath.parentPath.node.value ) ) {
+								const valueName = subPath.parentPath.node.value.name;
+								if ( replaceVarsNames.includes( valueName ) ) {
+									subPath.parentPath.node.value.name = replaceVarsMap[ valueName ];
+								}
+							}
 						}
 					}
 					
@@ -414,11 +437,9 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 								// then we want to make sure its a `.map` otherwise we don't want to support it for now.
 								if ( types.isIdentifier( subPath.parentPath.node.property ) && subPath.parentPath.node.property.name === 'map' ) {
 									// Inject list context to components inside the map
-
 									if ( listVarsMap[ subPath.node.name ] ) {
-										injectContextToJSXElementComponents( subPath.parentPath.parentPath, contextIdentifier.name, types );
-										
-										subPath.node.name = listVarsMap[ subPath.node.name ].name;
+										// injectContextToJSXElementComponents( subPath.parentPath.parentPath, contextIdentifier.name, types );
+										subPath.node.name = listVarsMap[ subPath.node.name ];
 										// If we found a map, we want to track which identifier it was assigned to...
 										if ( types.isCallExpression( subPath.parentPath.parentPath.node ) && types.isVariableDeclarator( subPath.parentPath.parentPath.parentPath.node ) ) {
 											// Check if its an identifier and if so, add it to the listVars to tag.
@@ -430,7 +451,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 									}
 								}
 							} else {
-								subPath.node.name = listVarsMap[ subPath.node.name ].name;
+								subPath.node.name = listVarsMap[ subPath.node.name ];
 							}
 						}
 					}
@@ -490,7 +511,6 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 									const objectName = containerExpression.right.name;
 									if ( listVarsToTag[ objectName ] ) {
 										const listVarSourceName = listVarsToTag[ objectName ];
-										const listVarContext = listVarsMap[ listVarSourceName ].context;
 										const listOpen = getLanguageListCallExpression( language, 'open', listVarSourceName, contextIdentifier.name, types );
 										const listClose = getLanguageListCallExpression( language, 'close', listVarSourceName, contextIdentifier.name, types );
 								
@@ -525,10 +545,9 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 
 							if ( listVarsToTag[ objectName ] ) {
 								// Inject list context to components inside the map
-								injectContextToJSXElementComponents( subPath, contextIdentifier.name, types );
+								// injectContextToJSXElementComponents( subPath, contextIdentifier.name, types );
 							
 								const listVarSourceName = listVarsToTag[ objectName ];
-								const listVarContext = listVarsMap[ listVarSourceName ].context;
 								const listOpen = getLanguageListCallExpression( language, 'open', listVarSourceName, contextIdentifier.name, types );
 								const listClose = getLanguageListCallExpression( language, 'close', listVarSourceName, contextIdentifier.name, types );
 								subPath.insertBefore( listOpen );
@@ -541,6 +560,22 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 		}
 	}
 };
+
+// check if any parent paths contain a map call
+function parentPathHasMap( path, types ) {
+	let parentPath = path.parentPath;
+	while ( parentPath ) {
+		if ( types.isCallExpression( parentPath.node ) && types.isMemberExpression( parentPath.node.callee ) ) {
+			const memberExpression = parentPath.node.callee;
+			if ( types.isIdentifier( memberExpression.property ) && memberExpression.property.name === 'map' ) {
+				return true;
+			}
+		}
+		parentPath = parentPath.parentPath;
+	}
+	return false;
+}
+
 
 function getLanguageControlCallExpression( language, targets, args, context, types ) {
 	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
