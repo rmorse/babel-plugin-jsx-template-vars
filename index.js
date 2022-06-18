@@ -623,7 +623,7 @@ module.exports = ( babel, config ) => {
 				// Make sure we haven't already added to the current file.
 				if ( ! injectedFiles.includes( state.file.opts.filename ) ) {
 					// And don't add an import to the file we're importing.
-					if ( state.file.opts.filename.indexOf( 'language-module.js' ) === -1 ) {
+					if ( state.file.opts.filename.indexOf( 'language-module.js' ) === -1 && state.file.opts.filename.indexOf( 'node_modules' ) === -1 ) {
 						injectedFiles.push( state.file.opts.filename );
 						root.node.body.unshift( languageImportDeclaration );
 					}
