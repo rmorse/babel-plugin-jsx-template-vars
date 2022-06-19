@@ -25,26 +25,27 @@ module.exports = ( babel, config ) => {
 	// Try to read default location of custom language file.
 	let languagePath;
 	
-	if ( config.language ) {
-		languagePath = `${ __dirname }/language/languages/${ config.language }.json`;
-	} else {
-		languagePath = config.customLanguage ? config.customLanguage : './.tvlang';
+	const tidyOnly = config.tidyOnly ?? false;
+	if ( ! tidyOnly ) {
+		if ( config.language ) {
+			languagePath = `${ __dirname }/language/languages/${ config.language }.json`;
+		} else {
+			languagePath = config.customLanguage ? config.customLanguage : './.tvlang';
+		}
+		/**
+		 * *Note - we need to assign the template vars language to the window, so it doesn't matter
+			when its loaded...
+			We did inject this into `/languages/index.js` but most default webpack builds exclude
+			node_modules so we can't inject it there (because we can't visit it)
+		*/
+		try {
+			const data = fs.readFileSync( languagePath, { encoding: 'utf8' } );
+			language = babel.parse( "window.templateVarsLanguage = " + data );
+		} catch (err) {
+			language = babel.parse( "window.templateVarsLanguage = {};" );
+			console.log(err);
+		}
 	}
-
-	/**
-	 * *Note - we need to assign the template vars language to the window, so it doesn't matter
-		when its loaded...
-		We did inject this into `/languages/index.js` but most default webpack builds exclude
-		node_modules so we can't inject it there (because we can't visit it)
-	 */
-	try {
-		const data = fs.readFileSync( languagePath, { encoding: 'utf8' } );
-		language = babel.parse( "window.templateVarsLanguage = " + data );
-	} catch (err) {
-		language = babel.parse( "window.templateVarsLanguage = {};" );
-		console.log(err);
-	}
-
 	let hasAddedLanguage = false;
 
 	return {
@@ -54,6 +55,10 @@ module.exports = ( babel, config ) => {
 				const root = path;
 				// The main plugin visitor.
 				path.traverse( templateVarsVisitor( babel, config ) );
+				
+				if ( tidyOnly ) {
+					return;
+				}
 
 				if ( hasAddedLanguage === false ) {
 					path.unshiftContainer( 'body', language );
