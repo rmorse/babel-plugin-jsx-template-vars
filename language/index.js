@@ -1,11 +1,10 @@
 // Specify languages to translate to here
 // For now we can categories as replace, list and control
 // But we should look at another structure in the future.
-const php = require('./languages/php');
-const handlebars = require('./languages/handlebars');
 
-// The main language object containing all registered languages.
-const languages = {};
+// The main language object the currently used language is stored in
+// const language = ...;
+// Which will be injected above here by the template vars plugin.
 
 /**
  * Replaces tokens such as ||%1|| and ||%2|| with the arguments passed in.
@@ -36,15 +35,13 @@ export function createLanguageString( string, argsArray, context ) {
 }
 
 /**
- * 
- * @param {String} language The language to use
  * @param {String} type The variable type (replace, list, control)
  * @param {Array} targetString And array of paths/properties to target the desired string.
  * @param {Array} argsArray The arguments to replace
  * @returns {String} The string with the arguments replaced
  */
- export function getLanguageString( language, type, targetString = [], argsArray = [], context ) {
-	let languageWithPath = languages[ language ][ type ];
+ export function getLanguageString( type, targetString = [], argsArray = [], context ) {
+	let languageWithPath = language[ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {
 			languageWithPath = languageWithPath[ targetString ];
@@ -54,22 +51,14 @@ export function createLanguageString( string, argsArray, context ) {
 	return createLanguageString( languageWithPath, argsArray, context );
 }
 
-export function getLanguageReplace( language, target, arg, context ) {
-	return getLanguageString( language, 'replace', [ target ], [ arg ], context );
+export function getLanguageReplace( target, arg, context ) {
+	return getLanguageString( 'replace', [ target ], [ arg ], context );
 }
 
-export function getLanguageList( language, target, arg, context ) {
-	return getLanguageString( language, 'list', [ target ], [ arg ], context );
+export function getLanguageList( target, arg, context ) {
+	return getLanguageString( 'list', [ target ], [ arg ], context );
 }
 
-export function getLanguageControl( language, targets, args, context ) {
-	return getLanguageString( language, 'control', targets, args, context );
+export function getLanguageControl( targets, args, context ) {
+	return getLanguageString( 'control', targets, args, context );
 }
-
-export function registerLanguage( language ) {
-	languages[ language.name ] = language;
-}
-
-// Now register the built-in languages.
-registerLanguage( php );
-registerLanguage( handlebars );
