@@ -325,8 +325,6 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						const [ varName, varConfig ] = templateVar;
 						// Alway declare as `let` so we don't need to worry about its usage later.
 						const replaceString = `getLanguageReplace( 'format', '${ varName }', ${ contextIdentifier.name } )`; 
-
-						// statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = __context__ === 'list' ? "${ listReplaceString }" : "${ replaceString }";`) );
 						statementPath.node.body.unshift( parse(`let ${ replaceVarsMap[ varName ] } = ${ replaceString };`) );
 					} );
 					// Add the new list vars to to top of the block statement.
