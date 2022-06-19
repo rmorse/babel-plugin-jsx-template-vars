@@ -45,6 +45,8 @@ module.exports = ( babel, config ) => {
 		console.log(err);
 	}
 
+	let hasAddedLanguage = false;
+
 	return {
 		name: "template-vars-plugin",
 		visitor: {
@@ -53,6 +55,11 @@ module.exports = ( babel, config ) => {
 				// The main plugin visitor.
 				path.traverse( templateVarsVisitor( babel, config ) );
 
+				if ( hasAddedLanguage === false ) {
+					path.unshiftContainer( 'body', language );
+					hasAddedLanguage = true;
+				}
+				
 				// Inject our language functions to existing files via imports.
 				// Make sure we haven't already added to the current file.
 				if ( ! injectedFiles.includes( state.file.opts.filename ) ) {
