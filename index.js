@@ -31,11 +31,17 @@ module.exports = ( babel, config ) => {
 		languagePath = config.customLanguage ? config.customLanguage : './.tvlang';
 	}
 
+	/**
+	 * *Note - we need to assign the template vars language to the window, so it doesn't matter
+		when its loaded...
+		We did inject this into `/languages/index.js` but most default webpack builds exclude
+		node_modules so we can't inject it there (because we can't visit it)
+	 */
 	try {
 		const data = fs.readFileSync( languagePath, { encoding: 'utf8' } );
-		language = babel.parse( "const language = " + data );
+		language = babel.parse( "window.templateVarsLanguage = " + data );
 	} catch (err) {
-		language = babel.parse( "const language = {};" );
+		language = babel.parse( "window.templateVarsLanguage = {};" );
 		console.log(err);
 	}
 
@@ -57,14 +63,6 @@ module.exports = ( babel, config ) => {
 					if ( ! filenameUrl.includes( pluginPathURL ) && ! state.file.opts.filename.includes( 'node_modules' ) ) {
 						injectedFiles.push( state.file.opts.filename );
 						root.node.body.unshift( languageImportDeclaration );
-					}
-
-					// Inject custom language to language/index.js file
-					if ( language ) {
-						if ( filenameUrl.includes( pluginPathURL ) && pathToFileURL( state.file.opts.filename ).href.includes( 'language/index.js' ) ) {
-							injectedFiles.push( state.file.opts.filename );
-							root.node.body.unshift( language );
-						}
 					}
 				}
 			}

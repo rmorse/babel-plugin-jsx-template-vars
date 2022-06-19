@@ -41,7 +41,7 @@ export function createLanguageString( string, argsArray, context ) {
  * @returns {String} The string with the arguments replaced
  */
  export function getLanguageString( type, targetString = [], argsArray = [], context ) {
-	let languageWithPath = language[ type ];
+	let languageWithPath = window.templateVarsLanguage[ type ];
 	targetString.forEach( ( targetString, index ) => {
 		if ( languageWithPath[ targetString ] ) {
 			languageWithPath = languageWithPath[ targetString ];
