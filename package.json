@@ -1,7 +1,7 @@
 {
   "name": "babel-plugin-jsx-template-vars",
   "version": "0.0.7",
-  "description": "A Babel transform for rendering a template friendly version your React / Preact app for Server Side Rendering.",
+  "description": "A Babel transform for rendering a template friendly version your React / Preact app for Server Side Rendering. Supports PHP and Handlebars.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
