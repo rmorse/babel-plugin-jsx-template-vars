@@ -27,8 +27,6 @@
     "url": "https://github.com/rmorse/babel-plugin-jsx-template-vars/issues"
   },
   "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-vars#readme",
-  "devDependencies": {
-    "@babel/traverse": "^7.17.9"
-  },
+  "devDependencies": {},
   "dependencies": {}
 }
