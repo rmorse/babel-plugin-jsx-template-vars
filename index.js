@@ -607,10 +607,10 @@ const filePath = pathToFileURL( __dirname ).href;
 module.exports = ( babel, config ) => {
 	// Creat custom import template for injecting language functions into components.
 	const buildImport = babel.template(`
-		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } from "${ filePath }/language-module.js";
+		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } from "${ filePath }/includes/language.js";
 	`);
 	const languageImportDeclaration = buildImport();
-
+	const pluginPathURL = pathToFileURL( __dirname ).href;
 	return {
 		name: "template-vars-plugin",
 		visitor: {
@@ -622,8 +622,11 @@ module.exports = ( babel, config ) => {
 				// Inject our language functions to existing files via imports.
 				// Make sure we haven't already added to the current file.
 				if ( ! injectedFiles.includes( state.file.opts.filename ) ) {
-					// And don't add an import to the file we're importing.
-					if ( state.file.opts.filename.indexOf( 'language-module.js' ) === -1 && state.file.opts.filename.indexOf( 'node_modules' ) === -1 ) {
+					// Inject our language functions to existing files via imports.
+					// Make sure we haven't already added to the current file.
+					// And don't import into our own files, or node_modules.
+					const filenameUrl = pathToFileURL( state.file.opts.filename ).href;
+					if ( ! filenameUrl.includes( pluginPathURL ) && state.file.opts.filename.indexOf( 'node_modules' ) === -1 ) {
 						injectedFiles.push( state.file.opts.filename );
 						root.node.body.unshift( languageImportDeclaration );
 					}
