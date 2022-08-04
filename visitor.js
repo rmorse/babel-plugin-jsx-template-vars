@@ -206,6 +206,31 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
+function isJSXElementTextInput( subPath ) {
+	const element = subPath.node;
+	if ( ! element.openingElement ) {
+		return false;
+	}
+
+	const { name } = element.openingElement;
+	if ( name?.name !== 'input' ) {
+		return false;
+	}
+	// Now check to see if the elements `type` attribute is set to `text`.
+	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
+		return attr.name.name === 'type';
+	} );
+	
+	if ( ! typeAttr ) {
+		return false;
+	}
+	const { value } = typeAttr;
+	if ( value.value !== 'text' ) {
+		return false;
+	}
+	return true;
+
+}
 /**
  * The main visitor for the plugin.
  * 
@@ -309,6 +334,35 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						const contextAttribute = types.jSXAttribute( types.jSXIdentifier( '__context__' ), types.jSXExpressionContainer( expression ) );
 						subPath.node.openingElement.attributes.push( contextAttribute );
 					}
+
+					/**
+					 * We also need to track some special exceptions to html elements. 
+					 * Because the idea of this transform is that the rendered html is later scraped and saved to a file,
+					 * we need to work around some known browser rendering "bugs".
+					 */
+					/**
+					 * Chrome (and other browsers) will not add an accurate `value` attribute to <input> (text) elements,
+					 * They are usually moved to the shadow dom, which means when we scrape the page, anything in `value`
+					 * will be lost.
+					 *
+					 * Our workaround will be to copy the value attribute, to a custom attribute with the prefix `jsxtv_`.
+					 * When we later scrape this page, it will then need to be converted back to the correct html attribute.
+					 */
+
+					if ( isJSXElementTextInput( subPath ) ) {
+						// Now get the value attribute from the jsx element.
+						const valueAttribute = subPath.node.openingElement.attributes.find( attr => attr.name.name === 'value' );
+
+						if ( valueAttribute ) {
+							// Create a new attribute `jsxtv_value` and copy the value from the valueAttribute
+							const jsxtValueAttribute = types.jSXAttribute( types.jSXIdentifier( 'jsxtv_value' ), valueAttribute.value );
+
+							// And add it to the existing attributes.
+							subPath.node.openingElement.attributes.push( jsxtValueAttribute );
+						}
+
+					}
+
 				},
 				BlockStatement( statementPath ) {
 					// TODO: Hacky way of making sure we only catch the first block statement - we should be able to check

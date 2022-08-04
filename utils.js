@@ -102,6 +102,31 @@ function isJSXElementComponent( path ) {
 	return false;
 }
 
+function isJSXElementTextInput( subPath ) {
+	const element = subPath.node;
+	if ( ! element.openingElement ) {
+		return false;
+	}
+
+	const { name } = element.openingElement;
+	if ( name?.name !== 'input' ) {
+		return false;
+	}
+	// Now check to see if the elements `type` attribute is set to `text`.
+	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
+		return attr.name.name === 'type';
+	} );
+	
+	if ( ! typeAttr ) {
+		return false;
+	}
+	const { value } = typeAttr;
+	if ( value.value !== 'text' ) {
+		return false;
+	}
+	return true;
+
+}
 
 module.exports = {
 	getExpressionSubject,
@@ -110,4 +135,5 @@ module.exports = {
 	getNameFromNode,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
+	isJSXElementTextInput,
 };
