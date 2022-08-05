@@ -25,6 +25,10 @@
 		"ifNotEqual": {
 			"open": "<?php if ( $||%var||[ '||%1||' ] !== ||%2|| ) { ?>",
 			"close": "<?php } ?>"
+		},
+		"else": {
+			"open": "<?php else { ?>",
+			"close": "<?php } ?>"
 		}
 	}
 }

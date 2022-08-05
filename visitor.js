@@ -443,75 +443,59 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 							}
 						}
 					}
+
+					if ( controlVarsNames.includes( subPath.node.name ) ) {
+						// subPath.node.name = controlVarsMap[ subPath.node.name ];
+						const excludeTypes = [ 'ObjectProperty', 'ArrayPattern' ];
+						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
+
+							/* const parentNode = subPath.parentPath.node;
+							const parentParentNode = subPath.parentPath.parentPath.node;
+							const parentParentParentNode = subPath.parentPath.parentPath.parentPath.node;
+							console.log( 'Found a control var', subPath.node.name, subPath.node.type, parentNode.type, parentParentNode.type, parentParentParentNode.type );
+
+							// Support - const x = test ? 'a' : 'b';
+							// And - x = test ? 'a' : 'b';
+							if ( types.isConditionalExpression( parentNode ) && ( types.isBinaryExpression( parentParentNode ) || types.isAssignmentExpression( parentParentNode ) ) ) {
+								console.log(" found a candidate")
+								// We need to check if parenNode is a ternary expression.
+								if ( parentNode.test && parentNode.consequent && parentNode.alternate ) {
+									// we have a ternary expression, but we need to make sure the test is our control var.
+									if ( parentNode.test === subPath.node ) {
+										console.log("ok ready yo *****")
+
+										// So lets build 
+									}
+								}
+
+								// We need to support things like 
+								// somevar = multiple === 'yes' ? 'a' : 'b';
+	
+								//console.log( parentNode );
+							} */
+							/* if ( types.isConditionalExpression( parentNode ) && types.isBinaryExpression( parentParentNode ) ) {
+								console.log(" found a candidate")
+							}*
+							/**
+							 * We want to support the following cases:
+							 * 
+							 * const myVar = 'something' + ( controlVarName ? 'string1' : 'string2' );
+							 * 
+							 * 
+							 * ***
+							 */
+							// So
+						}
+
+					}
 				},
 				// Track vars in JSX expressions in case we need have any control vars to process
 				JSXExpressionContainer( subPath ) {
 					const { expression: containerExpression } = subPath.node;
-					if ( isControlExpression( containerExpression ) ) {
-						const expressionSubject = getExpressionSubject( containerExpression );
-						const expression = containerExpression.left;
-						// const condition = getCondition( containerExpression );
-						if ( controlVarsNames.includes( expressionSubject ) ) {
 
-							let statementType;
-							let expressionValue = '';
+					updateJSXControlExpressions( containerExpression, controlVarsNames, subPath, contextIdentifier, types );
 
-							// Lets start by only supporting:
-							// truthy - `myVar && <>...</>`
-							// falsy - `! myVar && <>...</>`
-							// equals - `myVar === 'value' && <>...</>`
-							// not equals - `myVar !== 'value' && <>...</>`
-							// map these to handlebars helper functions and replace the expression with the helper tag.
-
-							if ( expression.type === 'Identifier' ) {
-								statementType = 'ifTruthy';
-							} else if ( expression.type === 'UnaryExpression' ) {
-								if ( expression.operator === '!' ) {
-									statementType = 'ifFalsy';
-								}
-							} else if( expression.type === 'BinaryExpression' ) {
-								if ( expression.operator && expression.right.value ) {
-									if ( expression.operator === '===' ) {
-										statementType = 'ifEqual';
-									} else if ( expression.operator === '!==' ) {
-										statementType = 'ifNotEqual';
-									}
-									// Add quotes around the value to signify its a string.
-									expressionValue = `'${ expression.right.value }'`;
-								}
-							}
-
-							if ( statementType ) {
-								// Build the opening and closing expression tags.
-								const expressionArgs = [ expressionSubject ];
-								if ( expressionValue ) {
-									expressionArgs.push( expressionValue );
-								}
-
-								const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
-								const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
-								subPath.insertBefore( controlStartString );
-								subPath.insertAfter( controlStopString );
-
-								// Now check to see if the right of the expression is a list variable, as we need to wrap them
-								// in helper tags.
-								if ( types.isIdentifier( containerExpression.right ) ) {
-									const objectName = containerExpression.right.name;
-									if ( listVarsToTag[ objectName ] ) {
-										const listVarSourceName = listVarsToTag[ objectName ];
-										const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, contextIdentifier.name, types );
-										const listClose = getLanguageListCallExpression( 'close', listVarSourceName, contextIdentifier.name, types );
-								
-										subPath.insertBefore( listOpen );
-										subPath.insertAfter( listClose );
-									}
-								}
-								
-								// Now replace the whole expression with the right part (remove any conditions to display it)
-								subPath.replaceWith( containerExpression.right );
-							}
-						}
-					}
+				
 
 					// Now look for identifers only, so we can look for list vars that need tagging.
 					if ( types.isIdentifier( containerExpression ) ) {
@@ -543,11 +527,190 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 							}
 						}
 					}
-				}
+				},
+				VariableDeclarator( subPath, state ) {
+					// We are looking for control ternary operators in variable declerators like:
+					// const myVar = condition ? true : false;
+					const variableDeclarator = subPath.node;
+					if ( types.isConditionalExpression( variableDeclarator.init ) ) {
+						const conditionalExpression = variableDeclarator.init;
+						if ( conditionalExpression.test && conditionalExpression.consequent && conditionalExpression.alternate ) {
+							updateConditionalControlExpressions( variableDeclarator.init, controlVarsNames, subPath, contextIdentifier, types );
+						}
+					}
+					// We also want to support the case where the assignent is a string concatenation
+					// with a conditional expression.
+				},
+				AssignmentExpression( subPath, state ) {
+					// We are looking for control ternary operators in assignment expressions like:
+					// myVar = condition ? true : false;
+
+					// TODO - this is completely untested.
+					const assignmentExpression = subPath.node;
+					if ( types.isConditionalExpression( assignmentExpression.left ) ) {
+						const conditionalExpression = assignmentExpression.left;
+						if ( conditionalExpression.test && conditionalExpression.consequent && conditionalExpression.alternate ) {
+							updateConditionalControlExpressions( assignmentExpression.left, controlVarsNames, subPath, contextIdentifier, types );
+						}
+					}
+
+				},
 			} );
 		}
 	}
 };
+
+function updateJSXControlExpressions( expressionSource, controlVarsNames, subPath, contextIdentifier, types ) {
+
+	if ( ! isControlExpression( expressionSource ) ) {
+		return;
+	}
+	const expressionSubject = getExpressionSubject( expressionSource );
+	const expression = expressionSource.left;
+	// const condition = getCondition( containerExpression );
+	if ( controlVarsNames.includes( expressionSubject ) ) {
+
+		let statementType;
+		let expressionValue = '';
+
+		// Lets start by only supporting:
+		// truthy - `myVar && <>...</>`
+		// falsy - `! myVar && <>...</>`
+		// equals - `myVar === 'value' && <>...</>`
+		// not equals - `myVar !== 'value' && <>...</>`
+		// map these to handlebars helper functions and replace the expression with the helper tag.
+
+		if ( expression.type === 'Identifier' ) {
+			statementType = 'ifTruthy';
+		} else if ( expression.type === 'UnaryExpression' ) {
+			if ( expression.operator === '!' ) {
+				statementType = 'ifFalsy';
+			}
+		} else if( expression.type === 'BinaryExpression' ) {
+			if ( expression.operator && expression.right.value ) {
+				if ( expression.operator === '===' ) {
+					statementType = 'ifEqual';
+				} else if ( expression.operator === '!==' ) {
+					statementType = 'ifNotEqual';
+				}
+				// Add quotes around the value to signify its a string.
+				expressionValue = `'${ expression.right.value }'`;
+			}
+		}
+
+		if ( statementType ) {
+			// Build the opening and closing expression tags.
+			const expressionArgs = [ expressionSubject ];
+			if ( expressionValue ) {
+				expressionArgs.push( expressionValue );
+			}
+
+			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
+			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
+			subPath.insertBefore( controlStartString );
+			subPath.insertAfter( controlStopString );
+
+			// Now check to see if the right of the expression is a list variable, as we need to wrap them
+			// in helper tags.
+			if ( types.isIdentifier( expressionSource.right ) ) {
+				const objectName = expressionSource.right.name;
+				if ( listVarsToTag[ objectName ] ) {
+					const listVarSourceName = listVarsToTag[ objectName ];
+					const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, contextIdentifier.name, types );
+					const listClose = getLanguageListCallExpression( 'close', listVarSourceName, contextIdentifier.name, types );
+			
+					subPath.insertBefore( listOpen );
+					subPath.insertAfter( listClose );
+				}
+			}
+			
+			// Now replace the whole expression with the right part (remove any conditions to display it)
+			subPath.replaceWith( expressionSource.right );
+		}
+	}
+}
+
+function updateConditionalControlExpressions( expressionSource, controlVarsNames, subPath, contextIdentifier, types ) {
+	console.log("updateConditionalControlExpressions");
+	if ( ! ( expressionSource.test && expressionSource.consequent && expressionSource.alternate ) ) {
+		return;
+	}
+	//.console.log("is ternary expression", expressionSource)
+	const expressionSubject = getExpressionSubject( expressionSource.test );
+	const expression = expressionSource.test;
+	// const condition = getCondition( containerExpression );
+	if ( controlVarsNames.includes( expressionSubject ) ) {
+		console.log("foudn a control var", expressionSubject );
+		let statementType;
+		let expressionValue = '';
+
+		// Lets start by only supporting:
+		// truthy - `myVar && <>...</>`
+		// falsy - `! myVar && <>...</>`
+		// equals - `myVar === 'value' && <>...</>`
+		// not equals - `myVar !== 'value' && <>...</>`
+		// map these to handlebars helper functions and replace the expression with the helper tag.
+
+		if ( expression.type === 'Identifier' ) {
+			statementType = 'ifTruthy';
+		} else if ( expression.type === 'UnaryExpression' ) {
+			if ( expression.operator === '!' ) {
+				statementType = 'ifFalsy';
+			}
+		} else if( expression.type === 'BinaryExpression' ) {
+			if ( expression.operator && expression.right.value ) {
+				if ( expression.operator === '===' ) {
+					statementType = 'ifEqual';
+				} else if ( expression.operator === '!==' ) {
+					statementType = 'ifNotEqual';
+				}
+				// Add quotes around the value to signify its a string.
+				expressionValue = `'${ expression.right.value }'`;
+			}
+		}
+
+		console.log("expressionSubject", expressionSubject, "statementType", statementType, "expressionValue", expressionValue);
+		//console.log("subtPath", subPath.node);
+		
+		if ( statementType ) {
+			// Build the opening and closing expression tags.
+			const expressionArgs = [ expressionSubject ];
+			if ( expressionValue ) {
+				expressionArgs.push( expressionValue );
+			}
+
+			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
+			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
+			const controlElseStartString = getLanguageControlCallExpression( [ 'else', 'open' ], expressionArgs, contextIdentifier.name, types );
+			const controlElseStopString = getLanguageControlCallExpression( [ 'else', 'close' ], expressionArgs, contextIdentifier.name, types );
+			
+			// create a new expression to add together 3 strings
+			// if = expressionSource.consequent
+			// else = expressionSource.alternate
+			// Create a binary expression with the + operator
+			const parts = [
+				controlStartString,
+				expressionSource.consequent,
+				controlStopString,
+				controlElseStartString,
+				expressionSource.alternate,
+				controlElseStopString,
+			];
+			const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
+			const variableDeclarator = types.variableDeclarator( subPath.node.id, combinedBinaryExpression );
+			subPath.replaceWith( variableDeclarator );
+		}
+	}
+}
+
+
+function createCombinedBinaryExpression( parts, operator, types ) {
+	let expression = parts[ 0 ];
+	for ( let i = 1; i < parts.length; i++ ) {
+		expression = types.binaryExpression( operator, expression, parts[ i ] );
+	}
+	return expression;
+}
 
 // check if any parent paths contain a map call
 function parentPathHasMap( path, types ) {
