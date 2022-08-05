@@ -56,7 +56,6 @@ export function getLanguageReplace( target, arg, context ) {
 }
 
 export function getLanguageList( target, arg, context ) {
-	console.log( 'getLanguageList', target, arg, context );
 	return getLanguageString( 'list', [ target ], [ arg ], context );
 }
 

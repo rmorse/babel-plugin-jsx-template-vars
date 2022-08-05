@@ -415,6 +415,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						// Make sure we only replace identifiers that are not props and also that
 						// they are not variable declarations.
 						const excludeTypes = [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern' ];
+
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 							// We want to only allow one case of a member expression when we find a `const x = y.map(...);`
 							if ( types.isMemberExpression( subPath.parentPath.node ) ) {
@@ -433,6 +434,9 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 											}
 										}
 									}
+								} else {
+									// Support other member expressions.
+									subPath.node.name = listVarsMap[ subPath.node.name ];
 								}
 							} else {
 								subPath.node.name = listVarsMap[ subPath.node.name ];
