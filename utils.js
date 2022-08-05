@@ -114,7 +114,7 @@ function isJSXElementTextInput( subPath ) {
 	}
 	// Now check to see if the elements `type` attribute is set to `text`.
 	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
-		return attr.name.name === 'type';
+		return attr?.name?.name === 'type';
 	} );
 	
 	if ( ! typeAttr ) {

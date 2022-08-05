@@ -7,7 +7,7 @@
 	"list": {
 		"open": "{{#||%1||}}",
 		"close": "{{/||%1||}}",
-		"ojectProperty": "{{||%1||}}",
+		"objectProperty": "{{||%1||}}",
 		"primitive": "{{.}}"
 	},
 	"control": {

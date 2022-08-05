@@ -44,6 +44,7 @@ const {
 	getExpressionSubject,
 	getArrayFromExpression,
 	isJSXElementComponent,
+	isJSXElementTextInput,
 } = require( './utils' );
 
 /**
@@ -167,7 +168,7 @@ function buildListVarDeclaration( varName, varConfig, types, parse, language, co
 		const childProp = {};
 		const propsArr = [];
 		props.forEach( ( propName ) => {
-			const listObject = getLanguageListCallExpression( 'ojectProperty', propName, contextName, types );
+			const listObject = getLanguageListCallExpression( 'objectProperty', propName, contextName, types );
 			propsArr.push( types.objectProperty( types.identifier( propName ), listObject ) );
 		} );
 		newProp.push( childProp );
@@ -206,31 +207,6 @@ function generateVarTypeUids( scope, vars ) {
 	return [ varMap, varNames ];
 }
 
-function isJSXElementTextInput( subPath ) {
-	const element = subPath.node;
-	if ( ! element.openingElement ) {
-		return false;
-	}
-
-	const { name } = element.openingElement;
-	if ( name?.name !== 'input' ) {
-		return false;
-	}
-	// Now check to see if the elements `type` attribute is set to `text`.
-	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
-		return attr.name.name === 'type';
-	} );
-	
-	if ( ! typeAttr ) {
-		return false;
-	}
-	const { value } = typeAttr;
-	if ( value.value !== 'text' ) {
-		return false;
-	}
-	return true;
-
-}
 /**
  * The main visitor for the plugin.
  * 
@@ -351,7 +327,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 
 					if ( isJSXElementTextInput( subPath ) ) {
 						// Now get the value attribute from the jsx element.
-						const valueAttribute = subPath.node.openingElement.attributes.find( attr => attr.name.name === 'value' );
+						const valueAttribute = subPath.node.openingElement.attributes.find( attr => attr?.name?.name === 'value' );
 
 						if ( valueAttribute ) {
 							// Create a new attribute `jsxtv_value` and copy the value from the valueAttribute

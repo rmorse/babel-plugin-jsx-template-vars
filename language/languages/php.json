@@ -6,7 +6,7 @@
 	"list": {
 		"open": "<?php foreach ( $||%var||[ '||%1||' ] as $||%subVar|| ) { ?>",
 		"close": "<?php } ?>",
-		"ojectProperty": "<?php echo htmlspecialchars( $||%subVar||[ '||%1||' ], ENT_QUOTES ); ?>",
+		"objectProperty": "<?php echo htmlspecialchars( $||%subVar||[ '||%1||' ], ENT_QUOTES ); ?>",
 		"primitive": "<?php echo htmlspecialchars( $||%subVar||, ENT_QUOTES ); ?>"
 	},
 	"control": {
