@@ -7,6 +7,23 @@
 // Which will be injected above here by the template vars plugin.
 
 /**
+ * Detering if a arg is an identifier or string, by checking the first
+ * and last character to see if they are single quotes.
+ */
+function isArgString( arg ) {
+	return arg.charAt(0) === "'" && arg.charAt(arg.length - 1) === "'";
+}
+/**
+ * Generates the variable string from the language with the correct context.
+ *
+ * @param {*} arg 
+ * @param {*} context 
+ * @returns 
+ */
+function getVariableString( arg, context ) {
+	return getLanguageString( 'variable', [], [], context ).replace( "||%s||", arg );
+}
+/**
  * Replaces tokens such as ||%1|| and ||%2|| with the arguments passed in.
  *
  * Note: index starts at 1, not 0.
@@ -18,7 +35,9 @@
 export function createLanguageString( string, argsArray, context ) {
 	let str = string.replace( /\|\|\%(\d+)\|\|/g, ( match, key ) => {
 		const matchIndex = parseInt( match.replace( /\D/g, '' ) );
-		return argsArray[ matchIndex -1 ];
+		const arg = argsArray[ matchIndex -1 ];
+		const argFormatted = isArgString( arg ) ? arg : getVariableString( arg, context );
+		return argFormatted;
 	} );
 
 	// Now replace the var with the context

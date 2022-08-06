@@ -42,6 +42,8 @@
   */
 const {
 	getExpressionSubject,
+	getExpressionLeft,
+	getExpressionRight,
 	getArrayFromExpression,
 	isJSXElementComponent,
 	isJSXElementTextInput,
@@ -261,6 +263,9 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 
 			// Build the map of vars to replace.
 			const [ replaceVarsMap, replaceVarsNames ] = generateVarTypeUids( componentPath.scope, replaceVars );
+
+			const replaceVarsInv = Object.fromEntries(Object.entries(replaceVarsMap).map(a => a.reverse()))
+
 			// Get the control vars names
 			const [ controlVarsMap, controlVarsNames ] = generateVarTypeUids( componentPath.scope, controlVars );
 			// Build the map of var lists.
@@ -444,6 +449,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						}
 					}
 
+					// Use the identifier visitor to find any identifiers in ternary expressions.
 					if ( controlVarsNames.includes( subPath.node.name ) ) {
 						// subPath.node.name = controlVarsMap[ subPath.node.name ];
 						const excludeTypes = [ 'ObjectProperty', 'ArrayPattern' ];
@@ -471,8 +477,7 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 								ternaryExpressionPath = subPath.parentPath.parentPath;
 							}
 							if ( ternaryExpression && ternaryExpressionPath ) {
-								console.log("Found ternary expression:");
-								updateTernaryControlExpressions( ternaryExpression, controlVarsNames, ternaryExpressionPath, contextIdentifier, types );
+								updateTernaryControlExpressions( ternaryExpression, controlVarsNames, replaceVarsInv, ternaryExpressionPath, contextIdentifier, types );
 							}
 							
 						}
@@ -484,8 +489,6 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 					const { expression: containerExpression } = subPath.node;
 
 					updateJSXControlExpressions( containerExpression, controlVarsNames, subPath, contextIdentifier, types );
-
-				
 
 					// Now look for identifers only, so we can look for list vars that need tagging.
 					if ( types.isIdentifier( containerExpression ) ) {
@@ -602,70 +605,78 @@ function updateJSXControlExpressions( expressionSource, controlVarsNames, subPat
 	}
 }
 
-function updateTernaryControlExpressions( expressionSource, controlVarsNames, expressionPath, contextIdentifier, types ) {
+function getExpressionArgs( sourceExpression, controlVarsNames, replaceVars, types ) {
+	const args = [];
+	let statementType;
+
+	const expressionLeft = getExpressionLeft( sourceExpression, types );
+	const expressionRight = getExpressionRight( sourceExpression, types );
+	if ( ! controlVarsNames.includes( expressionLeft ) && ! controlVarsNames.includes( expressionRight ) ) {
+		return { args, statementType };
+	}
+
+	// if leftName or rightName are a variable, they could be a replacevariable, and would reference
+	// the updated name, so we want to change them back... 
+	args.push( replaceVars[ expressionLeft ] ?? expressionLeft );
+	args.push( replaceVars[ expressionRight ] ?? expressionRight );
+
+	// Lets start by only supporting:
+	// truthy - `myVar && <>...</>`
+	// falsy - `! myVar && <>...</>`
+	// equals - `myVar === 'value' && <>...</>`
+	// not equals - `myVar !== 'value' && <>...</>`
+	// New: myVar === anotherVar
+	// map these to handlebars helper functions and replace the expression with the helper tag.
+	if ( sourceExpression.type === 'Identifier' ) {
+		statementType = 'ifTruthy';
+	} else if ( sourceExpression.type === 'UnaryExpression' ) {
+		if ( sourceExpression.operator === '!' ) {
+			statementType = 'ifFalsy';
+		}
+	} else if( sourceExpression.type === 'BinaryExpression' ) {
+		if ( sourceExpression.operator === '===' ) {
+			statementType = 'ifEqual';
+		} else if ( sourceExpression.operator === '!==' ) {
+			statementType = 'ifNotEqual';
+		}
+	}
+
+	return {
+		args,
+		statementType,
+	}
+
+}
+
+function updateTernaryControlExpressions( expressionSource, controlVarsNames, replaceVars, expressionPath, contextIdentifier, types ) {
 	if ( ! ( expressionSource.test && expressionSource.consequent && expressionSource.alternate ) ) {
 		return;
 	}
-	//.console.log("is ternary expression", expressionSource)
-	const expressionSubject = getExpressionSubject( expressionSource.test );
-	const testExpression = expressionSource.test;
-	// const condition = getCondition( containerExpression );
-	if ( controlVarsNames.includes( expressionSubject ) ) {
-		let statementType;
-		let expressionValue = '';
+	console.log("is ternary expression" );
+	const { statementType, args } = getExpressionArgs( expressionSource.test, controlVarsNames, replaceVars, types );
+	console.log( statementType, args );
 
-		// Lets start by only supporting:
-		// truthy - `myVar && <>...</>`
-		// falsy - `! myVar && <>...</>`
-		// equals - `myVar === 'value' && <>...</>`
-		// not equals - `myVar !== 'value' && <>...</>`
-		// map these to handlebars helper functions and replace the expression with the helper tag.
-
-		if ( testExpression.type === 'Identifier' ) {
-			statementType = 'ifTruthy';
-		} else if ( testExpression.type === 'UnaryExpression' ) {
-			if ( testExpression.operator === '!' ) {
-				statementType = 'ifFalsy';
-			}
-		} else if( testExpression.type === 'BinaryExpression' ) {
-			if ( testExpression.operator && testExpression.right.value ) {
-				if ( testExpression.operator === '===' ) {
-					statementType = 'ifEqual';
-				} else if ( testExpression.operator === '!==' ) {
-					statementType = 'ifNotEqual';
-				}
-				// Add quotes around the value to signify its a string.
-				expressionValue = `'${ testExpression.right.value }'`;
-			}
-		}
-
-		if ( statementType ) {
-			// Build the opening and closing expression tags.
-			const expressionArgs = [ expressionSubject ];
-			if ( expressionValue ) {
-				expressionArgs.push( expressionValue );
-			}
-
-			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
-			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
-			const controlElseStartString = getLanguageControlCallExpression( [ 'else', 'open' ], expressionArgs, contextIdentifier.name, types );
-			const controlElseStopString = getLanguageControlCallExpression( [ 'else', 'close' ], expressionArgs, contextIdentifier.name, types );
-			
-			// create a new expression to add together 3 strings
-			// if = expressionSource.consequent
-			// else = expressionSource.alternate
-			// Create a binary expression with the + operator
-			const parts = [
-				controlStartString,
-				expressionSource.consequent,
-				controlStopString,
-				controlElseStartString,
-				expressionSource.alternate,
-				controlElseStopString,
-			];
-			const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
-			expressionPath.replaceWith( combinedBinaryExpression );
-		}
+	if ( statementType && args.length > 0 ) {
+		// Build the opening and closing expression tags.
+		const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, contextIdentifier.name, types );
+		const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, contextIdentifier.name, types );
+		const controlElseStartString = getLanguageControlCallExpression( [ 'else', 'open' ], args, contextIdentifier.name, types );
+		const controlElseStopString = getLanguageControlCallExpression( [ 'else', 'close' ], args, contextIdentifier.name, types );
+		
+		// create a new expression to add together 3 strings
+		// if = expressionSource.consequent
+		// else = expressionSource.alternate
+		// Create a binary expression with the + operator
+		const parts = [
+			controlStartString,
+			expressionSource.consequent,
+			controlStopString,
+			controlElseStartString,
+			expressionSource.alternate,
+			controlElseStopString,
+		];
+		const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
+		expressionPath.replaceWith( combinedBinaryExpression );
 	}
 }
 

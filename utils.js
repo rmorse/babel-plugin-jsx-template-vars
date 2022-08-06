@@ -36,11 +36,27 @@ function getArrayFromExpression( expression ) {
 };
 
 
-function getNameFromNode( node ) {
+function getNameFromNode( node, types ) {
 	if ( node.type === 'Identifier' ) {
 		return node.name;
 	} else if ( node.type === 'MemberExpression' ) {
 		return `${ node.object.name }.${ node.property.name }`;
+	}
+	return false;
+}
+
+
+function getNameValueFromNode( node, types ) {
+	//console.log( "getNameValueFromNode", node);
+
+	if ( node.type === 'Identifier' ) {
+		//console.log("found identifier")
+		return node.name;
+	} else if ( node.type === 'MemberExpression' ) {
+		return `${ node.object.name }.${ node.property.name }`;
+	} else if ( types.isStringLiteral( node ) ) {
+		//console.log("found string literal")
+		return `'${ node.value }'`;
 	}
 	return false;
 }
@@ -71,6 +87,47 @@ function getExpressionSubject( expression ) {
 	} else {
 	}
 	return null;
+}
+function getExpressionLeft( expression, types ) {
+	//console.log( "getExpressionLeft");
+
+	let currentNode = expression.left;
+	if ( expression.left.type === 'MemberExpression' ) {
+		currentNode = expression.left;
+	} else if ( expression.left.type === 'Identifier' ) {
+		currentNode = expression.left;
+	} else if ( expression.left.type === 'UnaryExpression' ) {
+		currentNode = expression.left.argument;
+	} else if ( expression.left.type === 'BinaryExpression' ) {
+		// `! isChecked === 'yes' ...`
+		if ( expression.left.left.type === 'UnaryExpression' ) {
+			return getExpressionLeft( expression.left, types );
+		}
+		// `isChecked === 'yes' ...`
+		currentNode = expression.left.left;
+	} else {
+	}
+	return getNameValueFromNode( currentNode, types );
+}
+function getExpressionRight( expression, types ) {
+
+	//console.log( "getExpressionRight", expression);
+	let currentNode = expression.right;
+	if ( expression.right.type === 'MemberExpression' ) {
+		currentNode = expression.right;
+	} else if ( expression.right.type === 'Identifier' ) {
+		currentNode = expression.right;
+	} else if ( expression.right.type === 'UnaryExpression' ) {
+		currentNode = expression.right.argument;
+	} else if ( expression.right.type === 'BinaryExpression' ) {
+		// `! isChecked === 'yes' ...`
+		if ( expression.right.right.type === 'UnaryExpression' ) {
+			return getExpressionRight( expression.right, types );
+		}
+		// `isChecked === 'yes' ...`
+		currentNode = expression.right.right;
+	} 
+	return getNameValueFromNode( currentNode, types );
 }
 
 function injectContextToJSXElementComponents( path, contextVar, t ) {
@@ -132,9 +189,12 @@ function isJSXElementTextInput( subPath ) {
 
 module.exports = {
 	getExpressionSubject,
+	getExpressionLeft,
+	getExpressionRight,
 	getArrayFromExpression,
 	getObjectFromExpression,
 	getNameFromNode,
+	getNameValueFromNode,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
 	isJSXElementTextInput,
