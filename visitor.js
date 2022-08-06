@@ -449,42 +449,32 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						const excludeTypes = [ 'ObjectProperty', 'ArrayPattern' ];
 						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
 
-							/* const parentNode = subPath.parentPath.node;
+							const parentNode = subPath.parentPath.node;
 							const parentParentNode = subPath.parentPath.parentPath.node;
 							const parentParentParentNode = subPath.parentPath.parentPath.parentPath.node;
-							console.log( 'Found a control var', subPath.node.name, subPath.node.type, parentNode.type, parentParentNode.type, parentParentParentNode.type );
 
-							// Support - const x = test ? 'a' : 'b';
-							// And - x = test ? 'a' : 'b';
-							if ( types.isConditionalExpression( parentNode ) && ( types.isBinaryExpression( parentParentNode ) || types.isAssignmentExpression( parentParentNode ) ) ) {
-								console.log(" found a candidate")
-								// We need to check if parenNode is a ternary expression.
-								if ( parentNode.test && parentNode.consequent && parentNode.alternate ) {
-									// we have a ternary expression, but we need to make sure the test is our control var.
-									if ( parentNode.test === subPath.node ) {
-										console.log("ok ready yo *****")
-
-										// So lets build 
-									}
-								}
-
-								// We need to support things like 
-								// somevar = multiple === 'yes' ? 'a' : 'b';
-	
-								//console.log( parentNode );
-							} */
-							/* if ( types.isConditionalExpression( parentNode ) && types.isBinaryExpression( parentParentNode ) ) {
-								console.log(" found a candidate")
-							}*
-							/**
-							 * We want to support the following cases:
-							 * 
-							 * const myVar = 'something' + ( controlVarName ? 'string1' : 'string2' );
-							 * 
-							 * 
-							 * ***
-							 */
-							// So
+							// Supports:
+							// const x = test === 'yes' ? 'a' : 'b';
+							// let x; x = test ? 'a' : 'b';
+							// const x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
+							// let x; x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
+							// And more, only looks for a ternary expression to match.
+							// Should match anything that looks like: `( test ? 'a' : 'b' )`
+							let ternaryExpression;
+							let ternaryExpressionPath;
+							// We need to check if parenNode is a ternary expression.
+							if ( isTernaryExpression( parentNode, types ) ) {
+								ternaryExpression = parentNode;
+								ternaryExpressionPath = subPath.parentPath;
+							} else if ( isTernaryExpression( parentParentNode, types ) ) {
+								ternaryExpression = parentParentNode;
+								ternaryExpressionPath = subPath.parentPath.parentPath;
+							}
+							if ( ternaryExpression && ternaryExpressionPath ) {
+								console.log("Found ternary expression:");
+								updateTernaryControlExpressions( ternaryExpression, controlVarsNames, ternaryExpressionPath, contextIdentifier, types );
+							}
+							
 						}
 
 					}
@@ -528,38 +518,20 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						}
 					}
 				},
-				VariableDeclarator( subPath, state ) {
-					// We are looking for control ternary operators in variable declerators like:
-					// const myVar = condition ? true : false;
-					const variableDeclarator = subPath.node;
-					if ( types.isConditionalExpression( variableDeclarator.init ) ) {
-						const conditionalExpression = variableDeclarator.init;
-						if ( conditionalExpression.test && conditionalExpression.consequent && conditionalExpression.alternate ) {
-							updateConditionalControlExpressions( variableDeclarator.init, controlVarsNames, subPath, contextIdentifier, types );
-						}
-					}
-					// We also want to support the case where the assignent is a string concatenation
-					// with a conditional expression.
-				},
-				AssignmentExpression( subPath, state ) {
-					// We are looking for control ternary operators in assignment expressions like:
-					// myVar = condition ? true : false;
-
-					// TODO - this is completely untested.
-					const assignmentExpression = subPath.node;
-					if ( types.isConditionalExpression( assignmentExpression.left ) ) {
-						const conditionalExpression = assignmentExpression.left;
-						if ( conditionalExpression.test && conditionalExpression.consequent && conditionalExpression.alternate ) {
-							updateConditionalControlExpressions( assignmentExpression.left, controlVarsNames, subPath, contextIdentifier, types );
-						}
-					}
-
-				},
 			} );
 		}
 	}
 };
 
+
+function isTernaryExpression( node, types ) {
+	if ( types.isConditionalExpression( node ) ) {
+		if ( node.test && node.consequent && node.alternate ) {
+			return true;
+		}
+	}
+	return false;
+}
 function updateJSXControlExpressions( expressionSource, controlVarsNames, subPath, contextIdentifier, types ) {
 
 	if ( ! isControlExpression( expressionSource ) ) {
@@ -630,17 +602,15 @@ function updateJSXControlExpressions( expressionSource, controlVarsNames, subPat
 	}
 }
 
-function updateConditionalControlExpressions( expressionSource, controlVarsNames, subPath, contextIdentifier, types ) {
-	console.log("updateConditionalControlExpressions");
+function updateTernaryControlExpressions( expressionSource, controlVarsNames, expressionPath, contextIdentifier, types ) {
 	if ( ! ( expressionSource.test && expressionSource.consequent && expressionSource.alternate ) ) {
 		return;
 	}
 	//.console.log("is ternary expression", expressionSource)
 	const expressionSubject = getExpressionSubject( expressionSource.test );
-	const expression = expressionSource.test;
+	const testExpression = expressionSource.test;
 	// const condition = getCondition( containerExpression );
 	if ( controlVarsNames.includes( expressionSubject ) ) {
-		console.log("foudn a control var", expressionSubject );
 		let statementType;
 		let expressionValue = '';
 
@@ -651,27 +621,24 @@ function updateConditionalControlExpressions( expressionSource, controlVarsNames
 		// not equals - `myVar !== 'value' && <>...</>`
 		// map these to handlebars helper functions and replace the expression with the helper tag.
 
-		if ( expression.type === 'Identifier' ) {
+		if ( testExpression.type === 'Identifier' ) {
 			statementType = 'ifTruthy';
-		} else if ( expression.type === 'UnaryExpression' ) {
-			if ( expression.operator === '!' ) {
+		} else if ( testExpression.type === 'UnaryExpression' ) {
+			if ( testExpression.operator === '!' ) {
 				statementType = 'ifFalsy';
 			}
-		} else if( expression.type === 'BinaryExpression' ) {
-			if ( expression.operator && expression.right.value ) {
-				if ( expression.operator === '===' ) {
+		} else if( testExpression.type === 'BinaryExpression' ) {
+			if ( testExpression.operator && testExpression.right.value ) {
+				if ( testExpression.operator === '===' ) {
 					statementType = 'ifEqual';
-				} else if ( expression.operator === '!==' ) {
+				} else if ( testExpression.operator === '!==' ) {
 					statementType = 'ifNotEqual';
 				}
 				// Add quotes around the value to signify its a string.
-				expressionValue = `'${ expression.right.value }'`;
+				expressionValue = `'${ testExpression.right.value }'`;
 			}
 		}
 
-		console.log("expressionSubject", expressionSubject, "statementType", statementType, "expressionValue", expressionValue);
-		//console.log("subtPath", subPath.node);
-		
 		if ( statementType ) {
 			// Build the opening and closing expression tags.
 			const expressionArgs = [ expressionSubject ];
@@ -697,8 +664,7 @@ function updateConditionalControlExpressions( expressionSource, controlVarsNames
 				controlElseStopString,
 			];
 			const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
-			const variableDeclarator = types.variableDeclarator( subPath.node.id, combinedBinaryExpression );
-			subPath.replaceWith( variableDeclarator );
+			expressionPath.replaceWith( combinedBinaryExpression );
 		}
 	}
 }

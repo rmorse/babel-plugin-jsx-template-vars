@@ -53,7 +53,9 @@ function getNameFromNode( node ) {
 // template vars must be on the left)
 //  * this might only apply in BinaryExpression's
 function getExpressionSubject( expression ) {
-	if ( expression.left.type === 'MemberExpression' ) {
+	if ( expression.type === 'Identifier' ) {
+		return getNameFromNode( expression );
+	} else if ( expression.left.type === 'MemberExpression' ) {
 		return getNameFromNode( expression.left );
 	} else if ( expression.left.type === 'Identifier' ) {
 		return getNameFromNode( expression.left );
