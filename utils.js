@@ -35,41 +35,31 @@ function getArrayFromExpression( expression ) {
 	return props;
 };
 
-
-function getNameFromNode( node ) {
-	if ( node.type === 'Identifier' ) {
-		return node.name;
-	} else if ( node.type === 'MemberExpression' ) {
-		return `${ node.object.name }.${ node.property.name }`;
+function getExpressionArgs( expression, types ) {
+	let args = [];
+	// let currentNode = expression.left;
+	if ( types.isIdentifier( expression ) ) {
+		args.push( { type: 'identifier', value: expression.name } );
+	} else if ( types.isStringLiteral( expression ) ) {
+		args.push( { type: 'value', value: `'${ expression.value }'` } );
+	} else if ( types.isLiteral( expression ) ) {
+		// Should handle booleans, integers, floats etc
+		args.push( { type: 'value', value: String( expression.value ) } );
+	} else if ( types.isMemberExpression( expression )) {
+		args.push( { type: 'identifier', value: `${ expression.object.name }.${ expression.property.name }` } );
+	} else if ( types.isUnaryExpression( expression ) ) {
+		args = [ ...args, ...getExpressionArgs( expression.argument, types ) ];
 	}
-	return false;
+	else if ( types.isBinaryExpression( expression ) ) {
+		args = [
+			...args,
+			...getExpressionArgs( expression.left, types ),
+			...getExpressionArgs( expression.right, types )
+		];
+	}
+	return args;
 }
 
-// TODO - this could be made recursive by checking for the existence of 
-// expression.left and if so processing the new prop "left"
-// TODO - We're not taking into consideration the "right" part of the expression,
-// which could also contain the subject we're after (should it return an array?)
-// so this limits us to only looking at the left part of the expression (our
-// template vars must be on the left)
-//  * this might only apply in BinaryExpression's
-function getExpressionSubject( expression ) {
-	if ( expression.left.type === 'MemberExpression' ) {
-		return getNameFromNode( expression.left );
-	} else if ( expression.left.type === 'Identifier' ) {
-		return getNameFromNode( expression.left );
-	} else if ( expression.left.type === 'UnaryExpression' ) {
-		return getNameFromNode( expression.left.argument );
-	} else if ( expression.left.type === 'BinaryExpression' ) {
-		// `! isChecked === 'yes' ...`
-		if ( expression.left.left.type === 'UnaryExpression' ) {
-			return getExpressionSubject( expression.left );
-		}
-		// `isChecked === 'yes' ...`
-		return getNameFromNode( expression.left.left );
-	} else {
-	}
-	return null;
-}
 
 function injectContextToJSXElementComponents( path, contextVar, t ) {
 	path.traverse( {
@@ -102,12 +92,37 @@ function isJSXElementComponent( path ) {
 	return false;
 }
 
+function isJSXElementTextInput( subPath ) {
+	const element = subPath.node;
+	if ( ! element.openingElement ) {
+		return false;
+	}
+
+	const { name } = element.openingElement;
+	if ( name?.name !== 'input' ) {
+		return false;
+	}
+	// Now check to see if the elements `type` attribute is set to `text`.
+	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
+		return attr?.name?.name === 'type';
+	} );
+	
+	if ( ! typeAttr ) {
+		return false;
+	}
+	const { value } = typeAttr;
+	if ( value.value !== 'text' ) {
+		return false;
+	}
+	return true;
+
+}
 
 module.exports = {
-	getExpressionSubject,
+	getExpressionArgs,
 	getArrayFromExpression,
 	getObjectFromExpression,
-	getNameFromNode,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
+	isJSXElementTextInput,
 };

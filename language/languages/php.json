@@ -1,29 +1,40 @@
 {
 	"name": "php",
+
+	"variables": {
+		"context": "$[%_context_]",
+		"subcontext": "$[%_subcontext_]",
+		"variable": "$[%_context_]['[%_variable_]']",
+		"subvariable": "$[%_subcontext_]['[%_variable_]']"
+	},
 	"replace": {
-		"format": "<?php echo htmlspecialchars( $||%var||[ '||%1||' ], ENT_QUOTES ); ?>"
+		"format": "<?php echo htmlspecialchars( [%variable], ENT_QUOTES ); ?>"
 	},
 	"list": {
-		"open": "<?php foreach ( $||%var||[ '||%1||' ] as $||%subVar|| ) { ?>",
+		"open": "<?php foreach ( [%variable] as [%subcontext] ) { ?>",
 		"close": "<?php } ?>",
-		"ojectProperty": "<?php echo htmlspecialchars( $||%subVar||[ '||%1||' ], ENT_QUOTES ); ?>",
-		"primitive": "<?php echo htmlspecialchars( $||%subVar||, ENT_QUOTES ); ?>"
+		"objectProperty": "<?php echo htmlspecialchars( [%subvariable], ENT_QUOTES ); ?>",
+		"primitive": "<?php echo htmlspecialchars( [%subcontext], ENT_QUOTES ); ?>"
 	},
 	"control": {
 		"ifTruthy": {
-			"open": "<?php if ( $||%var||[ '||%1||' ] ) { ?>",
+			"open": "<?php if ( [%variable] ) { ?>",
 			"close": "<?php } ?>"
 		},
 		"ifFalsy": {
-			"open": "<?php if ( ! $||%var||[ '||%1||' ] ) { ?>",
+			"open": "<?php if ( ! [%variable] ) { ?>",
 			"close": "<?php } ?>"
 		},
 		"ifEqual": {
-			"open": "<?php if ( $||%var||[ '||%1||' ] === ||%2|| ) { ?>",
+			"open": "<?php if ( [%variable] === [%variable] ) { ?>",
 			"close": "<?php } ?>"
 		},
 		"ifNotEqual": {
-			"open": "<?php if ( $||%var||[ '||%1||' ] !== ||%2|| ) { ?>",
+			"open": "<?php if ( [%variable] !== [%variable] ) { ?>",
+			"close": "<?php } ?>"
+		},
+		"else": {
+			"open": "<?php else { ?>",
 			"close": "<?php } ?>"
 		}
 	}
