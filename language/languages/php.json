@@ -7,7 +7,6 @@
 		"variable": "$[%_context_]['[%_variable_]']",
 		"subvariable": "$[%_subcontext_]['[%_variable_]']"
 	},
-	
 	"replace": {
 		"format": "<?php echo htmlspecialchars( [%variable], ENT_QUOTES ); ?>"
 	},

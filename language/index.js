@@ -35,7 +35,6 @@ function getVariableString( arg, context ) {
 
 export function createLanguageString( string, argsArray, context, tags = {} ) {
 	// look for `[%...]
-	// console.log(string, argsArray);
 	let str = string.replace( /\[\%(.+?)\]/g, ( match, key ) => {
 		const tagName = match.replace( /\[|\]|\%/g, '' );
 
@@ -56,7 +55,7 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
 		]
 
 		if ( tags[ tagName ] ) {
-			// Instead of getting the language string, return the actualy string or value.
+			// Instead of getting the language string, return the actual string or value.
 			if ( variableNames.includes( tagName ) ) {
 				// Instead of getting the language string, return the value.
 				if ( argsArray[0].type === 'value' ) {
