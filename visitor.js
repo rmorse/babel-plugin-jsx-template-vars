@@ -41,9 +41,7 @@
  *   and wrap them in template tags.
   */
 const {
-	getExpressionSubject,
-	getExpressionLeft,
-	getExpressionRight,
+	getExpressionArgs,
 	getArrayFromExpression,
 	isJSXElementComponent,
 	isJSXElementTextInput,
@@ -392,6 +390,42 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 					} );
 				},
 				Identifier( subPath ) {
+					// We want tp update the ternary control vars before replace vars (so we can use them at the same time);
+					// Use the identifier visitor to find any identifiers in ternary expressions.
+					if ( controlVarsNames.includes( subPath.node.name ) ) {
+						// subPath.node.name = controlVarsMap[ subPath.node.name ];
+						const excludeTypes = [ 'ObjectProperty', 'ArrayPattern' ];
+						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
+
+							const parentNode = subPath.parentPath.node;
+							const parentParentNode = subPath.parentPath.parentPath.node;
+							const parentParentParentNode = subPath.parentPath.parentPath.parentPath.node;
+
+							// Supports:
+							// const x = test === 'yes' ? 'a' : 'b';
+							// let x; x = test ? 'a' : 'b';
+							// const x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
+							// let x; x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
+							// And more, only looks for a ternary expression to match.
+							// Should match anything that looks like: `( test ? 'a' : 'b' )`
+							let ternaryExpression;
+							let ternaryExpressionPath;
+							// We need to check if parenNode is a ternary expression.
+							if ( isTernaryExpression( parentNode, types ) ) {
+								ternaryExpression = parentNode;
+								ternaryExpressionPath = subPath.parentPath;
+							} else if ( isTernaryExpression( parentParentNode, types ) ) {
+								ternaryExpression = parentParentNode;
+								ternaryExpressionPath = subPath.parentPath.parentPath;
+							}
+							if ( ternaryExpression && ternaryExpressionPath ) {
+								updateTernaryControlExpressions( ternaryExpression, controlVarsNames, replaceVarsInv, ternaryExpressionPath, contextIdentifier, types );
+							}
+							
+						}
+					}
+
+
 					// We need to update all the identifiers with the new variables declared in the block statement
 					if ( replaceVarsNames.includes( subPath.node.name ) ) {
 						// Make sure we only replace identifiers that are not props and also that
@@ -449,46 +483,12 @@ function templateVarsVisitor( { types, traverse, parse }, config ) {
 						}
 					}
 
-					// Use the identifier visitor to find any identifiers in ternary expressions.
-					if ( controlVarsNames.includes( subPath.node.name ) ) {
-						// subPath.node.name = controlVarsMap[ subPath.node.name ];
-						const excludeTypes = [ 'ObjectProperty', 'ArrayPattern' ];
-						if ( subPath.parentPath.node && ! excludeTypes.includes( subPath.parentPath.node.type ) ) {
-
-							const parentNode = subPath.parentPath.node;
-							const parentParentNode = subPath.parentPath.parentPath.node;
-							const parentParentParentNode = subPath.parentPath.parentPath.parentPath.node;
-
-							// Supports:
-							// const x = test === 'yes' ? 'a' : 'b';
-							// let x; x = test ? 'a' : 'b';
-							// const x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
-							// let x; x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
-							// And more, only looks for a ternary expression to match.
-							// Should match anything that looks like: `( test ? 'a' : 'b' )`
-							let ternaryExpression;
-							let ternaryExpressionPath;
-							// We need to check if parenNode is a ternary expression.
-							if ( isTernaryExpression( parentNode, types ) ) {
-								ternaryExpression = parentNode;
-								ternaryExpressionPath = subPath.parentPath;
-							} else if ( isTernaryExpression( parentParentNode, types ) ) {
-								ternaryExpression = parentParentNode;
-								ternaryExpressionPath = subPath.parentPath.parentPath;
-							}
-							if ( ternaryExpression && ternaryExpressionPath ) {
-								updateTernaryControlExpressions( ternaryExpression, controlVarsNames, replaceVarsInv, ternaryExpressionPath, contextIdentifier, types );
-							}
-							
-						}
-
-					}
 				},
 				// Track vars in JSX expressions in case we need have any control vars to process
 				JSXExpressionContainer( subPath ) {
 					const { expression: containerExpression } = subPath.node;
 
-					updateJSXControlExpressions( containerExpression, controlVarsNames, subPath, contextIdentifier, types );
+					updateJSXControlExpressions( containerExpression, controlVarsNames, replaceVars, listVarsToTag, subPath, contextIdentifier, types );
 
 					// Now look for identifers only, so we can look for list vars that need tagging.
 					if ( types.isIdentifier( containerExpression ) ) {
@@ -535,91 +535,79 @@ function isTernaryExpression( node, types ) {
 	}
 	return false;
 }
-function updateJSXControlExpressions( expressionSource, controlVarsNames, subPath, contextIdentifier, types ) {
+function updateJSXControlExpressions( expressionSource, controlVarsNames, replaceVars, listVarsToTag, subPath, contextIdentifier, types ) {
 
 	if ( ! isControlExpression( expressionSource ) ) {
 		return;
 	}
-	const expressionSubject = getExpressionSubject( expressionSource );
-	const expression = expressionSource.left;
-	// const condition = getCondition( containerExpression );
-	if ( controlVarsNames.includes( expressionSubject ) ) {
 
-		let statementType;
-		let expressionValue = '';
+	console.log( expressionSource.left );
+	const { statementType, args } = getExpressionStatement( expressionSource.left, controlVarsNames, replaceVars, types );
 
-		// Lets start by only supporting:
-		// truthy - `myVar && <>...</>`
-		// falsy - `! myVar && <>...</>`
-		// equals - `myVar === 'value' && <>...</>`
-		// not equals - `myVar !== 'value' && <>...</>`
-		// map these to handlebars helper functions and replace the expression with the helper tag.
+	if ( statementType && args.length > 0 ) {
+		
+		const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, contextIdentifier.name, types );
+		const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, contextIdentifier.name, types );
+		subPath.insertBefore( controlStartString );
+		subPath.insertAfter( controlStopString );
 
-		if ( expression.type === 'Identifier' ) {
-			statementType = 'ifTruthy';
-		} else if ( expression.type === 'UnaryExpression' ) {
-			if ( expression.operator === '!' ) {
-				statementType = 'ifFalsy';
-			}
-		} else if( expression.type === 'BinaryExpression' ) {
-			if ( expression.operator && expression.right.value ) {
-				if ( expression.operator === '===' ) {
-					statementType = 'ifEqual';
-				} else if ( expression.operator === '!==' ) {
-					statementType = 'ifNotEqual';
-				}
-				// Add quotes around the value to signify its a string.
-				expressionValue = `'${ expression.right.value }'`;
+		// Now check to see if the right of the expression is a list variable, as we need to wrap them
+		// in helper tags.
+		if ( types.isIdentifier( expressionSource.right ) ) {
+			const objectName = expressionSource.right.name;
+			if ( listVarsToTag[ objectName ] ) {
+				const listVarSourceName = listVarsToTag[ objectName ];
+				const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, contextIdentifier.name, types );
+				const listClose = getLanguageListCallExpression( 'close', listVarSourceName, contextIdentifier.name, types );
+		
+				subPath.insertBefore( listOpen );
+				subPath.insertAfter( listClose );
 			}
 		}
-
-		if ( statementType ) {
-			// Build the opening and closing expression tags.
-			const expressionArgs = [ expressionSubject ];
-			if ( expressionValue ) {
-				expressionArgs.push( expressionValue );
-			}
-
-			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], expressionArgs, contextIdentifier.name, types );
-			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], expressionArgs, contextIdentifier.name, types );
-			subPath.insertBefore( controlStartString );
-			subPath.insertAfter( controlStopString );
-
-			// Now check to see if the right of the expression is a list variable, as we need to wrap them
-			// in helper tags.
-			if ( types.isIdentifier( expressionSource.right ) ) {
-				const objectName = expressionSource.right.name;
-				if ( listVarsToTag[ objectName ] ) {
-					const listVarSourceName = listVarsToTag[ objectName ];
-					const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, contextIdentifier.name, types );
-					const listClose = getLanguageListCallExpression( 'close', listVarSourceName, contextIdentifier.name, types );
-			
-					subPath.insertBefore( listOpen );
-					subPath.insertAfter( listClose );
-				}
-			}
-			
-			// Now replace the whole expression with the right part (remove any conditions to display it)
-			subPath.replaceWith( expressionSource.right );
-		}
+		
+		// Now replace the whole expression with the right part (remove any conditions to display it)
+		subPath.replaceWith( expressionSource.right );
 	}
 }
 
-function getExpressionArgs( sourceExpression, controlVarsNames, replaceVars, types ) {
-	const args = [];
+function getExpressionStatement( sourceExpression, controlVarsNames, replaceVars, types ) {
+
 	let statementType;
 
-	const expressionLeft = getExpressionLeft( sourceExpression, types );
-	const expressionRight = getExpressionRight( sourceExpression, types );
-	if ( ! controlVarsNames.includes( expressionLeft ) && ! controlVarsNames.includes( expressionRight ) ) {
+	const args = getExpressionArgs( sourceExpression, types );
+	console.log("args", args );
+	
+	let conditionsMatched = 0;
+	let identifierCount = 0;
+	args.forEach( arg => {
+		if ( arg.type === 'identifier' ) {
+			identifierCount++;
+			if ( controlVarsNames.includes( arg.value ) ) {
+				conditionsMatched++;
+			}
+		}
+	} );
+
+	// Return if there are no identifiers or conditions matched.
+	if ( identifierCount === 0 || conditionsMatched === 0 ) {
 		return { args, statementType };
 	}
 
+	//if ( ! controlVarsNames.includes( expressionLeft.value ) && ! controlVarsNames.includes( expressionRight.value ) ) {
+	//	return { args, statementType };
+	//}
+
 	// if leftName or rightName are a variable, they could be a replacevariable, and would reference
 	// the updated name, so we want to change them back... 
-	args.push( replaceVars[ expressionLeft ] ?? expressionLeft );
-	args.push( replaceVars[ expressionRight ] ?? expressionRight );
-
+	/* if ( replaceVars[ expressionLeft.value ] ) {
+		expressionLeft.value = replaceVars[ expressionLeft.value ];
+	}
+	if ( replaceVars[ expressionRight.value ] ) {
+		expressionRight.value = replaceVars[ expressionRight.value ];
+	}
+	args.push( expressionLeft );
+	args.push( expressionRight );
+	*/
 	// Lets start by only supporting:
 	// truthy - `myVar && <>...</>`
 	// falsy - `! myVar && <>...</>`
@@ -652,9 +640,9 @@ function updateTernaryControlExpressions( expressionSource, controlVarsNames, re
 	if ( ! ( expressionSource.test && expressionSource.consequent && expressionSource.alternate ) ) {
 		return;
 	}
-	console.log("is ternary expression" );
-	const { statementType, args } = getExpressionArgs( expressionSource.test, controlVarsNames, replaceVars, types );
-	console.log( statementType, args );
+
+	const { statementType, args } = getExpressionStatement( expressionSource.test, controlVarsNames, replaceVars, types );
+	console.log("BUILD CONTROL CALL EXPRESSION", statementType, args)
 
 	if ( statementType && args.length > 0 ) {
 		// Build the opening and closing expression tags.
@@ -707,7 +695,19 @@ function parentPathHasMap( path, types ) {
 
 function getLanguageControlCallExpression( targets, args, context, types ) {
 	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
-	const argsNodes = args.map( arg => types.stringLiteral( arg ) );
+
+	// using types, create a new object with the properties "type" and "value":
+	const argsNodes = [];
+	args.map( ( arg ) => {
+		const objectWithProps = types.objectExpression( [
+			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
+			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
+		] );
+		argsNodes.push( objectWithProps );
+
+	} );
+		
+	// const argsNodes = args.map( arg => types.stringLiteral( arg ) );
 	return types.callExpression( types.identifier( 'getLanguageControl' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
 }
 function getLanguageListCallExpression( action, name, context, types ) {

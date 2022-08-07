@@ -51,84 +51,45 @@ function getNameValueFromNode( node, types ) {
 
 	if ( node.type === 'Identifier' ) {
 		//console.log("found identifier")
-		return node.name;
+		return { type: 'identifier', value: node.name };
 	} else if ( node.type === 'MemberExpression' ) {
-		return `${ node.object.name }.${ node.property.name }`;
+		return { type: 'identifier', value: `${ node.object.name }.${ node.property.name }` };
 	} else if ( types.isStringLiteral( node ) ) {
 		//console.log("found string literal")
-		return `'${ node.value }'`;
+		return { type: 'value', value: `'${ node.value }'` };
 	}
 	return false;
 }
 
-// TODO - this could be made recursive by checking for the existence of 
-// expression.left and if so processing the new prop "left"
-// TODO - We're not taking into consideration the "right" part of the expression,
-// which could also contain the subject we're after (should it return an array?)
-// so this limits us to only looking at the left part of the expression (our
-// template vars must be on the left)
-//  * this might only apply in BinaryExpression's
-function getExpressionSubject( expression ) {
-	if ( expression.type === 'Identifier' ) {
-		return getNameFromNode( expression );
-	} else if ( expression.left.type === 'MemberExpression' ) {
-		return getNameFromNode( expression.left );
-	} else if ( expression.left.type === 'Identifier' ) {
-		return getNameFromNode( expression.left );
-	} else if ( expression.left.type === 'UnaryExpression' ) {
-		return getNameFromNode( expression.left.argument );
-	} else if ( expression.left.type === 'BinaryExpression' ) {
-		// `! isChecked === 'yes' ...`
-		if ( expression.left.left.type === 'UnaryExpression' ) {
-			return getExpressionSubject( expression.left );
-		}
-		// `isChecked === 'yes' ...`
-		return getNameFromNode( expression.left.left );
-	} else {
+function getExpressionArgs( expression, types ) {
+	let args = [];
+	// let currentNode = expression.left;
+	if ( types.isIdentifier( expression ) ) {
+		args.push( { type: 'identifier', value: expression.name } );
+	} else if ( types.isStringLiteral( expression ) ) {
+		args.push( { type: 'value', value: `'${ expression.value }'` } );
+	} else if ( types.isMemberExpression( expression )) {
+		args.push( { type: 'identifier', value: `${ expression.object.name }.${ expression.property.name }` } );
+	} else if ( types.isUnaryExpression( expression ) ) {
+		args = [ ...args, ...getExpressionArgs( expression.argument, types ) ];
 	}
-	return null;
-}
-function getExpressionLeft( expression, types ) {
-	//console.log( "getExpressionLeft");
-
-	let currentNode = expression.left;
-	if ( expression.left.type === 'MemberExpression' ) {
-		currentNode = expression.left;
-	} else if ( expression.left.type === 'Identifier' ) {
-		currentNode = expression.left;
-	} else if ( expression.left.type === 'UnaryExpression' ) {
-		currentNode = expression.left.argument;
-	} else if ( expression.left.type === 'BinaryExpression' ) {
+	else if ( types.isBinaryExpression( expression ) ) {
+		args = [
+			...args,
+			...getExpressionArgs( expression.left, types ),
+			...getExpressionArgs( expression.right, types )
+		];
+		console.log("found binary expression", args);
 		// `! isChecked === 'yes' ...`
-		if ( expression.left.left.type === 'UnaryExpression' ) {
-			return getExpressionLeft( expression.left, types );
-		}
+		//if ( expression.left.left.type === 'UnaryExpression' ) {
+			//return getExpressionLeft( expression.left, types );
+		//}
 		// `isChecked === 'yes' ...`
-		currentNode = expression.left.left;
-	} else {
+		//currentNode = expression.left.left;
 	}
-	return getNameValueFromNode( currentNode, types );
+	return args;
 }
-function getExpressionRight( expression, types ) {
 
-	//console.log( "getExpressionRight", expression);
-	let currentNode = expression.right;
-	if ( expression.right.type === 'MemberExpression' ) {
-		currentNode = expression.right;
-	} else if ( expression.right.type === 'Identifier' ) {
-		currentNode = expression.right;
-	} else if ( expression.right.type === 'UnaryExpression' ) {
-		currentNode = expression.right.argument;
-	} else if ( expression.right.type === 'BinaryExpression' ) {
-		// `! isChecked === 'yes' ...`
-		if ( expression.right.right.type === 'UnaryExpression' ) {
-			return getExpressionRight( expression.right, types );
-		}
-		// `isChecked === 'yes' ...`
-		currentNode = expression.right.right;
-	} 
-	return getNameValueFromNode( currentNode, types );
-}
 
 function injectContextToJSXElementComponents( path, contextVar, t ) {
 	path.traverse( {
@@ -188,9 +149,7 @@ function isJSXElementTextInput( subPath ) {
 }
 
 module.exports = {
-	getExpressionSubject,
-	getExpressionLeft,
-	getExpressionRight,
+	getExpressionArgs,
 	getArrayFromExpression,
 	getObjectFromExpression,
 	getNameFromNode,
