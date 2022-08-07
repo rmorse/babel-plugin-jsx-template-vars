@@ -541,7 +541,6 @@ function updateJSXControlExpressions( expressionSource, controlVarsNames, replac
 		return;
 	}
 
-	console.log( expressionSource.left );
 	const { statementType, args } = getExpressionStatement( expressionSource.left, controlVarsNames, replaceVars, types );
 
 	if ( statementType && args.length > 0 ) {
@@ -642,8 +641,7 @@ function updateTernaryControlExpressions( expressionSource, controlVarsNames, re
 	}
 
 	const { statementType, args } = getExpressionStatement( expressionSource.test, controlVarsNames, replaceVars, types );
-	console.log("BUILD CONTROL CALL EXPRESSION", statementType, args)
-
+	
 	if ( statementType && args.length > 0 ) {
 		// Build the opening and closing expression tags.
 		const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, contextIdentifier.name, types );

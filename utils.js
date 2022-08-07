@@ -35,32 +35,6 @@ function getArrayFromExpression( expression ) {
 	return props;
 };
 
-
-function getNameFromNode( node, types ) {
-	if ( node.type === 'Identifier' ) {
-		return node.name;
-	} else if ( node.type === 'MemberExpression' ) {
-		return `${ node.object.name }.${ node.property.name }`;
-	}
-	return false;
-}
-
-
-function getNameValueFromNode( node, types ) {
-	//console.log( "getNameValueFromNode", node);
-
-	if ( node.type === 'Identifier' ) {
-		//console.log("found identifier")
-		return { type: 'identifier', value: node.name };
-	} else if ( node.type === 'MemberExpression' ) {
-		return { type: 'identifier', value: `${ node.object.name }.${ node.property.name }` };
-	} else if ( types.isStringLiteral( node ) ) {
-		//console.log("found string literal")
-		return { type: 'value', value: `'${ node.value }'` };
-	}
-	return false;
-}
-
 function getExpressionArgs( expression, types ) {
 	let args = [];
 	// let currentNode = expression.left;
@@ -68,6 +42,9 @@ function getExpressionArgs( expression, types ) {
 		args.push( { type: 'identifier', value: expression.name } );
 	} else if ( types.isStringLiteral( expression ) ) {
 		args.push( { type: 'value', value: `'${ expression.value }'` } );
+	} else if ( types.isLiteral( expression ) ) {
+		// Should handle booleans, integers, floats etc
+		args.push( { type: 'value', value: String( expression.value ) } );
 	} else if ( types.isMemberExpression( expression )) {
 		args.push( { type: 'identifier', value: `${ expression.object.name }.${ expression.property.name }` } );
 	} else if ( types.isUnaryExpression( expression ) ) {
@@ -79,13 +56,6 @@ function getExpressionArgs( expression, types ) {
 			...getExpressionArgs( expression.left, types ),
 			...getExpressionArgs( expression.right, types )
 		];
-		console.log("found binary expression", args);
-		// `! isChecked === 'yes' ...`
-		//if ( expression.left.left.type === 'UnaryExpression' ) {
-			//return getExpressionLeft( expression.left, types );
-		//}
-		// `isChecked === 'yes' ...`
-		//currentNode = expression.left.left;
 	}
 	return args;
 }
@@ -152,8 +122,6 @@ module.exports = {
 	getExpressionArgs,
 	getArrayFromExpression,
 	getObjectFromExpression,
-	getNameFromNode,
-	getNameValueFromNode,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
 	isJSXElementTextInput,
