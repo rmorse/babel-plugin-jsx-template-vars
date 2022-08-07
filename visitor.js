@@ -41,10 +41,7 @@
  *   and wrap them in template tags.
   */
 const {
-	getExpressionArgs,
 	getArrayFromExpression,
-	isJSXElementComponent,
-	isJSXElementTextInput,
 } = require( './utils' );
 
 const templateVarsController = require( './controller' );
@@ -131,12 +128,9 @@ function getTemplateVarsFromExpression( expression, types ) {
  * @returns 
  */
 function templateVarsVisitor( babel, config ) {
-	const { types, traverse, parse } = babel;
+	const { types } = babel;
 	const tidyOnly = config.tidyOnly ?? false;
-	const language = config.language ?? defaultLanguage;
-	if ( config.customLanguage ) {
-		//registerLanguage( config.customLanguage );
-	}
+
 	return {
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
@@ -169,7 +163,7 @@ function templateVarsVisitor( babel, config ) {
 				return;
 			}
 
-			templateVarsController.init( templateVars, componentPath, language, babel );
+			templateVarsController.init( templateVars, componentPath, babel );
 		}
 	}
 };
