@@ -97,7 +97,7 @@ const templateVarsController = {
 		this.contextIdentifier = componentPath.scope.generateUidIdentifier("uid");
 		let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
-		const replaceController = new ReplaceController( this.vars.replace, babel );
+		const replaceController = new ReplaceController( this.vars.replace, this.contextIdentifier.name, babel );
 		const listController = new ListController( this.vars.list, this.contextIdentifier.name, babel );
 		const controlController = new ControlController( this.vars.control, this.contextIdentifier.name, babel );
 	
@@ -161,7 +161,7 @@ const templateVarsController = {
 				blockStatementDepth++;
 
 				// Add replace vars to path.
-				replaceController.initVars( self.contextIdentifier.name, statementPath );
+				replaceController.initVars( statementPath );
 				// Add list vars to path.
 				listController.initVars( statementPath );
 				

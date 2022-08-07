@@ -208,7 +208,7 @@ function getLanguageControlCallExpression( targets, args, context, types ) {
  * @param {Object} expression The expression to check
  * @returns 
  */
- function isControlExpression( expression ) {
+function isControlExpression( expression ) {
 	if ( ! expression.left || ! expression.right ) {
 		return false;
 	}

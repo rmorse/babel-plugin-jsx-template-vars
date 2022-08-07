@@ -1,20 +1,21 @@
 
 
 class ReplaceController {
-	constructor( vars, babel ) {
+	constructor( vars, contextName, babel ) {
 		this.vars = vars;
+		this.contextName = contextName;
 		this.babel = babel;
 		this.initVars = this.initVars.bind( this );
 		this.updateIdentifierNames = this.updateIdentifierNames.bind( this );
 	}
-	initVars( contextName, path ) {
+	initVars( path ) {
 		// Add the new replace vars to to top of the block statement.
 		const { parse } = this.babel;
 		const self = this;
 		this.vars.raw.forEach( ( templateVar ) => {
 			const [ varName, varConfig ] = templateVar;
 			// Alway declare as `let` so we don't need to worry about its usage later.
-			const replaceString = `getLanguageReplace( 'format', { value: '${ varName }' }, ${ contextName } )`; 
+			const replaceString = `getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } )`; 
 			path.node.body.unshift( parse(`let ${ self.vars.mapped[ varName ] } = ${ replaceString };`) );
 		} );
 	}
