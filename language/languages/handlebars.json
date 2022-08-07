@@ -1,31 +1,36 @@
 
 {
 	"name": "handlebars",
+
 	"replace": {
-		"format": "{{||%1||}}"
+		"format": "{{[%_variable_]}}"
 	},
 	"list": {
-		"open": "{{#||%1||}}",
-		"close": "{{/||%1||}}",
-		"objectProperty": "{{||%1||}}",
+		"open": "{{#[%_variable_]}}",
+		"close": "{{/[%_variable_]}}",
+		"objectProperty": "{{[%_variable_]}}",
 		"primitive": "{{.}}"
 	},
 	"control": {
 		"ifTruthy": {
-			"open": "{{#if_truthy ||%1||}}",
+			"open": "{{#if_truthy [%_variable_]}}",
 			"close": "{{/if_truthy}}"
 		},
 		"ifFalsy": {
-			"open": "{{#if_falsy ||%1||}}",
+			"open": "{{#if_falsy [%_variable_]}}",
 			"close": "{{/if_falsy}}"
 		},
 		"ifEqual": {
-			"open": "{{#if_equal ||%1|| ||%2||}}",
+			"open": "{{#if_equal [%_variable_] [%_variable_]}}",
 			"close": "{{/if_equal}}"
 		},
 		"ifNotEqual": {
-			"open": "{{#if_not_equal ||%1|| ||%2||}}",
+			"open": "{{#if_not_equal [%_variable_] [%_variable_]}}",
 			"close": "{{/if_not_equal}}"
 		},
+		"else": {
+			"open": "{{else}}",
+			"close": "{{/else}}"
+		}
 	}
 }
