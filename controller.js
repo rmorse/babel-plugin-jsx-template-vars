@@ -1,7 +1,6 @@
 
 const {
 	getExpressionArgs,
-	getArrayFromExpression,
 	isJSXElementComponent,
 	isJSXElementTextInput,
 } = require( './utils' );
@@ -242,7 +241,7 @@ class ControlController {
 				// const x = test === 'yes' ? 'a' : 'b';
 				// let x; x = test ? 'a' : 'b';
 				// const x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
-				// let x; x = 'prefix-' + ( test ? 'a' : 'b' ) + '-suffix';
+				// let x; x = 'prefix-' + ( test === false ? 'a' : 'b' ) + '-suffix';
 				// And more, only looks for a ternary expression to match.
 				// Should match anything that looks like: `( test ? 'a' : 'b' )`
 				let ternaryExpression;
