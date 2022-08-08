@@ -1,4 +1,3 @@
-
 const {
 	getExpressionArgs,
 } = require( '../utils' );
@@ -58,26 +57,69 @@ class ControlController {
 		
 		if ( statementType && args.length > 0 ) {
 			// Build the opening and closing expression tags.
+
 			const { types } = this.babel;
+			const languageOpen = getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types );
 			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, this.contextName, types );
 			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, this.contextName, types );
 			const controlElseStartString = getLanguageControlCallExpression( [ 'else', 'open' ], args, this.contextName, types );
 			const controlElseStopString = getLanguageControlCallExpression( [ 'else', 'close' ], args, this.contextName, types );
+			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
 			
+
 			// create a new expression to add together 3 strings
 			// if = expressionSource.consequent
 			// else = expressionSource.alternate
 			// Create a binary expression with the + operator
 			const parts = [
+				languageOpen,
 				controlStartString,
+				languageClose,
 				expressionSource.consequent,
+				languageOpen,
 				controlStopString,
 				controlElseStartString,
+				languageClose,
 				expressionSource.alternate,
+				languageOpen,
 				controlElseStopString,
+				languageClose,
 			];
-			const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
-			currentPath.replaceWith( combinedBinaryExpression );
+			
+			// So what we need to do is replace the ternary expression.
+			// But we have to approach this differently based on context.
+			// For example, if we are in a JSX expression, we need to replace the path
+
+			if ( types.isJSXExpressionContainer( currentPath.parentPath.node ) ) {
+				currentPath.parentPath.replaceWithMultiple( parts );
+			} else if ( types.isBinaryExpression( currentPath.parentPath ) ) {
+				// If the ternary expression is inside a binary expression such as:
+				// const x = 'text' + ( test ? 'a' : 'b' );
+				// Then we know its not a JSX Fragment, so we should to build this as a binary expression.
+				const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
+				currentPath.replaceWith( combinedBinaryExpression );
+			} else if ( types.isLiteral( expressionSource.consequent ) && types.isLiteral( expressionSource.alternate ) ) {
+				// If we are dealing with twoo literals, we can just replace the ternary expression with a binary expression.
+				const combinedBinaryExpression = createCombinedBinaryExpression( [ ...parts1, expressionSource.consequent, ...parts2, expressionSource.alternate, ...parts3 ], '+', types );
+				currentPath.replaceWith( combinedBinaryExpression );
+			} else {
+				// Create a JSX Fragment to wrap the result.
+				const newFragment = types.jsxFragment( types.jsxOpeningFragment(), types.jsxClosingFragment(), [
+					types.JSXExpressionContainer( languageOpen ),
+					types.JSXExpressionContainer( controlStartString ),
+					types.JSXExpressionContainer( languageClose ),
+					types.JSXExpressionContainer( expressionSource.consequent ),
+					types.JSXExpressionContainer( languageOpen ),
+					types.JSXExpressionContainer( controlStopString ),
+					types.JSXExpressionContainer( controlElseStartString ),
+					types.JSXExpressionContainer( languageClose ),
+					types.JSXExpressionContainer( expressionSource.alternate ),
+					types.JSXExpressionContainer( languageOpen ),
+					types.JSXExpressionContainer( controlElseStopString ),
+					types.JSXExpressionContainer( languageClose ),
+				] );
+				currentPath.replaceWith( newFragment );
+			}
 		}
 	}
 
@@ -126,7 +168,6 @@ class ControlController {
 		}
 
 	}
-
 	updateJSXExpressions( expressionSource, currentPath, listVarsToTag ) {
 
 		if ( ! isControlExpression( expressionSource ) ) {
@@ -137,10 +178,23 @@ class ControlController {
 
 		if ( statementType && args.length > 0 ) {
 			const { types } = this.babel;
+
+			const languageOpen = getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types );
+
 			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, this.contextName, types );
 			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, this.contextName, types );
-			currentPath.insertBefore( controlStartString );
-			currentPath.insertAfter( controlStopString );
+
+			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
+			
+			const parts = [
+				languageOpen,
+				controlStartString,
+				languageClose,
+				expressionSource.right,
+				languageOpen,
+				controlStopString,
+				languageClose,
+			];
 
 			// Now check to see if the right of the expression is a list variable, as we need to wrap them
 			// in helper tags.
@@ -157,7 +211,8 @@ class ControlController {
 			}
 			
 			// Now replace the whole expression with the right part (remove any conditions to display it)
-			currentPath.replaceWith( expressionSource.right );
+			currentPath.replaceWithMultiple( parts );
+
 		}
 	}
 	
@@ -183,6 +238,22 @@ function createCombinedBinaryExpression( parts, operator, types ) {
 	return expression;
 }
 
+
+function getLanguageCallExpression( targets, args, context, types ) {
+	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
+
+	// using types, create a new object with the properties "type" and "value":
+	const argsNodes = [];
+	args.map( ( arg ) => {
+		const objectWithProps = types.objectExpression( [
+			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
+			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
+		] );
+		argsNodes.push( objectWithProps );
+	} );
+		
+	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
+}
 
 function getLanguageControlCallExpression( targets, args, context, types ) {
 	const targetsNodes = targets.map( target => types.stringLiteral( target ) );

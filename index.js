@@ -15,7 +15,7 @@ const filePath = pathToFileURL( __dirname ).href;
 module.exports = ( babel, config ) => {
 	// Creat custom import template for injecting language functions into components.
 	const buildImport = babel.template(`
-		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage } from "${ filePath }/language/index.js";
+		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage, getLanguageString } from "${ filePath }/language/index.js";
 	`);
 	const languageImportDeclaration = buildImport();
 	const pluginPathURL = pathToFileURL( __dirname ).href;

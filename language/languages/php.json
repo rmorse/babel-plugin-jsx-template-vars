@@ -7,35 +7,54 @@
 		"variable": "$[%_context_]['[%_variable_]']",
 		"subvariable": "$[%_subcontext_]['[%_variable_]']"
 	},
+	"language": {
+		"open": "<?php ",
+		"close": " ?>",
+		"value": " ?>[%_variable_]<?php "
+	},
 	"replace": {
-		"format": "<?php echo htmlspecialchars( [%variable], ENT_QUOTES ); ?>"
+		"format": "echo htmlspecialchars( [%variable], ENT_QUOTES );"
 	},
 	"list": {
-		"open": "<?php foreach ( [%variable] as [%subcontext] ) { ?>",
-		"close": "<?php } ?>",
-		"objectProperty": "<?php echo htmlspecialchars( [%subvariable], ENT_QUOTES ); ?>",
-		"primitive": "<?php echo htmlspecialchars( [%subcontext], ENT_QUOTES ); ?>"
+		"open": "foreach ( [%variable] as [%subcontext] ) {",
+		"close": "}",
+		"objectProperty": "echo htmlspecialchars( [%subvariable], ENT_QUOTES );",
+		"primitive": "echo htmlspecialchars( [%subcontext], ENT_QUOTES );"
 	},
 	"control": {
 		"ifTruthy": {
-			"open": "<?php if ( [%variable] ) { ?>",
-			"close": "<?php } ?>"
+			"open": "if ( [%variable] ) {",
+			"close": "}"
 		},
 		"ifFalsy": {
-			"open": "<?php if ( ! [%variable] ) { ?>",
-			"close": "<?php } ?>"
+			"open": "if ( ! [%variable] ) {",
+			"close": "}"
 		},
 		"ifEqual": {
-			"open": "<?php if ( [%variable] === [%variable] ) { ?>",
-			"close": "<?php } ?>"
+			"open": "if ( [%variable] === [%variable] ) {",
+			"close": "}"
 		},
 		"ifNotEqual": {
-			"open": "<?php if ( [%variable] !== [%variable] ) { ?>",
-			"close": "<?php } ?>"
+			"open": "if ( [%variable] !== [%variable] ) {",
+			"close": "}"
+		},
+
+		
+		"if": {
+			"open": "if ( [%_condition_] ) {",
+			"close": "}"
+		},
+		"elseif": {
+			"open": "else if ( [%_condition_] ) {",
+			"close": "}"
 		},
 		"else": {
-			"open": "<?php else { ?>",
-			"close": "<?php } ?>"
+			"open": "else {",
+			"close": "}"
+		},
+		"end": {
+			"open": "}",
+			"close": ""
 		}
 	}
 }

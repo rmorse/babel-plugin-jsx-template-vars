@@ -27,6 +27,8 @@
     "url": "https://github.com/rmorse/babel-plugin-jsx-template-vars/issues"
   },
   "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-vars#readme",
-  "devDependencies": {},
+  "devDependencies": {
+    "@babel/generator": "^7.18.12"
+  },
   "dependencies": {}
 }

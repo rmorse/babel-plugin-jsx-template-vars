@@ -98,5 +98,6 @@ export function getLanguageList( target, arg, context ) {
 }
 
 export function getLanguageControl( targets, args, context ) {
+	console.log("getLanguageControl", targets, args, context);
 	return getLanguageString( [ 'control', ...targets ], args, context );
 }
