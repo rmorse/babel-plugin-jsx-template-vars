@@ -15,7 +15,7 @@ class ReplaceController {
 		this.vars.raw.forEach( ( templateVar ) => {
 			const [ varName, varConfig ] = templateVar;
 			// Alway declare as `let` so we don't need to worry about its usage later.
-			const replaceString = `getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } )`; 
+			const replaceString = `getLanguageString( [ 'language', 'open' ], [], ${ this.contextName } ) + getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } ) + getLanguageString( [ 'language', 'close' ], [], ${ this.contextName } )`; 
 			path.node.body.unshift( parse(`let ${ self.vars.mapped[ varName ] } = ${ replaceString };`) );
 		} );
 	}

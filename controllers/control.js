@@ -1,7 +1,6 @@
 const {
-	getExpressionArgs,
+	getExpressionArgs, getLanguageCallExpression, getLanguageListCallExpression
 } = require( '../utils' );
-const { getLanguageListCallExpression } = require( './list' );
 class ControlController {
 	constructor( vars, contextName, babel ) {
 		this.vars = vars;
@@ -186,32 +185,51 @@ class ControlController {
 
 			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
 			
-			const parts = [
-				languageOpen,
-				controlStartString,
-				languageClose,
-				expressionSource.right,
-				languageOpen,
-				controlStopString,
-				languageClose,
-			];
-
+			
+			let hasInserted = false;
 			// Now check to see if the right of the expression is a list variable, as we need to wrap them
 			// in helper tags.
 			if ( types.isIdentifier( expressionSource.right ) ) {
 				const objectName = expressionSource.right.name;
 				if ( listVarsToTag[ objectName ] ) {
 					const listVarSourceName = listVarsToTag[ objectName ];
+					
 					const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, this.contextName, types );
 					const listClose = getLanguageListCallExpression( 'close', listVarSourceName, this.contextName, types );
 			
-					currentPath.insertBefore( listOpen );
-					currentPath.insertAfter( listClose );
+					const parts = [
+						languageOpen,
+						controlStartString,
+						languageClose,
+						languageOpen,
+						listOpen,
+						languageClose,
+						expressionSource.right,
+						languageOpen,
+						listClose,
+						languageClose,
+						languageOpen,
+						controlStopString,
+						languageClose,
+					];
+					currentPath.replaceWithMultiple( parts );
+					hasInserted = true;
 				}
+			}
+			if ( ! hasInserted ) {
+				const parts = [
+					languageOpen,
+					controlStartString,
+					languageClose,
+					expressionSource.right,
+					languageOpen,
+					controlStopString,
+					languageClose,
+				];
+				currentPath.replaceWithMultiple( parts );
 			}
 			
 			// Now replace the whole expression with the right part (remove any conditions to display it)
-			currentPath.replaceWithMultiple( parts );
 
 		}
 	}
@@ -236,23 +254,6 @@ function createCombinedBinaryExpression( parts, operator, types ) {
 		expression = types.binaryExpression( operator, expression, parts[ i ] );
 	}
 	return expression;
-}
-
-
-function getLanguageCallExpression( targets, args, context, types ) {
-	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
-
-	// using types, create a new object with the properties "type" and "value":
-	const argsNodes = [];
-	args.map( ( arg ) => {
-		const objectWithProps = types.objectExpression( [
-			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
-			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
-		] );
-		argsNodes.push( objectWithProps );
-	} );
-		
-	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
 }
 
 function getLanguageControlCallExpression( targets, args, context, types ) {
@@ -296,4 +297,4 @@ function isControlExpression( expression ) {
 }
 
 
-module.exports = { ControlController };
+module.exports = { ControlController, createCombinedBinaryExpression };

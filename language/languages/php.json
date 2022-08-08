@@ -9,8 +9,7 @@
 	},
 	"language": {
 		"open": "<?php ",
-		"close": " ?>",
-		"value": " ?>[%_variable_]<?php "
+		"close": " ?>"
 	},
 	"replace": {
 		"format": "echo htmlspecialchars( [%variable], ENT_QUOTES );"

@@ -1,3 +1,5 @@
+const { getLanguageCallExpression, getLanguageListCallExpression } = require("../utils");
+const { createCombinedBinaryExpression } = require("./control");
 
 
 class ListController {
@@ -43,8 +45,12 @@ class ListController {
 			const childProp = {};
 			const propsArr = [];
 			props.forEach( ( propName ) => {
-				const listObject = getLanguageListCallExpression( 'objectProperty', propName, self.contextName, types );
-				propsArr.push( types.objectProperty( types.identifier( propName ), listObject ) );
+				const listObject = [
+					getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types ),
+					getLanguageListCallExpression( 'objectProperty', propName, self.contextName, types ),
+					getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types ),
+				]
+				propsArr.push( types.objectProperty( types.identifier( propName ), createCombinedBinaryExpression( listObject, '+', types ) ) );
 			} );
 			newProp.push( childProp );
 			const templateObject = types.objectExpression( propsArr )
@@ -57,7 +63,7 @@ class ListController {
 		} else if ( type === 'primitive' ) {
 			// Then we're dealing with a normal array.
 			// TODO: maybe "primitive" is not the best name for this type.
-			const listPrimitiveString = `let ${ varName } = [ getLanguageList( 'primitive', null, ${ this.contextName } ) ];`;
+			const listPrimitiveString = `let ${ varName } = [ getLanguageString( [ 'language', 'open' ], [], ${ this.contextName } ) + getLanguageList( 'primitive', null, ${ this.contextName } ) + getLanguageString( [ 'language', 'close' ], [], ${ this.contextName } ) ];`;
 			return parse( listPrimitiveString );
 		}
 		return null;
@@ -114,14 +120,26 @@ class ListController {
 	}
 	updateJSXListExpressions( expressionSource, path ) {
 		const { types } = this.babel;
+
+		const languageOpen = getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types );
+		const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
+
 		// Now look for identifers only, so we can look for list vars that need tagging.
 		if ( types.isIdentifier( expressionSource ) ) {
 			// Then we should be looking at something like: `{ myVar }`
 			if ( this.vars.toTag[ expressionSource.name ] ) {
+				
 				const listOpen = getLanguageListCallExpression( 'open', this.vars.toTag[ expressionSource.name ], this.contextName, types );
 				const listClose = getLanguageListCallExpression( 'close', this.vars.toTag[ expressionSource.name ], this.contextName, types );
+
+				path.insertBefore( languageOpen );
 				path.insertBefore( listOpen );
+				path.insertBefore( languageClose );
+
+				path.insertAfter( languageClose );
 				path.insertAfter( listClose );
+				path.insertAfter( languageOpen );
+
 			}
 		}
 
@@ -139,8 +157,14 @@ class ListController {
 					const listVarSourceName = this.vars.toTag[ objectName ];
 					const listOpen = getLanguageListCallExpression( 'open', listVarSourceName, this.contextName, types );
 					const listClose = getLanguageListCallExpression( 'close', listVarSourceName, this.contextName, types );
+
+					path.insertBefore( languageOpen );
 					path.insertBefore( listOpen );
+					path.insertBefore( languageClose );
+
+					path.insertAfter( languageClose );
 					path.insertAfter( listClose );
+					path.insertAfter( languageOpen );
 				}
 			}
 		}
@@ -148,12 +172,5 @@ class ListController {
 };
 
 
-function getLanguageListCallExpression( action, name, context, types ) {
-	const nameObject = types.objectExpression( [
-		types.objectProperty( types.identifier('type'), types.stringLiteral( 'identifier' ) ),
-		types.objectProperty( types.identifier('value'), types.stringLiteral( name ) ),
-	] );
-	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, types.identifier( context ) ] );
-}
 
-module.exports = { ListController, getLanguageListCallExpression };
+module.exports = { ListController };

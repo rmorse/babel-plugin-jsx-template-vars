@@ -118,6 +118,32 @@ function isJSXElementTextInput( subPath ) {
 
 }
 
+
+
+function getLanguageCallExpression( targets, args, context, types ) {
+	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
+
+	// using types, create a new object with the properties "type" and "value":
+	const argsNodes = [];
+	args.map( ( arg ) => {
+		const objectWithProps = types.objectExpression( [
+			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
+			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
+		] );
+		argsNodes.push( objectWithProps );
+	} );
+		
+	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
+}
+function getLanguageListCallExpression( action, name, context, types ) {
+	const nameObject = types.objectExpression( [
+		types.objectProperty( types.identifier('type'), types.stringLiteral( 'identifier' ) ),
+		types.objectProperty( types.identifier('value'), types.stringLiteral( name ) ),
+	] );
+	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, types.identifier( context ) ] );
+}
+
+
 module.exports = {
 	getExpressionArgs,
 	getArrayFromExpression,
@@ -125,4 +151,6 @@ module.exports = {
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
 	isJSXElementTextInput,
+	getLanguageCallExpression,
+	getLanguageListCallExpression,
 };
