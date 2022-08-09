@@ -1,40 +1,59 @@
 {
 	"name": "php",
-	
-	"_tags": {
+
+	"variables": {
 		"context": "$[%_context_]",
 		"subcontext": "$[%_subcontext_]",
 		"variable": "$[%_context_]['[%_variable_]']",
-		"subvariable": "$[%_subcontext_]['[%_variable_]']",
+		"subvariable": "$[%_subcontext_]['[%_variable_]']"
 	},
 	"language": {
 		"open": "<?php ",
 		"close": " ?>"
 	},
 	"replace": {
-		"format": "echo htmlspecialchars( [%variable], ENT_QUOTES );"
+		"format": "echo [%variable];"
 	},
 	"list": {
 		"open": "foreach ( [%variable] as [%subcontext] ) {",
 		"close": "}",
-		"objectProperty": "echo htmlspecialchars( [%subvariable], ENT_QUOTES );",
-		"primitive": "echo htmlspecialchars( [%subcontext], ENT_QUOTES );"
+		"objectProperty": "echo [%subvariable];",
+		"primitive": "echo [%subcontext];"
 	},
 	"control": {
-		"arg" : {
-			"variable": "$[%_context_]['[%_variable_]']",
-			"value": "[%_value_]"
-		},
-		"ifelse": {
-			"if": "if ( [%_condition_] ) {",
-			"elseif": "else if ( [%_condition_] ) {",
-			"else": "else {",
+		"ifTruthy": {
+			"open": "if ( [%variable] ) {",
 			"close": "}"
 		},
-		"conditions": {
-			"unary": "[%_operator_][%_arg_]",
-			"binary": "[%_arg_] [%_operator_] [%_arg_]"
-		}
+		"ifFalsy": {
+			"open": "if ( ! [%variable] ) {",
+			"close": "}"
+		},
+		"ifEqual": {
+			"open": "if ( [%variable] === [%variable] ) {",
+			"close": "}"
+		},
+		"ifNotEqual": {
+			"open": "if ( [%variable] !== [%variable] ) {",
+			"close": "}"
+		},
+
 		
+		"if": {
+			"open": "if ( [%_condition_] ) {",
+			"close": "}"
+		},
+		"elseif": {
+			"open": "else if ( [%_condition_] ) {",
+			"close": "}"
+		},
+		"else": {
+			"open": "else {",
+			"close": "}"
+		},
+		"end": {
+			"open": "}",
+			"close": ""
+		}
 	}
 }

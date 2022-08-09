@@ -1,11 +1,7 @@
 
 {
 	"name": "handlebars",
-	"variables": {
-		"arg" : {
-			"variable": "[%_variable_]",
-			"value": "[%_value_]"
-		},
+	"_tag": {
 		"variable": "[%_variable_]",
 		"subvariable": "[%_variable_]",
 		"condition": "[%variable] [%_operator_] [%variable]"
@@ -24,6 +20,10 @@
 		"primitive": "{{.}}"
 	},
 	"control": {
+		"arg" : {
+			"identifier": "[%_variable_]",
+			"value": "[%_value_]"
+		},
 		"ifelse": {
 			"if": "{{#if [%_condition_] }}",
 			"elseif": "{{#elseif [%_condition_] }}",
@@ -31,8 +31,8 @@
 			"close": "{{/if}}"
 		},
 		"conditions": {
-			"unary": "[%_operator_][%arg]",
-			"binary": "[%_operator_] [%arg] [%arg]"
+			"unary": "[%_operator_][%_arg_]",
+			"binary": "[%_operator_] [%_arg_] [%_arg_]"
 		}
 	}
 }

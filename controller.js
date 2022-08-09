@@ -1,7 +1,7 @@
 
 const {
 	isJSXElementComponent,
-	isJSXElementTextInput,
+	isJSXElementInput,
 } = require( './utils' );
 
 const { ReplaceController } = require( './controllers/replace' );
@@ -132,12 +132,16 @@ const templateVarsController = {
 				 * <input value="test" />
 				 * would become:
 				 * <input />
+				 * 
+				 * <input type="checkbox" checked="true" value="1" />
+				 * would become:
+				 * <input type="checkbox" />
 				 *
 				 * Our workaround will be to copy the value attribute, to a custom attribute with the prefix `jsxtv_`.
 				 * When we later scrape this page, it will then need to be converted back to the correct html attribute.
 				 */
 
-				if ( isJSXElementTextInput( subPath ) ) {
+				if ( isJSXElementInput( subPath ) ) {
 					// Now get the value attribute from the jsx element.
 					const valueAttribute = subPath.node.openingElement.attributes.find( attr => attr?.name?.name === 'value' );
 
@@ -149,6 +153,16 @@ const templateVarsController = {
 						subPath.node.openingElement.attributes.push( jsxtValueAttribute );
 					}
 
+					// Now get the checked attribute from the jsx element.
+					const checkedAttribute = subPath.node.openingElement.attributes.find( attr => attr?.name?.name === 'checked' );
+
+					if ( checkedAttribute ) {
+						// Create a new attribute `jsxtv_checked` and copy the value from the checkedAttribute
+						const jsxtCheckedAttribute = types.jSXAttribute( types.jSXIdentifier( 'jsxtv_checked' ), checkedAttribute.value );
+
+						// And add it to the existing attributes.
+						subPath.node.openingElement.attributes.push( jsxtCheckedAttribute );
+					}
 				}
 
 			},

@@ -92,7 +92,7 @@ function isJSXElementComponent( path ) {
 	return false;
 }
 
-function isJSXElementTextInput( subPath ) {
+function isJSXElementInput( subPath ) {
 	const element = subPath.node;
 	if ( ! element.openingElement ) {
 		return false;
@@ -102,23 +102,8 @@ function isJSXElementTextInput( subPath ) {
 	if ( name?.name !== 'input' ) {
 		return false;
 	}
-	// Now check to see if the elements `type` attribute is set to `text`.
-	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
-		return attr?.name?.name === 'type';
-	} );
-	
-	if ( ! typeAttr ) {
-		return false;
-	}
-	const { value } = typeAttr;
-	if ( value.value !== 'text' ) {
-		return false;
-	}
 	return true;
-
 }
-
-
 
 function getLanguageCallExpression( targets, args, context, types ) {
 	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
@@ -150,7 +135,7 @@ module.exports = {
 	getObjectFromExpression,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
-	isJSXElementTextInput,
+	isJSXElementInput,
 	getLanguageCallExpression,
 	getLanguageListCallExpression,
 };
