@@ -35,6 +35,7 @@ function getVariableString( arg, context ) {
 
 export function createLanguageString( string, argsArray, context, tags = {} ) {
 	// look for `[%...]
+	console.log(string);
 	let str = string.replace( /\[\%(.+?)\]/g, ( match, key ) => {
 		const tagName = match.replace( /\[|\]|\%/g, '' );
 
@@ -81,7 +82,7 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
  export function getLanguageString( targetPath = [], argsArray = [], context ) {
 	let languagePart = window.templateVarsLanguage;
 	targetPath.forEach( ( target, index ) => {
-		if ( languagePart[ target ] ) {
+		if ( typeof languagePart[ target ] !== 'undefined' ) {
 			languagePart = languagePart[ target ];
 		}
 	} );

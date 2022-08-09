@@ -1,7 +1,19 @@
 
 {
 	"name": "handlebars",
-
+	"variables": {
+		"arg" : {
+			"variable": "[%_variable_]",
+			"value": "[%_value_]"
+		},
+		"variable": "[%_variable_]",
+		"subvariable": "[%_variable_]",
+		"condition": "[%variable] [%_operator_] [%variable]"
+	},
+	"language": {
+		"open": "",
+		"close": ""
+	},
 	"replace": {
 		"format": "{{[%_variable_]}}"
 	},
@@ -12,25 +24,15 @@
 		"primitive": "{{.}}"
 	},
 	"control": {
-		"ifTruthy": {
-			"open": "{{#if_truthy [%_variable_]}}",
-			"close": "{{/if_truthy}}"
+		"ifelse": {
+			"if": "{{#if [%_condition_] }}",
+			"elseif": "{{#elseif [%_condition_] }}",
+			"else": "{{else}}",
+			"close": "{{/if}}"
 		},
-		"ifFalsy": {
-			"open": "{{#if_falsy [%_variable_]}}",
-			"close": "{{/if_falsy}}"
-		},
-		"ifEqual": {
-			"open": "{{#if_equal [%_variable_] [%_variable_]}}",
-			"close": "{{/if_equal}}"
-		},
-		"ifNotEqual": {
-			"open": "{{#if_not_equal [%_variable_] [%_variable_]}}",
-			"close": "{{/if_not_equal}}"
-		},
-		"else": {
-			"open": "{{else}}",
-			"close": "{{/else}}"
+		"conditions": {
+			"unary": "[%_operator_][%arg]",
+			"binary": "[%_operator_] [%arg] [%arg]"
 		}
 	}
 }

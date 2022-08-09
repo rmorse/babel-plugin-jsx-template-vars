@@ -103,20 +103,7 @@ class ControlController {
 				currentPath.replaceWith( combinedBinaryExpression );
 			} else {
 				// Create a JSX Fragment to wrap the result.
-				const newFragment = types.jsxFragment( types.jsxOpeningFragment(), types.jsxClosingFragment(), [
-					types.JSXExpressionContainer( languageOpen ),
-					types.JSXExpressionContainer( controlStartString ),
-					types.JSXExpressionContainer( languageClose ),
-					types.JSXExpressionContainer( expressionSource.consequent ),
-					types.JSXExpressionContainer( languageOpen ),
-					types.JSXExpressionContainer( controlStopString ),
-					types.JSXExpressionContainer( controlElseStartString ),
-					types.JSXExpressionContainer( languageClose ),
-					types.JSXExpressionContainer( expressionSource.alternate ),
-					types.JSXExpressionContainer( languageOpen ),
-					types.JSXExpressionContainer( controlElseStopString ),
-					types.JSXExpressionContainer( languageClose ),
-				] );
+				const newFragment = types.jsxFragment( types.jsxOpeningFragment(), types.jsxClosingFragment(), parts.map( part => types.JSXExpressionContainer( part ) ) );
 				currentPath.replaceWith( newFragment );
 			}
 		}

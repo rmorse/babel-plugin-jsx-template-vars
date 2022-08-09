@@ -1,11 +1,11 @@
 {
 	"name": "php",
-
-	"variables": {
+	
+	"_tags": {
 		"context": "$[%_context_]",
 		"subcontext": "$[%_subcontext_]",
 		"variable": "$[%_context_]['[%_variable_]']",
-		"subvariable": "$[%_subcontext_]['[%_variable_]']"
+		"subvariable": "$[%_subcontext_]['[%_variable_]']",
 	},
 	"language": {
 		"open": "<?php ",
@@ -21,39 +21,20 @@
 		"primitive": "echo htmlspecialchars( [%subcontext], ENT_QUOTES );"
 	},
 	"control": {
-		"ifTruthy": {
-			"open": "if ( [%variable] ) {",
+		"arg" : {
+			"variable": "$[%_context_]['[%_variable_]']",
+			"value": "[%_value_]"
+		},
+		"ifelse": {
+			"if": "if ( [%_condition_] ) {",
+			"elseif": "else if ( [%_condition_] ) {",
+			"else": "else {",
 			"close": "}"
 		},
-		"ifFalsy": {
-			"open": "if ( ! [%variable] ) {",
-			"close": "}"
-		},
-		"ifEqual": {
-			"open": "if ( [%variable] === [%variable] ) {",
-			"close": "}"
-		},
-		"ifNotEqual": {
-			"open": "if ( [%variable] !== [%variable] ) {",
-			"close": "}"
-		},
-
-		
-		"if": {
-			"open": "if ( [%_condition_] ) {",
-			"close": "}"
-		},
-		"elseif": {
-			"open": "else if ( [%_condition_] ) {",
-			"close": "}"
-		},
-		"else": {
-			"open": "else {",
-			"close": "}"
-		},
-		"end": {
-			"open": "}",
-			"close": ""
+		"conditions": {
+			"unary": "[%_operator_][%_arg_]",
+			"binary": "[%_arg_] [%_operator_] [%_arg_]"
 		}
+		
 	}
 }
