@@ -154,7 +154,13 @@ const templateVarsController = {
 					}
 
 					// Now get the checked attribute from the jsx element.
-					const checkedAttribute = subPath.node.openingElement.attributes.find( attr => attr?.name?.name === 'checked' );
+					// TODO - this needs investigating.  The issue is, the presence of the checked attribute will render it checked
+					// in most browsers, regardless of the value.  Therefor, having a replace var in the checked attribute will
+					// always render it checked... I think its best (for now) to render checkboxes unchecked and add the checked status
+					// via the JS app only.
+					// It would be nice to add conditions in the html output to conditionally add the checked attribute, but I don't
+					// think that will be possible.
+					/* const checkedAttribute = subPath.node.openingElement.attributes.find( attr => attr?.name?.name === 'checked' );
 
 					if ( checkedAttribute ) {
 						// Create a new attribute `jsxtv_checked` and copy the value from the checkedAttribute
@@ -162,7 +168,8 @@ const templateVarsController = {
 
 						// And add it to the existing attributes.
 						subPath.node.openingElement.attributes.push( jsxtCheckedAttribute );
-					}
+					} */
+					
 				}
 
 			},
