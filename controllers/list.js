@@ -34,28 +34,60 @@ class ListController {
 			}
 		} );
 	}
+	getPropsArray( props, types, parse ) {
+		const propsArr = [];
+		const self = this;
+
+		props.forEach( ( prop ) => {
+			const normalisedProp = this.normalisedProp( prop );
+			const propName = normalisedProp.name;
+
+			if ( normalisedProp.type === 'primitive' ) {
+				const listObject = [
+					getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types ),
+					getLanguageListCallExpression( 'objectProperty', prop, self.contextName, types ),
+					getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types ),
+				]
+				propsArr.push( types.objectProperty( types.identifier( propName ), createCombinedBinaryExpression( listObject, '+', types ) ) );
+			} else if ( normalisedProp.type === 'list' ) {
+
+				// Here we create a prop, with more children as an array.
+				// However this could recurse infinitely, so we need to limit it.
+				// So we need a new expression, like __context__ but for tracking this particular components recursion.
+				// We can then use this to limit the recursion to a set depth.
+
+				// Lets start by declaring a global variable...
+				// Then pass in the depth paramater to the function.
+				// and then incremement.
+
+				// Create a new arrayExpression with 1 element to pass to its child.
+				/* const listObjectPropArray = types.arrayExpression( [ types.stringLiteral( '' ) ] );
+				// Create an object with a prop `propName` which has the value of the listArrayExpression.
+				const listObject = types.objectExpression( [ types.objectProperty( types.identifier( propName ), listObjectPropArray ) ] );
+				const listArrayExpression = types.arrayExpression( [ listObject ] ); */
+				const listArrayExpression = types.arrayExpression( [] );
+				propsArr.push( types.objectProperty( types.identifier( propName ), listArrayExpression ) );
+			}
+		} );
+
+		return propsArr;
+	}
 	// Build the object for the replacement var in list type vars.
 	buildDeclaration( varName, varConfig ) {
 		const { parse, types } = this.babel;
 		const normalisedConfig = this.normaliseListVar( varConfig );
 		const { type, props } = normalisedConfig.child;
 		const self = this;
-		const newProp = [];
+		// const newProp = [];
 		if ( type === 'object' ) {
-			const childProp = {};
-			const propsArr = [];
-			props.forEach( ( propName ) => {
-				const listObject = [
-					getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types ),
-					getLanguageListCallExpression( 'objectProperty', propName, self.contextName, types ),
-					getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types ),
-				]
-				propsArr.push( types.objectProperty( types.identifier( propName ), createCombinedBinaryExpression( listObject, '+', types ) ) );
-			} );
-			newProp.push( childProp );
+			//const childProp = {};
+			const propsArr = this.getPropsArray( props, types, parse );
+
+			// newProp.push( childProp );
 			const templateObject = types.objectExpression( propsArr )
 			const right = types.arrayExpression( [ templateObject ] );
-			
+			//console.log("buildDeclaration", varName, normalisedConfig)
+
 			const left = types.identifier( varName );
 			return types.variableDeclaration('let', [
 				types.variableDeclarator(left, right),
@@ -79,8 +111,25 @@ class ListController {
 				normalisedConfig.child = { type: 'primitive' }
 			}
 		}
-		
+
 		return normalisedConfig;
+	};
+	isPrimitive(test) {
+		return test !== Object(test);
+	}
+	normalisedProp( prop ) {
+		let normalisedProp = {
+			name: '',
+			type: 'primitive',
+			// child: { type: 'primitive' }
+		};
+		if ( this.isPrimitive( prop ) ) {
+			normalisedProp.name = prop;
+		} else {
+			normalisedProp = prop;
+		}
+
+		return normalisedProp;
 	};
 	updateIdentifierNames( path ) {
 		const { types } = this.babel;
@@ -120,6 +169,12 @@ class ListController {
 	}
 	updateJSXListExpressions( expressionSource, path ) {
 		const { types } = this.babel;
+
+		// We only want to support things like: `{ myVar }`
+		// We don't want to support <div key={ myVar } />
+		if ( ! types.isJSXFragment( path.parentPath.node ) && ! types.isJSXElement( path.parentPath.node )) {
+			return;
+		}
 
 		const languageOpen = getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types );
 		const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );

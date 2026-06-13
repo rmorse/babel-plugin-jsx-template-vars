@@ -35,7 +35,6 @@ function getVariableString( arg, context ) {
 
 export function createLanguageString( string, argsArray, context, tags = {} ) {
 	// look for `[%...]
-	console.log(string);
 	let str = string.replace( /\[\%(.+?)\]/g, ( match, key ) => {
 		const tagName = match.replace( /\[|\]|\%/g, '' );
 

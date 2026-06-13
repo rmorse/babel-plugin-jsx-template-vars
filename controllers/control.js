@@ -246,7 +246,7 @@ function createCombinedBinaryExpression( parts, operator, types ) {
 function getLanguageControlCallExpression( targets, args, context, types ) {
 	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
 
-	// using types, create a new object with the properties "type" and "value":
+	// Using types, create a new object with the properties "type" and "value":
 	const argsNodes = [];
 	args.map( ( arg ) => {
 		const objectWithProps = types.objectExpression( [
