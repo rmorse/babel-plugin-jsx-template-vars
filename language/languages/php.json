@@ -48,7 +48,7 @@
 			"close": "}"
 		},
 		"else": {
-			"open": "else {",
+			"open": "} else {",
 			"close": "}"
 		},
 		"end": {

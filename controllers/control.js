@@ -62,7 +62,6 @@ class ControlController {
 			const controlStartString = getLanguageControlCallExpression( [ statementType, 'open' ], args, this.contextName, types );
 			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, this.contextName, types );
 			const controlElseStartString = getLanguageControlCallExpression( [ 'else', 'open' ], args, this.contextName, types );
-			const controlElseStopString = getLanguageControlCallExpression( [ 'else', 'close' ], args, this.contextName, types );
 			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
 			
 
@@ -76,12 +75,11 @@ class ControlController {
 				languageClose,
 				expressionSource.consequent,
 				languageOpen,
-				controlStopString,
 				controlElseStartString,
 				languageClose,
 				expressionSource.alternate,
 				languageOpen,
-				controlElseStopString,
+				controlStopString,
 				languageClose,
 			];
 			
@@ -91,7 +89,7 @@ class ControlController {
 
 			if ( types.isJSXExpressionContainer( currentPath.parentPath.node ) ) {
 				currentPath.parentPath.replaceWithMultiple( parts );
-			} else if ( types.isBinaryExpression( currentPath.parentPath ) ) {
+			} else if ( types.isBinaryExpression( currentPath.parentPath.node ) ) {
 				// If the ternary expression is inside a binary expression such as:
 				// const x = 'text' + ( test ? 'a' : 'b' );
 				// Then we know its not a JSX Fragment, so we should to build this as a binary expression.
@@ -99,7 +97,7 @@ class ControlController {
 				currentPath.replaceWith( combinedBinaryExpression );
 			} else if ( types.isLiteral( expressionSource.consequent ) && types.isLiteral( expressionSource.alternate ) ) {
 				// If we are dealing with twoo literals, we can just replace the ternary expression with a binary expression.
-				const combinedBinaryExpression = createCombinedBinaryExpression( [ ...parts1, expressionSource.consequent, ...parts2, expressionSource.alternate, ...parts3 ], '+', types );
+				const combinedBinaryExpression = createCombinedBinaryExpression( parts, '+', types );
 				currentPath.replaceWith( combinedBinaryExpression );
 			} else {
 				// Create a JSX Fragment to wrap the result.

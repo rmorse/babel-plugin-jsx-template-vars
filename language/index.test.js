@@ -131,6 +131,7 @@ describe('language runtime', () => {
 				],
 				0
 			)).toBe("if ( $data['status'] === 'ready' ) {");
+			expect(getLanguageControl([ 'else', 'open' ], [], 0)).toBe('} else {');
 		});
 	});
 
