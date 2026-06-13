@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only changes
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="$(git rev-parse HEAD)"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$base" =~ ^0+$ ]]; then
+            changed_files="$(git diff-tree --no-commit-id --name-only -r "$head")"
+          else
+            changed_files="$(git diff --name-only "$base" "$head")"
+          fi
+
+          if [[ -z "$changed_files" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "$changed_files"
+
+          docs_only=true
+          while IFS= read -r file; do
+            if [[ ! "$file" == *.md ]]; then
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Skip tests for docs-only changes
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Only Markdown files changed; skipping test commands."
+
+      - name: Set up Node.js
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.changes.outputs.docs_only != 'true'
+        run: npm ci
+
+      - name: Run tests
+        if: steps.changes.outputs.docs_only != 'true'
+        run: npm test
+
+      - name: Run coverage
+        if: steps.changes.outputs.docs_only != 'true'
+        run: npm run test:coverage
+
+      - name: Verify package contents
+        if: steps.changes.outputs.docs_only != 'true'
+        run: npm pack --dry-run
