@@ -14,7 +14,7 @@ const Item = ({ label, active }) => {
 };
 Item.templateVars = [
 	'label',
-	[ 'active', { type: 'control' } ],
+	'active',
 ];
 
 const App = ({ title, items, status }) => {
@@ -32,18 +32,9 @@ const App = ({ title, items, status }) => {
 };
 App.templateVars = [
 	'title',
-	[ 'status', { type: 'control' } ],
-	[
-		'items',
-		{
-			type: 'list',
-			aliases: [ 'renderedItems' ],
-			child: {
-				type: 'object',
-				props: [ 'label', 'active' ],
-			},
-		},
-	],
+	'status',
+	'items[].label',
+	'items[].active',
 ];
 
 module.exports = { App };

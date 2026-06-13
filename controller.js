@@ -14,12 +14,15 @@ const { ControlController } = require('./controllers/control');
  * @param {Object} vars The vars to generate uids for.
  * @returns 
  */
-function generateVarTypeUids(scope, vars) {
+function generateVarTypeUids(scope, vars, sharedVarMap = {}) {
 	const varMap = {};
 	const varNames = [];
 	vars.forEach(([varName, varConfig]) => {
-		const newIdentifier = scope.generateUidIdentifier("uid");
-		varMap[varName] = newIdentifier.name;
+		if ( ! sharedVarMap[ varName ] ) {
+			const newIdentifier = scope.generateUidIdentifier("uid");
+			sharedVarMap[ varName ] = newIdentifier.name;
+		}
+		varMap[varName] = sharedVarMap[ varName ];
 		varNames.push(varName);
 	});
 
@@ -40,14 +43,15 @@ const templateVarsController = {
 	},
 	contextIdentifier: null,
 	recursionIdentifier: null,
-	init: function (templateVars, componentName, componentPath, babel) {
+	init: function (templateVars, componentName, componentPath, babel, config = {}) {
 		this.babel = babel;
 		const { types, parse } = babel;
 		// Get the three types of template vars.
 		const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
+		const sharedVarMap = {};
 
 		// Build the map of vars to replace.
-		const replaceVarsParsed = generateVarTypeUids(componentPath.scope, replaceVars);
+		const replaceVarsParsed = generateVarTypeUids(componentPath.scope, replaceVars, sharedVarMap);
 		this.vars.replace = {
 			raw: replaceVars,
 			mapped: replaceVarsParsed[0],
@@ -57,7 +61,7 @@ const templateVarsController = {
 		//replaceVarsInv
 
 		// Get the control vars names
-		const [controlVarsMap, controlVarsNames] = generateVarTypeUids(componentPath.scope, controlVars);
+		const [controlVarsMap, controlVarsNames] = generateVarTypeUids(componentPath.scope, controlVars, sharedVarMap);
 		this.vars.control = {
 			raw: controlVars,
 			mapped: controlVarsMap,
@@ -65,12 +69,15 @@ const templateVarsController = {
 		}
 
 		// Build the map of var lists.
-		const [listVarsMap, listVarsNames] = generateVarTypeUids(componentPath.scope, listVars);
+		const [listVarsMap, listVarsNames] = generateVarTypeUids(componentPath.scope, listVars, sharedVarMap);
 		this.vars.list = {
 			raw: listVars,
 			mapped: listVarsMap,
+			mapInv: Object.fromEntries(Object.entries(listVarsMap).map(a => a.reverse())),
 			names: listVarsNames,
 			toTag: {},
+			listMetadata: templateVars.listMetadata || [],
+			scalarMetadata: templateVars.scalarMetadata || [],
 		}
 
 
@@ -105,9 +112,13 @@ const templateVarsController = {
 		this.recursionIdentifier = componentPath.scope.generateUidIdentifier("uid");
 		let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
-		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel);
-		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel);
-		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel);
+		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel, config);
+		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
+		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
+		if (types.isObjectPattern(componentParam)) {
+			const componentParamPath = componentPath.get('declarations.0.init.params.0');
+			listController.registerPatternAliases(componentParam, [], componentParamPath);
+		}
 
 
 		// Prevent infinite recursion by adding early return statements.
@@ -153,9 +164,9 @@ const templateVarsController = {
 				// and if so, inject a `__context__` JSXAttribute.
 				if (isJSXElementComponent(subPath)) {
 					let expression;
-					// check if the component is inside a `map` and increase the context by 1
-					if (parentPathHasMap(subPath, types)) {
-						expression = types.binaryExpression('+', self.contextIdentifier, types.numericLiteral(1));
+					const contextOffset = listController.getContainingListContextOffset(subPath);
+					if (contextOffset > 0) {
+						expression = types.binaryExpression('+', self.contextIdentifier, types.numericLiteral(contextOffset));
 					} else {
 						expression = types.identifier(self.contextIdentifier.name);
 					}
@@ -277,6 +288,26 @@ const templateVarsController = {
 				replaceController.updateIdentifierNames(subPath);
 				listController.updateIdentifierNames(subPath);
 			},
+			VariableDeclarator(subPath) {
+				listController.trackVariableAliases(subPath);
+			},
+			AssignmentExpression(subPath) {
+				listController.trackAssignmentAliases(subPath);
+			},
+			CallExpression(subPath) {
+				listController.trackMapAliases(subPath);
+			},
+			ConditionalExpression(subPath) {
+				controlController.updateTernaryExpressions(subPath.node, subPath);
+			},
+			MemberExpression(subPath) {
+				controlController.updateTernaryMemberConditions(subPath);
+				replaceController.updateMemberExpressionNames(subPath);
+			},
+			OptionalMemberExpression(subPath) {
+				controlController.updateTernaryMemberConditions(subPath);
+				replaceController.updateMemberExpressionNames(subPath);
+			},
 			// Track vars in JSX expressions in case we need have any control vars to process
 			JSXExpressionContainer(subPath) {
 				const { expression: containerExpression } = subPath.node;
@@ -303,23 +334,6 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 	);
 	return earlyReturn;
 }
-
-
-// check if any parent paths contain a map call
-function parentPathHasMap(path, types) {
-	let parentPath = path.parentPath;
-	while (parentPath) {
-		if (types.isCallExpression(parentPath.node) && types.isMemberExpression(parentPath.node.callee)) {
-			const memberExpression = parentPath.node.callee;
-			if (types.isIdentifier(memberExpression.property) && memberExpression.property.name === 'map') {
-				return true;
-			}
-		}
-		parentPath = parentPath.parentPath;
-	}
-	return false;
-}
-
 
 
 module.exports = templateVarsController;

@@ -37,23 +37,8 @@
 			"open": "if ( [%variable] !== [%variable] ) {",
 			"close": "}"
 		},
-
-		
-		"if": {
-			"open": "if ( [%_condition_] ) {",
-			"close": "}"
-		},
-		"elseif": {
-			"open": "else if ( [%_condition_] ) {",
-			"close": "}"
-		},
 		"else": {
-			"open": "else {",
-			"close": "}"
-		},
-		"end": {
-			"open": "}",
-			"close": ""
+			"open": "} else {"
 		}
 	}
 }

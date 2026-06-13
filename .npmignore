@@ -1,6 +1,8 @@
 .github
 .nvmrc
+agents
 coverage
+fixtures
 node_modules
 test-utils
 vitest.config.*
