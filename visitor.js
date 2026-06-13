@@ -163,7 +163,7 @@ function templateVarsVisitor( babel, config ) {
 				return;
 			}
 
-			templateVarsController.init( templateVars, componentPath, babel );
+			templateVarsController.init( templateVars, componentName, componentPath, babel );
 		}
 	}
 };

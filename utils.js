@@ -92,7 +92,7 @@ function isJSXElementComponent( path ) {
 	return false;
 }
 
-function isJSXElementTextInput( subPath ) {
+function isJSXElementInput( subPath ) {
 	const element = subPath.node;
 	if ( ! element.openingElement ) {
 		return false;
@@ -102,21 +102,32 @@ function isJSXElementTextInput( subPath ) {
 	if ( name?.name !== 'input' ) {
 		return false;
 	}
-	// Now check to see if the elements `type` attribute is set to `text`.
-	const typeAttr = element.openingElement.attributes.find( ( attr ) => {
-		return attr?.name?.name === 'type';
-	} );
-	
-	if ( ! typeAttr ) {
-		return false;
-	}
-	const { value } = typeAttr;
-	if ( value.value !== 'text' ) {
-		return false;
-	}
 	return true;
-
 }
+
+function getLanguageCallExpression( targets, args, context, types ) {
+	const targetsNodes = targets.map( target => types.stringLiteral( target ) );
+
+	// using types, create a new object with the properties "type" and "value":
+	const argsNodes = [];
+	args.map( ( arg ) => {
+		const objectWithProps = types.objectExpression( [
+			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
+			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
+		] );
+		argsNodes.push( objectWithProps );
+	} );
+		
+	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
+}
+function getLanguageListCallExpression( action, name, context, types ) {
+	const nameObject = types.objectExpression( [
+		types.objectProperty( types.identifier('type'), types.stringLiteral( 'identifier' ) ),
+		types.objectProperty( types.identifier('value'), types.stringLiteral( name ) ),
+	] );
+	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, types.identifier( context ) ] );
+}
+
 
 module.exports = {
 	getExpressionArgs,
@@ -124,5 +135,7 @@ module.exports = {
 	getObjectFromExpression,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
-	isJSXElementTextInput,
+	isJSXElementInput,
+	getLanguageCallExpression,
+	getLanguageListCallExpression,
 };

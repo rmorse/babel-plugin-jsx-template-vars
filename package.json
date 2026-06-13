@@ -1,10 +1,12 @@
 {
   "name": "babel-plugin-jsx-template-vars",
-  "version": "0.0.9",
+  "version": "0.0.10-beta.0",
   "description": "A Babel transform for rendering a template friendly version your React / Preact app for Server Side Rendering. Supports PHP and Handlebars.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "repository": {
     "type": "git",
@@ -27,6 +29,10 @@
     "url": "https://github.com/rmorse/babel-plugin-jsx-template-vars/issues"
   },
   "homepage": "https://github.com/rmorse/babel-plugin-jsx-template-vars#readme",
-  "devDependencies": {},
-  "dependencies": {}
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/plugin-transform-react-jsx": "7.29.7",
+    "@vitest/coverage-v8": "4.1.8",
+    "vitest": "4.1.8"
+  }
 }

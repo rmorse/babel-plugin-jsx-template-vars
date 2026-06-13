@@ -15,7 +15,7 @@ class ReplaceController {
 		this.vars.raw.forEach( ( templateVar ) => {
 			const [ varName, varConfig ] = templateVar;
 			// Alway declare as `let` so we don't need to worry about its usage later.
-			const replaceString = `getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } )`; 
+			const replaceString = `getLanguageString( [ 'language', 'open' ], [], ${ this.contextName } ) + getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } ) + getLanguageString( [ 'language', 'close' ], [], ${ this.contextName } )`; 
 			path.node.body.unshift( parse(`let ${ self.vars.mapped[ varName ] } = ${ replaceString };`) );
 		} );
 	}
@@ -33,7 +33,7 @@ class ReplaceController {
 			// Now lets carefully update the node in 'ObjectProperty' types.
 			// We can only re-assign the property value name, not the property key name
 			// So we want { varName } to become { varName: _uid } or { something: varName } to become { something: _uid }
-			if ( types.isObjectProperty( path.parentPath.node ) ) {
+			if ( types.isObjectProperty( path.parentPath.node ) && ! types.isObjectPattern( path.parentPath.parentPath.node ) ) {
 				if ( types.isIdentifier( path.parentPath.node.value ) ) {
 					const valueName = path.parentPath.node.value.name;
 					if ( this.vars.names.includes( valueName ) ) {

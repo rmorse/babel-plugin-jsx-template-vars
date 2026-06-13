@@ -81,7 +81,7 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
  export function getLanguageString( targetPath = [], argsArray = [], context ) {
 	let languagePart = window.templateVarsLanguage;
 	targetPath.forEach( ( target, index ) => {
-		if ( languagePart[ target ] ) {
+		if ( typeof languagePart[ target ] !== 'undefined' ) {
 			languagePart = languagePart[ target ];
 		}
 	} );

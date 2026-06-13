@@ -1,36 +1,43 @@
 
 {
 	"name": "handlebars",
-
+	"variables": {
+		"variable": "[%_variable_]",
+		"subvariable": "[%_variable_]"
+	},
+	"language": {
+		"open": "",
+		"close": ""
+	},
 	"replace": {
-		"format": "{{[%_variable_]}}"
+		"format": "{{[%variable]}}"
 	},
 	"list": {
-		"open": "{{#[%_variable_]}}",
-		"close": "{{/[%_variable_]}}",
-		"objectProperty": "{{[%_variable_]}}",
+		"open": "{{#[%variable]}}",
+		"close": "{{/[%variable]}}",
+		"objectProperty": "{{[%subvariable]}}",
 		"primitive": "{{.}}"
 	},
 	"control": {
 		"ifTruthy": {
-			"open": "{{#if_truthy [%_variable_]}}",
-			"close": "{{/if_truthy}}"
+			"open": "{{#if [%variable]}}",
+			"close": "{{/if}}"
 		},
 		"ifFalsy": {
-			"open": "{{#if_falsy [%_variable_]}}",
-			"close": "{{/if_falsy}}"
+			"open": "{{#unless [%variable]}}",
+			"close": "{{/unless}}"
 		},
 		"ifEqual": {
-			"open": "{{#if_equal [%_variable_] [%_variable_]}}",
+			"open": "{{#if_equal [%variable] [%variable]}}",
 			"close": "{{/if_equal}}"
 		},
 		"ifNotEqual": {
-			"open": "{{#if_not_equal [%_variable_] [%_variable_]}}",
+			"open": "{{#if_not_equal [%variable] [%variable]}}",
 			"close": "{{/if_not_equal}}"
 		},
 		"else": {
 			"open": "{{else}}",
-			"close": "{{/else}}"
+			"close": ""
 		}
 	}
 }

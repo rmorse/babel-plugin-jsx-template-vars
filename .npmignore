@@ -1,0 +1,6 @@
+.github
+coverage
+node_modules
+test-utils
+vitest.config.*
+**/*.test.js
