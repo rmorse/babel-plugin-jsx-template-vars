@@ -198,6 +198,18 @@ describe('ListController', () => {
 		expect(normalizeTemplateOutput(php.output)).toBe("<section><?php foreach ( $data['items'] as $data_1 ) { ?><?php echo $data_1; ?><?php } ?></section>");
 	});
 
+	it('throws for direct object root list rendering', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <section>{ items }</section>;
+			};
+			App.templateVars = [ 'items[].label' ];
+			module.exports = { App };
+		`;
+
+		await expect(renderTemplateFixture('handlebars', source, 'App', {})).rejects.toThrow(/Cannot render object list "items" directly/);
+	});
+
 	it('does not treat non-map list member calls as list wrapping usage', async () => {
 		const source = `
 			const App = ({ items }) => {

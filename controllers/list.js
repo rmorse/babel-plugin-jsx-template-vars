@@ -5,6 +5,16 @@ const {
 	getMemberExpressionSegments,
 } = require( "../utils" );
 const { createCombinedBinaryExpression } = require( "./control" );
+const diagnostics = require( "../diagnostics" );
+
+const safeListChainMethods = new Set( [
+	'filter',
+	'slice',
+	'sort',
+	'toSorted',
+	'reverse',
+	'toReversed',
+] );
 
 class ListController {
 	constructor( vars, contextName, babel ) {
@@ -15,11 +25,15 @@ class ListController {
 		this.listMetadataByPath = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.listMetadataBySourceKey = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.sourceKey, meta ] ) );
 		this.scalarMetadataByPath = new Map( ( vars.scalarMetadata || [] ).map( meta => [ meta.path, meta ] ) );
+		this.pathAliasesByBinding = new WeakMap();
+		this.renderedListAliasesByBinding = new WeakMap();
 
 		this.initVars = this.initVars.bind( this );
 		this.buildDeclaration = this.buildDeclaration.bind( this );
 		this.updateIdentifierNames = this.updateIdentifierNames.bind( this );
 		this.updateJSXListExpressions = this.updateJSXListExpressions.bind( this );
+		this.trackVariableAliases = this.trackVariableAliases.bind( this );
+		this.trackAssignmentAliases = this.trackAssignmentAliases.bind( this );
 		this.trackMapAliases = this.trackMapAliases.bind( this );
 		this.getContainingListContextOffset = this.getContainingListContextOffset.bind( this );
 		this.resolveTemplateArg = this.resolveTemplateArg.bind( this );
@@ -36,6 +50,109 @@ class ListController {
 
 			this.registerConfigTagAliases( varName, varConfig );
 		} );
+	}
+
+	trackVariableAliases( path ) {
+		const { types } = this.babel;
+		const { id, init } = path.node;
+
+		if ( ! init ) {
+			return;
+		}
+
+		if ( types.isIdentifier( id ) ) {
+			const renderedUsage = this.resolveRenderedListUsage( init, path );
+			if ( renderedUsage && renderedUsage.kind !== 'source' ) {
+				this.registerRenderedListAlias( id.name, renderedUsage.metadata, path );
+				return;
+			}
+
+			const sourceSegments = this.resolveExpressionSegments( init, path );
+			if ( sourceSegments ) {
+				this.registerPathAlias( id.name, sourceSegments, path );
+			}
+			return;
+		}
+
+		if ( types.isObjectPattern( id ) ) {
+			const sourceSegments = this.resolveExpressionSegments( init, path );
+			if ( sourceSegments ) {
+				this.registerPatternAliases( id, sourceSegments, path );
+			}
+		}
+	}
+
+	trackAssignmentAliases( path ) {
+		const { types } = this.babel;
+		const { left, right } = path.node;
+
+		if ( ! types.isIdentifier( left ) ) {
+			return;
+		}
+
+		const renderedUsage = this.resolveRenderedListUsage( right, path );
+		if ( renderedUsage && renderedUsage.kind !== 'source' ) {
+			this.registerRenderedListAlias( left.name, renderedUsage.metadata, path );
+			return;
+		}
+
+		const sourceSegments = this.resolveExpressionSegments( right, path );
+		if ( sourceSegments ) {
+			this.registerPathAlias( left.name, sourceSegments, path );
+		}
+	}
+
+	registerRenderedListAlias( localName, metadata, path ) {
+		this.vars.toTag[ localName ] = metadata;
+		const binding = path.scope.getBinding( localName );
+		if ( binding ) {
+			this.renderedListAliasesByBinding.set( binding.identifier, metadata );
+		}
+	}
+
+	registerPathAlias( localName, segments, path ) {
+		const binding = path.scope.getBinding( localName );
+		if ( ! binding ) {
+			return;
+		}
+
+		this.pathAliasesByBinding.set( binding.identifier, {
+			segments: this.normalizeCanonicalSegments( segments ),
+		} );
+	}
+
+	registerPatternAliases( pattern, baseSegments, path ) {
+		( pattern.properties || [] ).forEach( ( property ) => {
+			if ( property.type === 'RestElement' ) {
+				return;
+			}
+
+			const propertyName = this.getPatternPropertyName( property );
+			if ( ! propertyName ) {
+				return;
+			}
+
+			const propertySegments = [ ...baseSegments, propertyName ];
+			const value = property.value;
+			if ( this.babel.types.isIdentifier( value ) ) {
+				this.registerPathAlias( value.name, propertySegments, path );
+				return;
+			}
+
+			if ( this.babel.types.isObjectPattern( value ) ) {
+				this.registerPatternAliases( value, propertySegments, path );
+			}
+		} );
+	}
+
+	getPatternPropertyName( property ) {
+		if ( this.babel.types.isIdentifier( property.key ) ) {
+			return property.key.name;
+		}
+		if ( this.babel.types.isStringLiteral( property.key ) ) {
+			return property.key.value;
+		}
+		return null;
 	}
 
 	registerConfigTagAliases( varName, varConfig ) {
@@ -211,7 +328,7 @@ class ListController {
 			return false;
 		}
 
-		if ( [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern', 'ObjectPattern' ].includes( parentNode.type ) ) {
+		if ( [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern', 'ObjectPattern', 'AssignmentPattern' ].includes( parentNode.type ) ) {
 			return false;
 		}
 
@@ -227,7 +344,7 @@ class ListController {
 			return true;
 		}
 
-		if ( types.isIdentifier( parentNode.property ) && parentNode.property.name === 'map' ) {
+		if ( types.isIdentifier( parentNode.property ) && ( parentNode.property.name === 'map' || safeListChainMethods.has( parentNode.property.name ) ) ) {
 			return true;
 		}
 
@@ -296,9 +413,30 @@ class ListController {
 			return;
 		}
 
+		this.registerMapCallbackAliases( path, metadata );
+
 		const variableDeclarator = path.parentPath;
 		if ( variableDeclarator && types.isVariableDeclarator( variableDeclarator.node ) && types.isIdentifier( variableDeclarator.node.id ) ) {
-			this.vars.toTag[ variableDeclarator.node.id.name ] = metadata;
+			this.registerRenderedListAlias( variableDeclarator.node.id.name, metadata, variableDeclarator );
+		}
+	}
+
+	registerMapCallbackAliases( path, metadata ) {
+		const callback = path.node.arguments[ 0 ];
+		const firstParam = callback?.params?.[ 0 ];
+		if ( ! firstParam ) {
+			return;
+		}
+
+		const firstParamPath = path.get( 'arguments.0.params.0' );
+		const itemSegments = this.splitCanonicalPath( metadata.path );
+		if ( this.babel.types.isIdentifier( firstParam ) ) {
+			this.registerPathAlias( firstParam.name, itemSegments, firstParamPath );
+			return;
+		}
+
+		if ( this.babel.types.isObjectPattern( firstParam ) ) {
+			this.registerPatternAliases( firstParam, itemSegments, firstParamPath );
 		}
 	}
 
@@ -309,23 +447,49 @@ class ListController {
 			return;
 		}
 
-		const metadata = this.resolveRenderedListMeta( expressionSource, path );
-		if ( ! metadata ) {
+		const usage = this.resolveRenderedListUsage( expressionSource, path );
+		if ( ! usage ) {
 			return;
 		}
 
-		const partsBefore = this.createListWrapperParts( metadata, 'open' );
-		const partsAfter = this.createListWrapperParts( metadata, 'close' );
+		this.assertRenderableListUsage( usage, path );
+
+		const partsBefore = this.createListWrapperParts( usage.metadata, 'open' );
+		const partsAfter = this.createListWrapperParts( usage.metadata, 'close' );
 
 		partsBefore.forEach( part => path.insertBefore( part ) );
 		partsAfter.reverse().forEach( part => path.insertAfter( part ) );
 	}
 
 	resolveRenderedListMeta( expressionSource, path ) {
+		const usage = this.resolveRenderedListUsage( expressionSource, path );
+		return usage ? usage.metadata : null;
+	}
+
+	resolveRenderedListUsage( expressionSource, path ) {
 		const { types } = this.babel;
 
-		if ( types.isIdentifier( expressionSource ) && this.vars.toTag[ expressionSource.name ] ) {
-			return this.vars.toTag[ expressionSource.name ];
+		if ( types.isIdentifier( expressionSource ) ) {
+			const binding = path.scope.getBinding( expressionSource.name );
+			if ( binding && this.renderedListAliasesByBinding.has( binding.identifier ) ) {
+				return {
+					kind: 'renderedAlias',
+					metadata: this.renderedListAliasesByBinding.get( binding.identifier ),
+				};
+			}
+
+			if ( this.vars.toTag[ expressionSource.name ] ) {
+				return {
+					kind: this.vars.names.includes( expressionSource.name ) ? 'source' : 'renderedAlias',
+					metadata: this.vars.toTag[ expressionSource.name ],
+				};
+			}
+
+			const sourceMetadata = this.resolveListMetaFromExpression( expressionSource, path );
+			return sourceMetadata ? {
+				kind: 'source',
+				metadata: sourceMetadata,
+			} : null;
 		}
 
 		if (
@@ -334,10 +498,37 @@ class ListController {
 			types.isIdentifier( expressionSource.callee.property ) &&
 			expressionSource.callee.property.name === 'map'
 		) {
-			return this.resolveListMetaFromExpression( expressionSource.callee.object, path );
+			const metadata = this.resolveListMetaFromExpression( expressionSource.callee.object, path );
+			return metadata ? {
+				kind: 'mapCall',
+				metadata,
+			} : null;
+		}
+
+		if ( types.isCallExpression( expressionSource ) ) {
+			const metadata = this.resolveSingleListArgumentMeta( expressionSource, path );
+			return metadata ? {
+				kind: 'helperCall',
+				metadata,
+			} : null;
 		}
 
 		return null;
+	}
+
+	assertRenderableListUsage( usage, path ) {
+		if ( usage.kind !== 'source' ) {
+			return;
+		}
+
+		if ( this.getListItemKind( usage.metadata ) === 'primitive' ) {
+			return;
+		}
+
+		diagnostics.error(
+			path,
+			`Cannot render object list "${ usage.metadata.sourceKey }" directly. Use .map(), a rendered .map() alias, or a helper call that renders the list items.`
+		);
 	}
 
 	createListWrapperParts( metadata, action ) {
@@ -372,7 +563,7 @@ class ListController {
 			return arg;
 		}
 
-		const segments = arg.segments || [ arg.value ];
+		const segments = this.resolvePathSegments( arg.segments || [ arg.value ], path );
 		const scalarMetadata = this.resolveScalarMetaFromSegments( segments, path );
 		if ( scalarMetadata ) {
 			return {
@@ -399,7 +590,7 @@ class ListController {
 	}
 
 	resolveScalarMetaFromSegments( segments, path ) {
-		const directPath = [ this.normalizeRootSegment( segments[ 0 ] ), ...segments.slice( 1 ) ].join( '.' );
+		const directPath = this.normalizeCanonicalSegments( segments ).join( '.' );
 		if ( this.scalarMetadataByPath.has( directPath ) ) {
 			return this.scalarMetadataByPath.get( directPath );
 		}
@@ -419,7 +610,11 @@ class ListController {
 	}
 
 	resolveListMetaFromExpression( expression, path ) {
-		const segments = getMemberExpressionSegments( expression, this.babel.types );
+		if ( this.isSafeListChainCall( expression ) ) {
+			return this.resolveListMetaFromExpression( expression.callee.object, path );
+		}
+
+		const segments = this.resolveExpressionSegments( expression, path );
 		if ( ! segments ) {
 			return null;
 		}
@@ -428,7 +623,7 @@ class ListController {
 	}
 
 	resolveListMetaFromSegments( segments, path ) {
-		const sourceKey = [ this.normalizeRootSegment( segments[ 0 ] ), ...segments.slice( 1 ) ].join( '.' );
+		const sourceKey = this.normalizeCanonicalSegments( segments ).join( '.' );
 		if ( this.listMetadataBySourceKey.has( sourceKey ) ) {
 			return this.listMetadataBySourceKey.get( sourceKey );
 		}
@@ -445,6 +640,78 @@ class ListController {
 
 		const nestedSourceKey = `${ parentMetadata.path }.${ segments.slice( 1 ).join( '.' ) }`;
 		return this.listMetadataBySourceKey.get( nestedSourceKey ) || null;
+	}
+
+	resolveSingleListArgumentMeta( expression, path ) {
+		const metas = expression.arguments
+			.map( argument => this.resolveListMetaFromExpression( argument, path ) )
+			.filter( Boolean );
+
+		if ( metas.length !== 1 ) {
+			return null;
+		}
+
+		return metas[ 0 ];
+	}
+
+	resolveExpressionSegments( expression, path ) {
+		const { types } = this.babel;
+
+		if ( types.isIdentifier( expression ) ) {
+			return this.resolveIdentifierSegments( expression.name, path );
+		}
+
+		if ( this.isStaticMemberExpression( expression ) ) {
+			const objectSegments = this.resolveExpressionSegments( expression.object, path );
+			if ( ! objectSegments || ! types.isIdentifier( expression.property ) ) {
+				return null;
+			}
+
+			return [ ...objectSegments, expression.property.name ];
+		}
+
+		if ( this.isSafeListChainCall( expression ) ) {
+			return this.resolveExpressionSegments( expression.callee.object, path );
+		}
+
+		return null;
+	}
+
+	resolvePathSegments( segments, path ) {
+		if ( ! segments || segments.length === 0 ) {
+			return segments;
+		}
+
+		const rootSegments = this.resolveIdentifierSegments( segments[ 0 ], path );
+		return [ ...rootSegments, ...segments.slice( 1 ) ];
+	}
+
+	resolveIdentifierSegments( name, path ) {
+		const binding = path?.scope?.getBinding( name );
+		if ( binding && this.pathAliasesByBinding.has( binding.identifier ) ) {
+			return this.pathAliasesByBinding.get( binding.identifier ).segments;
+		}
+
+		return [ this.normalizeRootSegment( name ) ];
+	}
+
+	isStaticMemberExpression( expression ) {
+		const { types } = this.babel;
+		return (
+			types.isMemberExpression( expression ) ||
+			( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
+			expression?.type === 'OptionalMemberExpression'
+		) && ! expression.computed;
+	}
+
+	isSafeListChainCall( expression ) {
+		const { types } = this.babel;
+		return (
+			types.isCallExpression( expression ) &&
+			this.isStaticMemberExpression( expression.callee ) &&
+			types.isIdentifier( expression.callee.property ) &&
+			safeListChainMethods.has( expression.callee.property.name )
+		);
 	}
 
 	findCallbackListContext( path, paramName ) {
@@ -500,8 +767,52 @@ class ListController {
 		return this.listMetadataByPath.get( node.path ) || node;
 	}
 
+	getListItemKind( metadata ) {
+		let listNode = null;
+		for ( const rootConfig of this.rootConfigByName.values() ) {
+			listNode = this.findListNodeInConfig( rootConfig, metadata.path );
+			if ( listNode ) {
+				break;
+			}
+		}
+		return listNode?.item?.kind || 'primitive';
+	}
+
+	findListNodeInConfig( node, path ) {
+		if ( ! node ) {
+			return null;
+		}
+
+		if ( node.kind === 'list' && node.path === path ) {
+			return node;
+		}
+
+		if ( node.kind === 'list' ) {
+			return this.findListNodeInConfig( node.item, path );
+		}
+
+		if ( node.kind === 'object' ) {
+			for ( const property of node.properties || [] ) {
+				const found = this.findListNodeInConfig( property, path );
+				if ( found ) {
+					return found;
+				}
+			}
+		}
+
+		return null;
+	}
+
 	normalizeRootSegment( segment ) {
 		return this.vars.mapInv?.[ segment ] || segment;
+	}
+
+	normalizeCanonicalSegments( segments ) {
+		return segments.flatMap( segment => this.splitCanonicalPath( this.normalizeRootSegment( segment ) ) );
+	}
+
+	splitCanonicalPath( path ) {
+		return String( path ).split( '.' ).filter( Boolean );
 	}
 };
 

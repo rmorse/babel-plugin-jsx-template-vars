@@ -96,6 +96,13 @@ function addScalarPath( registry, segments ) {
 			roles: new Set( [ 'replace' ] ),
 		} );
 	}
+	if ( ! registry.scalarsByPath.has( pathName ) ) {
+		registry.scalarsByPath.set( pathName, {
+			path: pathName,
+			segments,
+			contextDepth: 0,
+		} );
+	}
 }
 
 function addShapeDeclaration( registry, declaration, errorPath ) {

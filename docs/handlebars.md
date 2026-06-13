@@ -10,27 +10,25 @@ and `ifNotEqual` control names emitted by the Babel transform.
 Handlebars supports truthy and falsy block rendering with built-in helpers, so
 the preset maps those controls to `{{#if ...}}` and `{{#unless ...}}`.
 
-Strict equality and strict inequality are not built into Handlebars. Any template
-that uses `===` or `!==` control expressions requires compatible helpers to be
-registered before rendering. Those helpers must support both the main block and
-the inverse block because ternary expressions emit `{{else}}` inside the helper
-block:
+Strict equality and strict inequality are not built into Handlebars. Any
+template that uses `===` or `!==` control expressions requires compatible
+helpers to be registered before rendering. This package ships those helpers:
 
 ```js
-Handlebars.registerHelper('if_equal', function (left, right, options) {
-	return left === right ? options.fn(this) : options.inverse(this);
-});
+const {
+	registerJsxTemplateVarsHandlebarsHelpers,
+} = require('babel-plugin-jsx-template-vars/handlebars-helpers');
 
-Handlebars.registerHelper('if_not_equal', function (left, right, options) {
-	return left !== right ? options.fn(this) : options.inverse(this);
-});
+registerJsxTemplateVarsHandlebarsHelpers(Handlebars);
 ```
 
-The package does not ship or register these helpers yet. For now, applications
-using the Handlebars preset must provide compatible helpers themselves before
-using strict equality or strict inequality control variables. That can be a
-project-local helper implementation or an off-the-shelf Handlebars helper
-package, as long as it uses the helper names and inverse-block behavior above.
+The module registers:
+
+- `if_equal`: strict `===`
+- `if_not_equal`: strict `!==`
+
+Both helpers support the main block and inverse block because ternary
+expressions emit `{{else}}` inside the helper block.
 
 ## Ternary output
 
@@ -41,11 +39,5 @@ example, `status === 'ready' ? 'Ready' : 'Waiting'` renders as:
 {{#if_equal status 'ready'}}Ready{{else}}Waiting{{/if_equal}}
 ```
 
-The generated output assumes the equality helpers described above are available.
-This package does not create or register those helpers yet.
-
-## Roadmap
-
-- Ship a helper registration module for Handlebars consumers, or document a
-  supported off-the-shelf helper package.
-- Document where the helper registration belongs in the prerender pipeline.
+The generated output assumes the equality helpers described above are available
+before the template is rendered.

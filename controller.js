@@ -112,9 +112,13 @@ const templateVarsController = {
 		this.recursionIdentifier = componentPath.scope.generateUidIdentifier("uid");
 		let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
-		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel);
 		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel);
+		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
 		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
+		if (types.isObjectPattern(componentParam)) {
+			const componentParamPath = componentPath.get('declarations.0.init.params.0');
+			listController.registerPatternAliases(componentParam, [], componentParamPath);
+		}
 
 
 		// Prevent infinite recursion by adding early return statements.
@@ -284,6 +288,12 @@ const templateVarsController = {
 				replaceController.updateIdentifierNames(subPath);
 				listController.updateIdentifierNames(subPath);
 			},
+			VariableDeclarator(subPath) {
+				listController.trackVariableAliases(subPath);
+			},
+			AssignmentExpression(subPath) {
+				listController.trackAssignmentAliases(subPath);
+			},
 			CallExpression(subPath) {
 				listController.trackMapAliases(subPath);
 			},
@@ -291,6 +301,10 @@ const templateVarsController = {
 				controlController.updateTernaryExpressions(subPath.node, subPath);
 			},
 			MemberExpression(subPath) {
+				controlController.updateTernaryMemberConditions(subPath);
+				replaceController.updateMemberExpressionNames(subPath);
+			},
+			OptionalMemberExpression(subPath) {
 				controlController.updateTernaryMemberConditions(subPath);
 				replaceController.updateMemberExpressionNames(subPath);
 			},

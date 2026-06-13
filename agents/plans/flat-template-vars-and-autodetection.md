@@ -227,15 +227,17 @@ First-pass supported resolution:
 - map callback member access for list items, such as `product.title` inside
   `products.map((product) => ...)`
 
-First-pass unsupported resolution:
+Follow-up supported resolution:
 
 - destructure renames, such as `const { title: headline } = hero`
 - intermediate aliases, such as `const h = hero; h.title`
-- optional chaining, such as `hero?.title`
-- spread props, such as `<Card {...product} />`
-- chained transforms before map, such as `products.filter(...).map(...)`
+- optional member paths, such as `hero?.title`
+- declared spread props in mapped child components, such as
+  `<Card {...product} />`
+- safe chained transforms before map, such as
+  `products.filter(...).map(...)`
 
-Unsupported patterns should remain explicit override territory until they are
+Remaining unsupported patterns should stay documented until they are
 intentionally implemented.
 
 ## Test-First Sequence
@@ -396,8 +398,7 @@ Deliverables:
 - Match root identifiers to root paths.
 - Match simple member expressions to object paths.
 - Match nested list callback item properties to list child paths.
-- Keep an explicit unsupported list for renames, optional chaining, spreads, and
-  complex aliases.
+- Keep an explicit unsupported list for complex aliases and helper dataflow.
 - Add tests for each supported and unsupported pattern.
 
 ## Phase 2: Language Path Arguments
@@ -499,9 +500,9 @@ Document limitations:
 - Ambiguous list shapes may require explicit overrides or simpler local bindings.
 - Child components still need their own declarations.
 - Recursive nested list paths are supported after the context-depth follow-up.
-- Unsupported AST patterns require explicit config or simpler local bindings.
-- Handlebars strict equality and ternary helpers still need to be provided by the
-  consuming app or a compatible helper package.
+- Unsupported AST patterns require simpler local bindings.
+- Handlebars strict equality and ternary helpers are available through the
+  shipped `handlebars-helpers` registration module.
 
 There are no external consumers to preserve during this workstream. Refactor the
 project that uses this package in lockstep with the final API rather than adding
@@ -538,7 +539,7 @@ App.templateVars = [ 'products[].name', 'products[].badges' ];
 ProductCard.templateVars = [ 'name', 'badges[].label' ];
 ```
 
-## Deferred Phase: Broader Alias And List Compatibility
+## Implemented Follow-Up: Broader Alias And List Compatibility
 
 First release alias inference should support simple same-scope map assignment:
 
@@ -556,37 +557,28 @@ It should also support the same alias when wrapped by supported control syntax:
 { visible && renderedProducts }
 ```
 
-Defer broader alias compatibility to follow-up work:
+Additional alias compatibility now covered:
 
 - aliases created through helper functions, such as
   `const renderedProducts = renderProducts(products)`
 - aliases created through reassignment, such as `let renderedProducts;`
 - aliases based on chained calls, such as `products.filter(...).map(...)`
-- aliases that cross function or component boundaries
-- aliases that combine multiple list roots
+- intermediate source aliases, such as `const list = products`
+- destructured list item aliases inside map callbacks
 
-Direct root list compatibility should match current useful behavior in the first
-release:
+Still unsupported:
+
+- helper/render aliases that combine multiple declared list roots
+- arbitrary helper-call dataflow analysis inside helper bodies
+- automatic cross-component inference; each component still declares its own
+  `templateVars`
+
+Direct root list compatibility:
 
 - primitive root list rendering remains supported:
   `{ favoriteColors }`
-- object root list rendering is not documented as supported because today's
-  output is `[object Object]`
-
-Verified current output:
-
-```hbs
-<section>{{#items}}{{.}}{{/items}}</section>
-<section>{{#items}}[object Object]{{/items}}</section>
-```
-
-```php
-<section><?php foreach ( $data['items'] as $data_1 ) { ?><?php echo $data_1; ?><?php } ?></section>
-<section><?php foreach ( $data['items'] as $data_1 ) { ?>[object Object]<?php } ?></section>
-```
-
-Follow-up work can add diagnostics for object root list rendering, or support a
-new explicit rendering semantic if we define what markup should be generated.
+- object root list rendering now throws a transform error; use `.map()`, a
+  rendered `.map()` alias, or a helper call that renders the list items
 
 ## Release Gate
 
@@ -617,12 +609,11 @@ Do not document or release the flat API until these checks pass:
   conflicting declarations and the chosen rule. `products[]` plus
   `products[].title` upgrades to an object list; incompatible shapes that cannot
   be safely upgraded should throw.
-- First release alias inference should support simple same-scope map assignment
-  and control-wrapped aliases. Broader alias detection belongs in the deferred
-  alias compatibility phase.
-- Primitive direct root list rendering is supported today and should remain
-  supported. Object direct root list rendering currently outputs
-  `[object Object]`; do not document it as supported without new semantics.
+- Alias inference supports simple same-scope map assignment, control-wrapped
+  aliases, reassignment, helper calls with one declared list source, and safe
+  chained list transforms before `.map()`.
+- Primitive direct root list rendering is supported. Object direct root list
+  rendering throws a transform error rather than outputting `[object Object]`.
 - Path-aware language args are the final contract for nested paths. Update
   bundled and project language definitions directly; do not add custom-language
   compatibility shims.
@@ -638,11 +629,10 @@ whose source usage cannot be inferred safely.
 
 ## Remaining Open Questions
 
-- What exact diagnostics API should be exposed internally to tests?
 - Should unsupported but valid source usage warn by default, or only when a
   future `strict` option is enabled?
-- What explicit override syntax, if any, should remain in the new registry model
-  for intentionally ambiguous cases?
+- Should helper calls that combine multiple declared list roots get a specialized
+  diagnostic when rendered directly?
 
 ## Recommended Next Step
 

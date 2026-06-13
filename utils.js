@@ -17,7 +17,7 @@ function getMemberExpressionSegments( expression, types ) {
 		return [ expression.name ];
 	}
 
-	if ( ! types.isMemberExpression( expression ) || expression.computed ) {
+	if ( ! isStaticMemberExpression( expression, types ) ) {
 		return null;
 	}
 
@@ -31,6 +31,14 @@ function getMemberExpressionSegments( expression, types ) {
 	}
 
 	return null;
+}
+
+function isStaticMemberExpression( expression, types ) {
+	const isMemberExpression = types.isMemberExpression( expression ) ||
+		( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
+		expression?.type === 'OptionalMemberExpression';
+
+	return isMemberExpression && ! expression.computed;
 }
 
 function getExpressionPath( expression, types ) {
@@ -52,7 +60,7 @@ function getExpressionArgs( expression, types ) {
 	} else if ( types.isLiteral( expression ) ) {
 		// Should handle booleans, integers, floats etc
 		args.push( { type: 'value', value: String( expression.value ) } );
-	} else if ( types.isMemberExpression( expression )) {
+	} else if ( isStaticMemberExpression( expression, types )) {
 		const segments = getMemberExpressionSegments( expression, types );
 		if ( segments ) {
 			args.push( { type: 'path', value: segments.join( '.' ), segments } );

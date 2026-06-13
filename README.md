@@ -131,6 +131,17 @@ In this example `show` and `status` are inferred as control variables because
 they are used in supported conditional expressions. If a variable is also
 rendered directly, it can be both a replacement and a control variable.
 
+Handlebars output for strict equality uses the shipped helper registration
+module:
+
+```js
+const {
+    registerJsxTemplateVarsHandlebarsHelpers,
+} = require('babel-plugin-jsx-template-vars/handlebars-helpers');
+
+registerJsxTemplateVarsHandlebarsHelpers(Handlebars);
+```
+
 
 ### 3. Lists (and repeatable elements)
 
@@ -201,10 +212,13 @@ Person.templateVars = [ 'profile.name', 'profile.favoriteColor' ];
 ```
 
 Supported source patterns include bare identifiers, simple object member paths,
-nested object member paths, direct `.map()` usage on declared list paths, nested
-map callbacks, and same-scope aliases assigned from `.map()`. Destructure
-renames, optional chaining, spreads, chained list transforms before `.map()`,
-and aliases that cross component/function boundaries are not supported yet.
+nested object member paths, optional member paths, destructure renames,
+intermediate aliases, direct `.map()` usage on declared list paths, safe chained
+list transforms before `.map()`, nested map callbacks, reassigned render aliases,
+helper calls with a single declared list source, declared spread props in mapped
+child components, and same-scope aliases assigned from `.map()`. Automatic
+cross-component inference remains intentionally unsupported; each component still
+declares its own `templateVars`.
 
 ## Working examples
 

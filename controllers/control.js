@@ -155,7 +155,7 @@ class ControlController {
 		}
 
 		// map these to handlebars helper functions and replace the expression with the helper tag.
-		if ( sourceExpression.type === 'Identifier' || sourceExpression.type === 'MemberExpression' ) {
+		if ( sourceExpression.type === 'Identifier' || sourceExpression.type === 'MemberExpression' || sourceExpression.type === 'OptionalMemberExpression' ) {
 			statementType = 'ifTruthy';
 		} else if ( sourceExpression.type === 'UnaryExpression' ) {
 			if ( sourceExpression.operator === '!' ) {
@@ -315,6 +315,7 @@ function isControlExpression( expression ) {
 	const controlExpressionTypes = [
 		'Identifier',
 		'MemberExpression',
+		'OptionalMemberExpression',
 		'UnaryExpression',
 		'LogicalExpression',
 	];

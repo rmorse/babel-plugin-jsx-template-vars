@@ -54,6 +54,12 @@ as a list.
 `[]` declares shape only. It does not wrap arbitrary usages. Calls such as
 `items.join(', ')` remain normal JavaScript.
 
+Primitive root lists can be rendered directly, such as `{ tags }` for
+`tags[]`. Object root lists must be rendered with `.map()`, a rendered `.map()`
+alias, or a helper call that renders the item markup. Rendering `{ products }`
+for `products[].title` throws a transform error instead of producing
+`[object Object]`.
+
 ## Nested Lists And Context
 
 Nested list wrappers are generated relative to the current list context.
@@ -113,18 +119,23 @@ Supported:
 - nested member paths, such as `hero.media.url`
 - `.map()` directly on a declared list path
 - same-scope aliases assigned from `.map()`
+- reassigned render aliases, such as `let rendered; rendered = items.map(...)`
+- safe chained list transforms before `.map()`, such as
+  `items.filter(Boolean).map(...)`
+- helper calls with one declared list source, such as `renderItems(items)`
 - list item member paths inside map callbacks, such as `product.name`
 - nested map callbacks, such as `section.products.map(...)`
+- optional member paths, such as `hero?.summary`
+- destructure renames and intermediate aliases, such as
+  `const { title: heading } = hero` or `const h = hero`
+- declared spread props in mapped child components, such as
+  `<Card {...product} />`
 - logical controls, such as `product.available && <p />`
 - ternary controls, such as `product.featured ? <strong /> : <span />`
 
 Still unsupported:
 
-- optional chaining, such as `hero?.summary`
-- destructure rename resolution, such as `const { title: heading } = hero`
-- spread inference, such as `<Card {...product} />`
-- chained list transforms before `.map()`, such as
-  `products.filter(Boolean).map(...)`
-- aliases that cross component/function boundaries
+- helper/render aliases that combine multiple declared list roots
+- arbitrary helper-call dataflow analysis inside helper bodies
 - automatic cross-component inference; each component still declares its own
   `templateVars`
