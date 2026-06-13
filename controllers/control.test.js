@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import babel from '@babel/core';
+import {
+	normalizeTemplateOutput,
+	renderTemplateFixture,
+} from '../test-utils/transform.js';
 
 const require = createRequire(import.meta.url);
 const {
@@ -71,5 +75,33 @@ describe('ControlController', () => {
 			},
 			right: { value: 'c' },
 		});
+	});
+
+	it('renders ternary controls as inverse blocks for both language presets', async () => {
+		const source = `
+			const App = ({ status }) => {
+				return (
+					<p>
+						{ status === 'ready' ? <strong>Ready</strong> : <span>Waiting</span> }
+					</p>
+				);
+			};
+
+			App.templateVars = [
+				[ 'status', { type: 'control' } ],
+			];
+
+			module.exports = { App };
+		`;
+
+		const handlebars = await renderTemplateFixture('handlebars', source, 'App', {});
+		const php = await renderTemplateFixture('php', source, 'App', {});
+
+		expect(normalizeTemplateOutput(handlebars.output)).toBe(
+			"<p>{{#if_equal status 'ready'}}<strong>Ready</strong>{{else}}<span>Waiting</span>{{/if_equal}}</p>"
+		);
+		expect(normalizeTemplateOutput(php.output)).toBe(
+			"<p><?php if ( $data['status'] === 'ready' ) { ?><strong>Ready</strong><?php } else { ?><span>Waiting</span><?php } ?></p>"
+		);
 	});
 });

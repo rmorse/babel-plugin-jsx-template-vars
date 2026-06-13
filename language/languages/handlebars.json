@@ -36,8 +36,7 @@
 			"close": "{{/if_not_equal}}"
 		},
 		"else": {
-			"open": "{{else}}",
-			"close": ""
+			"open": "{{else}}"
 		}
 	}
 }

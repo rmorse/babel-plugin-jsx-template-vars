@@ -9,6 +9,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const defaultFixtureFilename = path.join(repoRoot, '__fixtures__', 'component.jsx');
 
 export const Fragment = Symbol('Fragment');
+export const e2eFixturesDir = path.join(repoRoot, 'fixtures', 'e2e');
 
 export function transformTemplateVars(source, pluginOptions = {}, options = {}) {
 	const plugins = [
@@ -77,6 +78,10 @@ export async function renderTemplateFixture(language, source, exportName, props 
 			globalThis.window = previousWindow;
 		}
 	}
+}
+
+export function normalizeTemplateOutput(value) {
+	return String(value).replace(/\r\n/g, '\n').trim();
 }
 
 function h(type, props, ...children) {

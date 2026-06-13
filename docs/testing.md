@@ -44,6 +44,7 @@ the plugin as a whole:
 
 ```text
 index.test.js
+e2e.test.js
 ```
 
 Shared test helpers live in:
@@ -54,6 +55,17 @@ test-utils/
 
 Do not add production code to `test-utils`. It is excluded from published npm
 packages.
+
+End-to-end sample fixtures live in:
+
+```text
+fixtures/e2e/<case-name>/input.jsx
+fixtures/e2e/<case-name>/expected.handlebars.html
+fixtures/e2e/<case-name>/expected.php.html
+```
+
+Fixtures should represent final output contracts. Prefer a small number of
+realistic fixtures over many tiny fixtures that duplicate unit coverage.
 
 ## What to test
 
@@ -99,6 +111,11 @@ without adding React or Preact as test dependencies.
 Use it when a test needs to verify final template strings for both PHP and
 Handlebars. Keep the helper generic; language-specific expectations belong in
 the tests.
+
+For fixture-based e2e tests, compare the normalized final rendered template
+output against expected output files. These tests should catch regressions in
+the public PHP/Handlebars template contract, not incidental generated Babel
+formatting.
 
 ## Package hygiene
 
