@@ -120,6 +120,17 @@ The target internal model should represent:
 Build one normalized registry from `templateVars`, then derive controller inputs
 from that registry.
 
+The intended final architecture is:
+
+```txt
+templateVars -> normalized registry -> usage-site tagging -> derived controller inputs
+```
+
+`templateVars` declares the data contract. The normalized registry owns path
+shape, validation, and identity. Usage-site tagging determines what each AST
+occurrence is doing. Controller inputs are then derived from those tagged usage
+sites, rather than from mutually exclusive user-declared type buckets.
+
 Conceptual shape:
 
 ```js
