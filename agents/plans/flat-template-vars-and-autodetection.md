@@ -34,19 +34,36 @@ Component.templateVars = [
 	'products[].title',
 	'products[].price',
 	'products[].available',
-	'products[].badges[].label',
 ];
 ```
+
+Review feedback confirmed the direction, with several amendments:
+
+- The normalized registry should be the architecture that ships.
+- Flat paths compiled into legacy list config are acceptable only as an internal
+  stepping stone.
+- `[]` declares data shape. It does not by itself mean "wrap this JSX usage with
+  list tags".
+- List wrapping should be driven by usage, such as `.map()` or a rendered alias
+  assigned from `.map()`.
+- Deep nested list paths are not first-pass scope because today's context and
+  placeholder machinery only support one list level reliably.
+- Multi-role variables and single identity per declared path are release
+  requirements, not optional polish.
 
 ## Goals
 
 - Preserve existing behavior with regression tests before changing the model.
-- Introduce flat path notation for objects and lists.
+- Introduce flat path notation for scalar values, object paths, and one-level
+  lists.
 - Support multiple usage roles for the same declared variable or path.
+- Build a normalized registry early and derive controller inputs from it.
 - Keep explicit legacy config working as an escape hatch and compatibility path.
 - Keep inference conservative: infer only when source usage is clear.
-- Keep custom language output stable by preserving the existing language preset
-  contract unless a separate language change is explicitly required.
+- Add a release gate so partial parser shims cannot become the final
+  architecture accidentally.
+- Keep custom language output stable where possible, but accept that path-aware
+  variables require a documented language argument extension.
 
 ## Non-goals
 
@@ -57,8 +74,12 @@ Component.templateVars = [
 - Do not remove legacy nested config until the flat API is proven and documented.
 - Do not infer complex list child shape from ambiguous patterns such as spread
   props in the first pass.
+- Do not support deep nested list output, such as
+  `products[].badges[].label`, in the first pass.
+- Do not infer template vars across component boundaries. Child components still
+  need their own declarations.
 
-## Key model change
+## Key Model Change
 
 The current buckets are mutually exclusive:
 
@@ -84,16 +105,17 @@ In this model:
 - `status` is both replacement and control.
 - `products` is both control and list.
 - `products[].available` may be both replacement and control inside an item
-  component.
+  component that declares local `available`.
 
 The target internal model should represent:
 
 - declared path: `products[].available`
 - shape: scalar, object, list
 - roles: replace, control, list
-- context depth: root, list item, nested list item
+- context depth: root or one-level list item in the first pass
+- one generated identity per declared path
 
-## Proposed internal registry
+## Proposed Internal Registry
 
 Build one normalized registry from `templateVars`, then derive controller inputs
 from that registry.
@@ -131,7 +153,11 @@ Conceptual shape:
 The exact implementation can be simpler, but this is the conceptual separation
 we need: paths describe data, roles describe usage.
 
-## Flat path grammar
+The registry should be introduced before broad inference work. Even if early
+controller compatibility uses a legacy-config shim, the registry should own path
+identity and validation from the start.
+
+## Flat Path Grammar
 
 Supported first-pass grammar:
 
@@ -142,55 +168,172 @@ hero.media.url
 products[]
 products[].title
 products[].price
+products[].available
+```
+
+Deferred grammar:
+
+```txt
 products[].badges[]
 products[].badges[].label
 ```
 
 Rules:
 
-- `foo` declares a root scalar/object path.
+- `foo` declares a root scalar or object path.
 - `foo.bar` declares a nested object property.
-- `foo[]` declares a primitive list.
+- `foo[]` declares a primitive list item shape when no child paths are declared.
 - `foo[].bar` declares an object-list child property.
-- `foo[].bar[]` declares a nested primitive list.
-- `foo[].bar[].baz` declares a nested object-list child property.
+- `foo[]` plus `foo[].bar` upgrades `foo` to an object list, rather than being
+  treated as a contradiction.
+- `[]` declares data shape only. Actual list wrapping is inferred from JSX usage.
+- Duplicate declarations merge into the same registry entry.
+- Conflicting shapes that cannot be upgraded safely should produce a clear
+  validation error.
 
-Validation should reject contradictory declarations once the rules are clear,
-for example treating the same path as both primitive and object list in the same
-component.
+## Path To AST Resolution
 
-## Test-first sequence
+Flat declarations describe data paths. The transform operates on AST nodes:
 
-Before implementation changes, add tests that lock current behavior:
+```js
+hero.title
+const { title } = hero;
+products.map((product) => product.title)
+```
 
-- Existing replace variables still render in text and attributes.
-- Existing control variables still render truthy, falsy, equality, inequality,
-  and ternary output for PHP and Handlebars.
-- Existing list variables still render primitive lists, object lists, list aliases,
-  direct `.map()` output, pre-rendered alias output, and nested list placeholders.
-- Current overlapping behavior is documented by tests:
-  - a list rendered as `{ renderedItems }` is wrapped with list tags.
-  - a control wrapping a list output emits control tags outside list tags.
-  - a value cannot currently be both explicit `replace` and explicit `control`
-    without duplicated declarations or unintended behavior.
-- Nested component behavior is captured:
-  - parent list context increments child component context.
-  - child components still require their own `templateVars` to transform their
-    internal usage.
+We need an explicit path-resolution layer before role inference can be reliable.
 
-These tests should use focused unit tests for parser/controller behavior and e2e
-fixtures for final PHP/Handlebars output.
+First-pass supported resolution:
 
-## Phase 1: parser support for flat paths
+- bare identifiers matching root declarations, such as `title`
+- simple member expressions matching object paths, such as `hero.title`
+- simple nested member expressions, such as `hero.media.url`
+- map callback member access for one-level lists, such as `product.title`
+  inside `products.map((product) => ...)`
 
-Add path parsing without changing runtime behavior yet.
+First-pass unsupported resolution:
+
+- destructure renames, such as `const { title: headline } = hero`
+- intermediate aliases, such as `const h = hero; h.title`
+- optional chaining, such as `hero?.title`
+- spread props, such as `<Card {...product} />`
+- chained transforms before map, such as `products.filter(...).map(...)`
+
+Unsupported patterns should remain explicit legacy-config territory until they
+are intentionally implemented.
+
+## Test-First Sequence
+
+Before implementation changes, add tests that lock current behavior. These tests
+should be based on the README, local docs, and GitHub wiki pages, especially the
+documented examples in `Variable-types`.
+
+Use focused unit tests for parser/controller behavior and e2e fixtures for final
+PHP/Handlebars output.
+
+### Replacement Baseline
+
+Cover:
+
+- destructured prop replacement in text nodes
+- local variable replacement from component scope
+- replacement in standard attributes
+- replacement in input `value`, including the `jsxtv_value` mirror
+- explicit `{ type: 'replace' }`
+- current limitation around object member replacement, so we know what changes
+  when `hero.title` support lands
+- data-fetching caveat from README: replacement should remain scoped to declared
+  components, not upstream data-loading code
+
+### Control Baseline
+
+Cover all documented control expressions:
+
+- truthy: `{ isActive && <X /> }`
+- falsy: `{ !isActive && <X /> }`
+- equality: `{ isActive === 'yes' && <X /> }`
+- inequality: `{ isActive !== 'yes' && <X /> }`
+- subject on either side: `{ 'yes' === isActive && <X /> }`
+- multiple template vars in a comparison:
+  `{ isActive === anotherVar && <X /> }`
+- ternary controls:
+  `{ status === 'ready' ? <Ready /> : <Waiting /> }`
+- control wrapping normal JSX
+- control wrapping list output
+- current unsupported control-like expressions, captured as limitations rather
+  than silently treated as valid inference targets
+
+### List Baseline
+
+Lists need their own e2e coverage because the documented and current behaviors
+have several distinct usage shapes.
+
+Cover:
+
+- primitive list declared with legacy `{ type: 'list' }`
+- primitive list mapped directly in JSX:
+  `{ favoriteColors.map((color) => <p>{ color }</p>) }`
+- object list declared with child props:
+  `{ type: 'list', child: { type: 'object', props: [ 'value', 'label' ] } }`
+- object list mapped to an alias first, then rendered:
+  `const favoriteColorsList = favoriteColors.map(...); return { favoriteColorsList }`
+- object list mapped directly in JSX
+- list item property replacement in text
+- list item property replacement in attributes
+- list output rendered from a precomputed alias, as used by the advanced fixture
+- direct root list output if current behavior supports it; if it does not,
+  capture the current limitation before changing it
+- list output wrapped by a control expression
+- control expressions inside list item components
+- parent components rendering child components inside `.map()`, including
+  `__context__ + 1`
+- nested list child props currently represented as empty arrays, so the current
+  one-level depth limit is explicit
+- aliases from legacy `aliases` config
+- map-assignment alias inference as the future replacement for most legacy
+  `aliases` config
+
+### Custom Language And Preset Baseline
+
+Cover:
+
+- PHP root variable output
+- PHP list context and subcontext output
+- PHP control output
+- Handlebars replacement, list, and control output
+- custom language behavior that uses `variables.variable` and
+  `variables.subvariable`
+- a future failing or pending test for path-aware args, so we have a clear target
+  for `$data['hero']['title']` instead of `$data['hero.title']`
+
+### Multi-Role Baseline
+
+Cover current gaps and desired behavior:
+
+- same root value used as replacement and control
+- same list root used as control and list
+- same list item property used as replacement and control inside an item
+  component
+- single generated identity per declared path in the future registry model
+
+These tests should initially document current behavior, including known gaps.
+Then implementation phases can change the expected output deliberately.
+
+## Phase 1: Registry And Path Parser
+
+Add path parsing and registry construction without changing public behavior yet.
 
 Deliverables:
 
 - Parse string declarations into path segment metadata.
 - Preserve existing string declarations like `name`.
 - Preserve existing array config declarations.
-- Convert simple flat list paths into the existing list config shape internally:
+- Merge duplicate flat declarations into one registry entry.
+- Validate obvious malformed paths.
+- Assign one internal identity per declared path.
+- Add temporary derivation from registry to the current controller buckets.
+
+Temporary compatibility shim:
 
 ```js
 [
@@ -199,7 +342,8 @@ Deliverables:
 ]
 ```
 
-becomes equivalent to:
+can derive the equivalent legacy list input while controllers are still being
+refactored:
 
 ```js
 [
@@ -216,30 +360,53 @@ becomes equivalent to:
 ]
 ```
 
-This phase should avoid changing controller behavior where possible.
+This shim must not become the final architecture. The release gate should fail
+if multi-role behavior still depends on mutually exclusive legacy buckets.
 
-## Phase 2: nested object path output
+## Phase 1.5: Path To AST Resolution
 
-Support object paths such as:
+Resolve declared paths to supported AST usage sites.
+
+Deliverables:
+
+- Match root identifiers to root paths.
+- Match simple member expressions to object paths.
+- Match one-level list callback item properties to list child paths.
+- Keep an explicit unsupported list for renames, optional chaining, spreads, and
+  complex aliases.
+- Add tests for each supported and unsupported pattern.
+
+## Phase 2: Language Path Arguments
+
+Support structured path arguments in the language runtime.
+
+Current args are string-like:
 
 ```js
-Component.templateVars = [ 'hero.title', 'hero.media.url' ];
+{ type: 'identifier', value: 'title' }
 ```
 
-Important language implications:
+Path-aware args should preserve segments:
 
-- Handlebars can naturally emit `{{hero.title}}`.
-- PHP should emit nested array access, for example:
+```js
+{ type: 'path', segments: [ 'hero', 'title' ], value: 'hero.title' }
+```
+
+Expected output:
+
+```hbs
+{{hero.title}}
+```
 
 ```php
 $data['hero']['title']
-$data['hero']['media']['url']
 ```
 
-This likely requires path-aware language argument handling rather than treating
-`hero.title` as a single variable name.
+Custom languages need a migration note. Existing custom language definitions
+should continue working for flat identifiers, but nested paths require the new
+structured path behavior.
 
-## Phase 3: conservative role inference
+## Phase 3: Conservative Role Inference
 
 Infer usage roles from AST context for declared paths without explicit `type`.
 
@@ -249,29 +416,41 @@ Initial inference rules:
   - identifier/path appears in supported logical expression conditions.
   - identifier/path appears in supported ternary test expressions.
 - List role:
-  - root path appears as receiver of `.map()`.
-  - root path has `[]` in its flat declaration.
+  - root path is the receiver of `.map()`.
+  - identifier rendered in JSX was assigned from `.map()` on a declared list
+    root.
 - Replace role:
   - identifier/path appears in JSX text or JSX attributes.
-  - fallback role when no stronger usage is detected.
+  - fallback role only outside control-like contexts.
+
+Important rule:
+
+- `[]` declares list shape, not list wrapping. A declaration like `products[]`
+  should not wrap arbitrary usages such as `products.join(', ')`.
+
+Unsupported control-like usage should not silently become a replacement
+inference. It should either remain untouched with a test-documented limitation
+or require explicit legacy config until we support it.
 
 Explicit legacy config remains authoritative.
 
-## Phase 4: multi-role controller inputs
+## Phase 4: Multi-Role Controller Inputs
 
 Move from exclusive buckets to derived controller views.
 
 The registry can derive:
 
-- replace controller vars for replacement occurrences.
-- control controller vars for supported condition occurrences.
-- list controller vars for list declaration and wrapping.
+- replace controller inputs for replacement occurrences
+- control controller inputs for supported condition occurrences
+- list controller inputs for list declaration and wrapping
 
-Avoid generating separate UIDs for the same variable path per role unless the
-current transform absolutely requires it. Duplicated generated identifiers are a
-likely source of incorrect output when one variable is used in multiple roles.
+Avoid generating separate UIDs for the same variable path per role. Duplicated
+generated identifiers are a likely source of incorrect output when one variable
+is used in multiple roles.
 
-## Phase 5: docs and migration
+This phase is release-blocking.
+
+## Phase 5: Documentation And Migration
 
 Update README/wiki-facing docs to make the flat API primary:
 
@@ -282,7 +461,7 @@ Component.templateVars = [
 	'hero.title',
 	'products[].title',
 	'products[].price',
-	'products[].badges[].label',
+	'products[].available',
 ];
 ```
 
@@ -292,26 +471,84 @@ Document limitations:
 
 - Explicit declaration is still required.
 - Ambiguous list shapes may require legacy config.
-- Child components still need their own declarations unless and until a separate
-  cross-component discovery feature exists.
+- Child components still need their own declarations.
+- Deep nested list paths are deferred until deeper context support exists.
+- Unsupported AST patterns require explicit config or simpler local bindings.
 - Handlebars strict equality and ternary helpers still need to be provided by the
   consuming app or a compatible helper package.
 
-## Risks and open questions
+This should be treated as a semantic major-version change because projects that
+currently rely on implicit replacement may gain control or list behavior once
+role inference lands.
 
-- How should conflicts be reported when a path is declared inconsistently?
-- Should `products[]` plus `products[].title` be invalid, or should object child
-  declarations upgrade the list from primitive to object?
-- How should object paths be represented in custom languages without breaking
-  existing custom language presets?
-- Can nested list output be fully supported with the current one-level placeholder
-  behavior, or should deep list support be a separate phase?
-- How much child-component inference should be allowed before it becomes full
-  template var discovery?
+## Deferred Phase: Deep List Contexts
 
-## Recommended next step
+Only add deep paths such as:
 
-Start with tests that describe current behavior and expected flat-path behavior.
-Then implement the path parser and compile flat list declarations into the
-current internal list config. This gives users a simpler API quickly while
-keeping the larger multi-role inference work controlled and incremental.
+```js
+Component.templateVars = [
+	'products[].badges[].label',
+];
+```
+
+after explicit context-depth work.
+
+Required work:
+
+- count nested `.map()` depth, not just "inside any map"
+- support list open/close at each nested depth
+- build non-empty nested list placeholder arrays
+- extend PHP context/subcontext generation beyond one level
+- add e2e fixtures for nested list output in PHP and Handlebars
+
+Until then, use the child-component pattern:
+
+```js
+// Parent component
+App.templateVars = [ 'products[].name', 'products[].badges' ];
+
+// Child component that renders badges locally
+ProductCard.templateVars = [ 'name', 'badges[].label' ];
+```
+
+## Release Gate
+
+Do not document or release the flat API until these checks pass:
+
+- current documented behavior remains covered by tests
+- flat scalar paths work
+- one-level object paths work
+- one-level list paths work
+- `[]` acts as shape, not automatic wrapping
+- map-assignment aliases work without legacy `aliases` for common cases
+- legacy `aliases` still work as an escape hatch
+- same value can be replacement and control
+- same list root can be control and list
+- same list item field can be replacement and control in an item component
+- one generated identity per declared path
+- PHP nested object paths render as nested array access
+- Handlebars nested object paths render as dotted paths
+- custom language migration is documented
+- unsupported AST patterns fail clearly or stay explicitly documented
+
+## Risks And Open Questions
+
+- Should malformed flat paths throw during transform, or warn and ignore?
+- What should the exact error message be for conflicting path shapes?
+- How much alias detection is enough for the first release?
+- Should direct root list rendering be part of the official API if current
+  behavior is inconsistent?
+- How should custom language authors express path-aware variables if they copied
+  older `php.json` examples from the wiki?
+- How far should we go with warnings before this plugin needs a structured
+  diagnostics surface?
+
+## Recommended Next Step
+
+Start with tests that describe current behavior across all documented examples,
+with extra e2e focus on list variants. Then implement the registry and path
+parser, deriving the current controller inputs as a temporary shim.
+
+Keep the first implementation narrow: scalar paths, one-level object paths,
+one-level list paths, map-assignment aliases, and legacy config overrides. Defer
+deep nested lists until the context machinery is deliberately redesigned.
