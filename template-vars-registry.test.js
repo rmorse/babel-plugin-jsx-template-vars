@@ -60,6 +60,24 @@ describe('template vars registry', () => {
 		expect(() => parseTemplateVarPath('products[].meta.title')).toThrow(/one child property/);
 	});
 
+	it('rejects legacy array or object declaration entries', () => {
+		expect(() => buildRegistry([
+			[ 'visible', { type: 'control' } ],
+		], `
+			const App = ({ visible }) => {
+				return <main>{ visible && <p>Visible</p> }</main>;
+			};
+		`)).toThrow(/only supports flat string paths/);
+
+		expect(() => buildRegistry([
+			{ name: 'visible' },
+		], `
+			const App = ({ visible }) => {
+				return <main>{ visible && <p>Visible</p> }</main>;
+			};
+		`)).toThrow(/only supports flat string paths/);
+	});
+
 	it('derives multi-role controller inputs from flat declarations and supported usage', () => {
 		const result = buildRegistry([
 			'title',
@@ -98,12 +116,12 @@ describe('template vars registry', () => {
 			[
 				'products',
 				{
-					type: 'list',
-					child: {
-						type: 'object',
-						props: [ 'label', 'url' ],
+					kind: 'list',
+					item: {
+						kind: 'object',
+						properties: [ 'label', 'url' ],
 					},
-					aliases: [ 'renderedProducts' ],
+					tagAliases: [ 'renderedProducts' ],
 				},
 			],
 		]);

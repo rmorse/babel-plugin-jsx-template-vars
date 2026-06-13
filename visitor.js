@@ -4,32 +4,31 @@
  * Add `templateVars` to a component definition to specify which props are dynamic and need
  * to be exposed as Handlebars tags - to later be rendered with data from a server.
  *
- * Currently supports three types of variables:
+ * Template vars are declared as flat data paths. The registry infers the roles
+ * needed at supported usage sites:
  *
- * - *replace* - assumes the variable needs to be replaced with a template tag like `{{name}}`
- * - *control* - a variable that controls output/generated html (such as showing/hiding content)
- *             - limited to variables used in JSX expressions - `{ isSelected && <> ... </> }`
- * Working on:
- * - *list*    - lists signify repeatable content and will add list tags to the html output
+ * - *replace* - the path appears in rendered output and needs a template tag.
+ * - *control* - the path appears in a supported condition controlling output.
+ * - *list*    - the path declares list shape and appears in supported list output.
  *
  * ----
  *
  * Outline
  * - Look for `templateVars`
- * - Categorise into types (replace, control, list)
+ * - Build a flat path registry and infer roles from supported AST usage
  * - Locate + visit the component definition - assumes it is the previous path ( sibling ( -1 ) ).
  *
- * Process "replace" type vars
- * - Declare new identifiers (with new values) for all `replace` type template props at the top of the component
+ * Process replace role vars
+ * - Declare new identifiers (with new values) for all replacement template props at the top of the component
  * - Replace occurences of the old identifiers with the new ones
  *   (exclude variable declarations and watch out for nested props)
  *
- * Process "control" type vars
+ * Process control role vars
  * - Look for the template var in JSX expressions (TODO: support more expression types)
  * - Remove the condition so the expression is always completed (showing the related JSX)
  * - Wrap JSX in handlebars tags using custom helpers to recreate the conditions
  * 
- * Process "list" type vars
+ * Process list role vars
  * - Declare new arrays with a template style version - eg `[ '{{.}}' ]` or `[ { value: '{{value}}', label: '{{label}}' } ]`
  *   for objects. 
  * - The new arrays will always have a length of 1.
@@ -77,8 +76,7 @@ function getTemplateVarsFromExpression( expression, types ) {
 
 	if ( propertyName === 'templateVars' ) {
 		let templatePropsValue = [];
-		// Now process the right part of the expression 
-		// .templateVars = *right* and build our config object.
+		// Now process the right part of the expression: .templateVars = *right*.
 		if ( right && right.type === 'ArrayExpression' ) {
 			// Then we have an array to process the props.
 			templatePropsValue = getArrayFromExpression( right );

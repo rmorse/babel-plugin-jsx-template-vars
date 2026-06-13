@@ -71,7 +71,7 @@ realistic fixtures over many tiny fixtures that duplicate unit coverage.
 
 Use colocated unit tests for small, deterministic behavior:
 
-- parsing config objects and arrays from Babel AST nodes
+- parsing flat template var paths from Babel AST nodes
 - choosing control statement types
 - building language call expressions
 - regression tests for narrow controller behavior

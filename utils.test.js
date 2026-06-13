@@ -14,35 +14,17 @@ function expressionFrom(source) {
 }
 
 describe('utils', () => {
-	it('reads nested template var config arrays from Babel expressions', () => {
+	it('reads flat template var string arrays from Babel expressions', () => {
 		const expression = expressionFrom(`[
 			'name',
-			[
-				'items',
-				{
-					type: 'list',
-					aliases: [ 'renderedItems' ],
-					child: {
-						type: 'object',
-						props: [ 'label', 'active' ],
-					},
-				},
-			],
+			'hero.summary',
+			'items[].label',
 		]`);
 
 		expect(getArrayFromExpression(expression)).toEqual([
 			'name',
-			[
-				'items',
-				{
-					type: 'list',
-					aliases: [ 'renderedItems' ],
-					child: {
-						type: 'object',
-						props: [ 'label', 'active' ],
-					},
-				},
-			],
+			'hero.summary',
+			'items[].label',
 		]);
 	});
 

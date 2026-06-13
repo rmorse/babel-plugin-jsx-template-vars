@@ -87,13 +87,13 @@ ProductCard.templateVars = [
 ```
 
 
-## Template variable types
+## Template variable roles
 
 There are 3 usage roles that have different behaviours. Roles are inferred from
 how the declared path is used in the component.
 
 > **Note**
-> **There are significant limitations with `control` and `list` type variables, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
+> **There are significant limitations with inferred control and list roles, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ### 1. Replacement variables
 
@@ -157,7 +157,7 @@ are left as normal JavaScript.
 
 ***
 
-**[More information on Variable Types can be found in the Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
+**[More information on template variable roles can be found in the Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ## Exposing variables
 
@@ -219,7 +219,7 @@ More information on languages can be found in the [wiki](https://github.com/rmor
 
 ## Documentation
 
-I think I mentioned that there are **significant limitations** with the different variable types - its important to understand how these work in order to use this transform effectively.
+I think I mentioned that there are **significant limitations** with the different inferred roles - its important to understand how these work in order to use this transform effectively.
 
 [More information is being added to the docs, currently on our github Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki).
 
@@ -230,7 +230,7 @@ This is an exploration on a concept of semi automating the generation of Handleb
 
 _I'd be grateful for any help with the project / suggestions and alternative ideas for exploration / bug reports_.
 
-### Data fetching & loading with `replace` type variables
+### Data fetching & loading with replacement variables
 One thing to watch out for is data fetching and loading.
 
 In complex applications, vars/props will often get passed down into various data fetching routines, and if they are replaced with template tags too early, such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true pre-render.
@@ -239,7 +239,7 @@ To work around this you can try to set your template vars only on components tha
 
 In some cases, you might need the template variable passed into the data fetching routine - this is not supported and a limitation of this approach.
 
-### Nested props in `list` type variables
+### Nested props in list variables
 This transform supports nested vars for children (arrays and objects), but only supports 1 level of depth.
 
 It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.

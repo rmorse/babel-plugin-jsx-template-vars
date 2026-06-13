@@ -33,12 +33,12 @@ describe('ListController', () => {
 		const controller = createController();
 
 		expect(controller.normaliseListVar()).toEqual({
-			type: 'list',
-			child: { type: 'primitive' },
+			kind: 'list',
+			item: { kind: 'primitive' },
 		});
-		expect(controller.normaliseListVar({ type: 'list' })).toEqual({
-			type: 'list',
-			child: { type: 'primitive' },
+		expect(controller.normaliseListVar({ kind: 'list' })).toEqual({
+			kind: 'list',
+			item: { kind: 'primitive' },
 		});
 	});
 
@@ -47,11 +47,11 @@ describe('ListController', () => {
 
 		expect(controller.normalisedProp('label')).toEqual({
 			name: 'label',
-			type: 'primitive',
+			kind: 'primitive',
 		});
-		expect(controller.normalisedProp({ name: 'children', type: 'list' })).toEqual({
+		expect(controller.normalisedProp({ name: 'children', kind: 'list' })).toEqual({
 			name: 'children',
-			type: 'list',
+			kind: 'list',
 		});
 	});
 
@@ -66,10 +66,10 @@ describe('ListController', () => {
 	it('builds object list placeholder arrays from child props', () => {
 		const controller = createController();
 		const declaration = controller.buildDeclaration('_items', {
-			type: 'list',
-			child: {
-				type: 'object',
-				props: [ 'label', 'active' ],
+			kind: 'list',
+			item: {
+				kind: 'object',
+				properties: [ 'label', 'active' ],
 			},
 		});
 		const code = statementToCode(declaration);
@@ -83,12 +83,12 @@ describe('ListController', () => {
 	it('represents nested list child props as empty arrays for now', () => {
 		const controller = createController();
 		const declaration = controller.buildDeclaration('_items', {
-			type: 'list',
-			child: {
-				type: 'object',
-				props: [
+			kind: 'list',
+			item: {
+				kind: 'object',
+				properties: [
 					'label',
-					{ name: 'children', type: 'list' },
+					{ name: 'children', kind: 'list' },
 				],
 			},
 		});
@@ -98,10 +98,11 @@ describe('ListController', () => {
 		expect(code).toContain('children: []');
 	});
 
-	it('registers list source names and aliases for JSX wrapping', () => {
+	it('registers list source names and registry-derived tag aliases for JSX wrapping', () => {
+		const listMetadata = { kind: 'list', tagAliases: [ 'renderedItems' ] };
 		const vars = {
 			raw: [
-				[ 'items', { type: 'list', aliases: [ 'renderedItems' ] } ],
+				[ 'items', listMetadata ],
 			],
 			mapped: { items: '_items' },
 			names: [ 'items' ],
@@ -130,16 +131,7 @@ describe('ListController', () => {
 				return <ul>{ items.map((item) => <Item label={ item.label } />) }</ul>;
 			};
 			App.templateVars = [
-				[
-					'items',
-					{
-						type: 'list',
-						child: {
-							type: 'object',
-							props: [ 'label' ],
-						},
-					},
-				],
+				'items[].label',
 			];
 
 			module.exports = { App };

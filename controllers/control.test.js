@@ -114,7 +114,7 @@ describe('ControlController', () => {
 			};
 
 			App.templateVars = [
-				[ 'status', { type: 'control' } ],
+				'status',
 			];
 
 			module.exports = { App };

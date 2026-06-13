@@ -1,34 +1,11 @@
-function getObjectFromExpression( expression ) {
-	let obj = {};
-	expression.properties.forEach( ( property ) => {
-			if ( property.value.value ) {
-				obj[ property.key.name ] = property.value.value;
-			} else if ( property.value.elements ) {
-				obj[ property.key.name ] = getArrayFromExpression( property.value );
-			} else if ( property.value.properties ) {
-				obj[ property.key.name ] = getObjectFromExpression( property.value );
-			}
-	} );
-	return obj;
-}
 function getArrayFromExpression( expression ) {
 	const props = [];
 	if ( expression && expression.elements ) {
 		expression.elements.forEach( ( element ) => {
 			if ( element.type === 'StringLiteral' ) {
 				props.push( element.value );
-			}
-			if ( element.type === 'ArrayExpression' ) {
-				// We have an object to process
-				if ( element.elements ) {
-					const prop = getArrayFromExpression( element );
-					props.push( prop );
-				}
-			}
-			else if ( element.type === 'ObjectExpression' ) {
-				// We have an object to process
-				const prop = getObjectFromExpression( element );
-				props.push( prop );
+			} else {
+				props.push( element );
 			}
 		} );
 	}
@@ -187,7 +164,6 @@ module.exports = {
 	getExpressionPath,
 	getMemberExpressionSegments,
 	getArrayFromExpression,
-	getObjectFromExpression,
 	injectContextToJSXElementComponents,
 	isJSXElementComponent,
 	isJSXElementInput,

@@ -25,10 +25,10 @@ class ListController {
 			if ( newAssignmentExpression ) {
 				path.node.body.unshift( newAssignmentExpression );
 			}
-			// Now keep track of the list vars and aliaes we need to tag (and keep track of their original source var)
+			// Track list vars and registry-derived tag aliases that should receive list wrappers.
 			self.vars.toTag[ varName ] = varName;
-			if ( varConfig.aliases ) {
-				varConfig.aliases.forEach( ( alias ) => {
+			if ( varConfig.tagAliases ) {
+				varConfig.tagAliases.forEach( ( alias ) => {
 					self.vars.toTag[ alias ] = varName;
 				} );
 			}
@@ -42,14 +42,14 @@ class ListController {
 			const normalisedProp = this.normalisedProp( prop );
 			const propName = normalisedProp.name;
 
-			if ( normalisedProp.type === 'primitive' ) {
+			if ( normalisedProp.kind === 'primitive' ) {
 				const listObject = [
 					getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types ),
-					getLanguageListCallExpression( 'objectProperty', prop, self.contextName, types ),
+					getLanguageListCallExpression( 'objectProperty', propName, self.contextName, types ),
 					getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types ),
 				]
 				propsArr.push( types.objectProperty( types.identifier( propName ), createCombinedBinaryExpression( listObject, '+', types ) ) );
-			} else if ( normalisedProp.type === 'list' ) {
+			} else if ( normalisedProp.kind === 'list' ) {
 
 				// Here we create a prop, with more children as an array.
 				// However this could recurse infinitely, so we need to limit it.
@@ -72,16 +72,16 @@ class ListController {
 
 		return propsArr;
 	}
-	// Build the object for the replacement var in list type vars.
+	// Build the placeholder data used while rendering list template output.
 	buildDeclaration( varName, varConfig ) {
 		const { parse, types } = this.babel;
 		const normalisedConfig = this.normaliseListVar( varConfig );
-		const { type, props } = normalisedConfig.child;
+		const { kind, properties } = normalisedConfig.item;
 		const self = this;
 		// const newProp = [];
-		if ( type === 'object' ) {
+		if ( kind === 'object' ) {
 			//const childProp = {};
-			const propsArr = this.getPropsArray( props, types, parse );
+			const propsArr = this.getPropsArray( properties, types, parse );
 
 			// newProp.push( childProp );
 			const templateObject = types.objectExpression( propsArr )
@@ -92,7 +92,7 @@ class ListController {
 			return types.variableDeclaration('let', [
 				types.variableDeclarator(left, right),
 			]);
-		} else if ( type === 'primitive' ) {
+		} else if ( kind === 'primitive' ) {
 			// Then we're dealing with a normal array.
 			// TODO: maybe "primitive" is not the best name for this type.
 			const listPrimitiveString = `let ${ varName } = [ getLanguageString( [ 'language', 'open' ], [], ${ this.contextName } ) + getLanguageList( 'primitive', null, ${ this.contextName } ) + getLanguageString( [ 'language', 'close' ], [], ${ this.contextName } ) ];`;
@@ -102,13 +102,13 @@ class ListController {
 	}	
 	normaliseListVar( varConfig ) {
 		let normalisedConfig = { 
-			type: 'list',
-			child: { type: 'primitive' }
+			kind: 'list',
+			item: { kind: 'primitive' }
 		};
 		if ( varConfig ) {
 			normalisedConfig = varConfig;
-			if ( ! varConfig.child ) {
-				normalisedConfig.child = { type: 'primitive' }
+			if ( ! varConfig.item ) {
+				normalisedConfig.item = { kind: 'primitive' }
 			}
 		}
 
@@ -120,8 +120,7 @@ class ListController {
 	normalisedProp( prop ) {
 		let normalisedProp = {
 			name: '',
-			type: 'primitive',
-			// child: { type: 'primitive' }
+			kind: 'primitive',
 		};
 		if ( this.isPrimitive( prop ) ) {
 			normalisedProp.name = prop;

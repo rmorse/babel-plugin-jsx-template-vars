@@ -6,13 +6,6 @@ const {
 
 const identifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-function normaliseConfigProp( prop ) {
-	if ( ! Array.isArray( prop ) ) {
-		return [ prop, {} ];
-	}
-	return prop;
-}
-
 function parseTemplateVarPath( value, errorPath ) {
 	if ( typeof value !== 'string' ) {
 		diagnostics.error( errorPath, `templateVars declarations must use string paths. Received ${ typeof value }.` );
@@ -74,8 +67,10 @@ function createTemplateVarsRegistry( templatePropsValue, componentPath, babel, e
 	};
 
 	templatePropsValue.forEach( ( prop ) => {
-		const [ varName, varConfig ] = normaliseConfigProp( prop );
-		addDeclaration( registry, varName, varConfig || {}, errorPath );
+		if ( typeof prop !== 'string' ) {
+			diagnostics.error( errorPath, 'templateVars only supports flat string paths. Legacy array/object configuration is not supported.' );
+		}
+		addDeclaration( registry, prop, errorPath );
 	} );
 
 	inferUsageRoles( registry, componentPath, babel );
@@ -83,17 +78,7 @@ function createTemplateVarsRegistry( templatePropsValue, componentPath, babel, e
 	return deriveControllerInputs( registry );
 }
 
-function addDeclaration( registry, varName, varConfig, errorPath ) {
-	const declarationType = varConfig.type || 'replace';
-
-	if ( declarationType === 'list' ) {
-		addListDeclaration( registry, varName, {
-			explicitConfig: varConfig,
-			errorPath,
-		} );
-		return;
-	}
-
+function addDeclaration( registry, varName, errorPath ) {
 	const parsedPath = parseTemplateVarPath( varName, errorPath );
 	if ( parsedPath.isList ) {
 		addFlatListDeclaration( registry, parsedPath, errorPath );
@@ -101,17 +86,7 @@ function addDeclaration( registry, varName, varConfig, errorPath ) {
 	}
 
 	const entry = getPathEntry( registry, parsedPath.segments );
-	if ( declarationType === 'control' ) {
-		entry.roles.add( 'control' );
-		return;
-	}
-
-	if ( declarationType === 'replace' ) {
-		entry.roles.add( 'replace' );
-		return;
-	}
-
-	diagnostics.error( errorPath, `Unsupported template var type "${ declarationType }" for "${ varName }".` );
+	entry.roles.add( 'replace' );
 }
 
 function addFlatListDeclaration( registry, parsedPath, errorPath ) {
@@ -128,24 +103,7 @@ function addFlatListDeclaration( registry, parsedPath, errorPath ) {
 		diagnostics.error( errorPath, `Invalid list child path "${ parsedPath.value }".` );
 	}
 
-	listEntry.props.add( childName );
-}
-
-function addListDeclaration( registry, varName, options ) {
-	const { explicitConfig, errorPath } = options;
-	const parsedPath = parseTemplateVarPath( varName, errorPath );
-	if ( parsedPath.isList || parsedPath.segments.length !== 1 ) {
-		diagnostics.error( errorPath, `Explicit list declarations must target a root list identifier. Received "${ varName }".` );
-	}
-
-	const listEntry = getListEntry( registry, parsedPath.rootName );
-
-	listEntry.roles.add( 'list' );
-	listEntry.explicitConfig = explicitConfig;
-
-	if ( Array.isArray( explicitConfig.aliases ) ) {
-		explicitConfig.aliases.forEach( alias => listEntry.aliases.add( alias ) );
-	}
+	listEntry.properties.add( childName );
 }
 
 function getPathEntry( registry, segments ) {
@@ -166,10 +124,9 @@ function getListEntry( registry, rootName ) {
 			path: rootName,
 			segments: [ rootName ],
 			roles: new Set(),
-			props: new Set(),
-			aliases: new Set(),
+			properties: new Set(),
+			tagAliases: new Set(),
 			primitiveDeclared: false,
-			explicitConfig: null,
 		} );
 	}
 	return registry.lists.get( rootName );
@@ -244,7 +201,7 @@ function tagListMapUsage( registry, callPath, types ) {
 
 	const variableDeclarator = callPath.parentPath;
 	if ( variableDeclarator && types.isVariableDeclarator( variableDeclarator.node ) && types.isIdentifier( variableDeclarator.node.id ) ) {
-		listEntry.aliases.add( variableDeclarator.node.id.name );
+		listEntry.tagAliases.add( variableDeclarator.node.id.name );
 	}
 }
 
@@ -288,32 +245,24 @@ function deriveControllerInputs( registry ) {
 }
 
 function getListConfig( entry ) {
-	const aliases = Array.from( entry.aliases );
-
-	if ( entry.explicitConfig ) {
-		const config = { ...entry.explicitConfig };
-		if ( aliases.length > 0 ) {
-			config.aliases = Array.from( new Set( [ ...( entry.explicitConfig.aliases || [] ), ...aliases ] ) );
-		}
-		return config;
-	}
+	const tagAliases = Array.from( entry.tagAliases );
 
 	const config = {
-		type: 'list',
-		child: {
-			type: 'primitive',
+		kind: 'list',
+		item: {
+			kind: 'primitive',
 		},
 	};
 
-	if ( entry.props.size > 0 ) {
-		config.child = {
-			type: 'object',
-			props: Array.from( entry.props ),
+	if ( entry.properties.size > 0 ) {
+		config.item = {
+			kind: 'object',
+			properties: Array.from( entry.properties ),
 		};
 	}
 
-	if ( aliases.length > 0 ) {
-		config.aliases = aliases;
+	if ( tagAliases.length > 0 ) {
+		config.tagAliases = tagAliases;
 	}
 
 	return config;
