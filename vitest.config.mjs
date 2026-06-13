@@ -5,6 +5,12 @@ export default defineConfig({
 		environment: 'node',
 		include: [ '**/*.test.js' ],
 		coverage: {
+			exclude: [
+				'coverage/**',
+				'fixtures/**',
+				'test-utils/**',
+				'**/*.test.js',
+			],
 			reporter: [ 'text', 'json-summary' ],
 		},
 	},

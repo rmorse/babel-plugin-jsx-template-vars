@@ -1,6 +1,7 @@
 .github
 .nvmrc
 coverage
+fixtures
 node_modules
 test-utils
 vitest.config.*

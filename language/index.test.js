@@ -2,12 +2,36 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+	createLanguageString,
+	getLanguageControl,
+	getLanguageList,
+	getLanguageReplace,
+	getLanguageString,
+} from './index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const languageDir = path.join(__dirname, 'languages');
 
 function readLanguage(name) {
 	return JSON.parse(fs.readFileSync(path.join(languageDir, `${ name }.json`), 'utf8'));
+}
+
+function withLanguage(language, callback) {
+	const previousWindow = globalThis.window;
+	globalThis.window = {
+		templateVarsLanguage: language,
+	};
+
+	try {
+		return callback();
+	} finally {
+		if (typeof previousWindow === 'undefined') {
+			delete globalThis.window;
+		} else {
+			globalThis.window = previousWindow;
+		}
+	}
 }
 
 describe('language presets', () => {
@@ -59,5 +83,72 @@ describe('language presets', () => {
 
 		expect(handlebars.control.ifEqual.open).toBe('{{#if_equal [%variable] [%variable]}}');
 		expect(handlebars.control.ifNotEqual.open).toBe('{{#if_not_equal [%variable] [%variable]}}');
+	});
+});
+
+describe('language runtime', () => {
+	it('expands PHP variable tags with context-aware data names', () => {
+		const php = readLanguage('php');
+
+		expect(createLanguageString(
+			'echo [%variable];',
+			[ { type: 'identifier', value: 'title' } ],
+			0,
+			php.variables
+		)).toBe("echo $data['title'];");
+
+		expect(createLanguageString(
+			'echo [%subvariable];',
+			[ { type: 'identifier', value: 'label' } ],
+			1,
+			php.variables
+		)).toBe("echo $data_2['label'];");
+	});
+
+	it('passes literal comparison values through variable tags', () => {
+		const php = readLanguage('php');
+
+		expect(createLanguageString(
+			'[%variable]',
+			[ { type: 'value', value: "'ready'" } ],
+			0,
+			php.variables
+		)).toBe("'ready'");
+	});
+
+	it('reads nested language strings from the active language preset', () => {
+		const php = readLanguage('php');
+
+		withLanguage(php, () => {
+			expect(getLanguageString([ 'language', 'open' ], [], 0)).toBe('<?php ');
+			expect(getLanguageReplace('format', { value: 'title' }, 0)).toBe("echo $data['title'];");
+			expect(getLanguageList('open', { type: 'identifier', value: 'items' }, 0)).toBe("foreach ( $data['items'] as $data_1 ) {");
+			expect(getLanguageControl(
+				[ 'ifEqual', 'open' ],
+				[
+					{ type: 'identifier', value: 'status' },
+					{ type: 'value', value: "'ready'" },
+				],
+				0
+			)).toBe("if ( $data['status'] === 'ready' ) {");
+		});
+	});
+
+	it('expands Handlebars runtime strings without language wrappers', () => {
+		const handlebars = readLanguage('handlebars');
+
+		withLanguage(handlebars, () => {
+			expect(getLanguageString([ 'language', 'open' ], [], 0)).toBe('');
+			expect(getLanguageReplace('format', { value: 'title' }, 0)).toBe('{{title}}');
+			expect(getLanguageList('objectProperty', { type: 'identifier', value: 'label' }, 1)).toBe('{{label}}');
+			expect(getLanguageControl(
+				[ 'ifNotEqual', 'open' ],
+				[
+					{ type: 'identifier', value: 'status' },
+					{ type: 'value', value: "'archived'" },
+				],
+				0
+			)).toBe("{{#if_not_equal status 'archived'}}");
+		});
 	});
 });
