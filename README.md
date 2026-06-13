@@ -59,9 +59,9 @@ _This should only be added to your **pre-render** build._
 
 ### 3. Define which variables in your components will be template variables.
 
-Add a `templateVars` property to your component to specificy which variables will be exposed.
+Add a `templateVars` property to your component to specify which variables will be exposed.
 
-The format is an array, of strings (or arrays with additional config):
+The format is an array of flat data-path strings:
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -75,58 +75,106 @@ const Person = ( { name, favoriteColor } ) => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
+Object paths and nested list item paths can be declared in the same flat array:
 
-## Template variable types
+```jsx
+ProductCard.templateVars = [
+    'title',
+    'hero.summary',
+    'catalog.sections[].products[].name',
+    'catalog.sections[].products[].badges[].label',
+];
+```
 
-There are 3 types of variables that have different behaviours.
+See [docs/template-vars.md](docs/template-vars.md) for the full flat path
+contract.
+
+
+## Template variable roles
+
+There are 3 usage roles that have different behaviours. Roles are inferred from
+how the declared path is used in the component.
 
 > **Note**
-> **There are significant limitations with `control` and `list` type variables, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
+> **There are significant limitations with inferred control and list roles, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ### 1. Replacement variables
 
-Replacement variables are variables that will need to be replaced by a dynamic variable.
+Replacement variables are declared paths that appear in rendered output.
 
 In Handlebars this would be: `{{name}}`, and if using PHP this would be: `<?php echo $data['name'] ?>`.
 
-The default variable type is a replacement variable:
+Scalar paths and object paths are supported:
 
 ```js
-Person.templateVars = [ 'name' ];
-```
-
-The type can also be passed as an argument:
-
-```js
-Person.templateVars = [ [ 'name', { type: 'replace' } ] ];
+Person.templateVars = [ 'name', 'profile.favoriteColor' ];
 ```
 
 
 ### 2. Control variables (showing/hiding content)
-Depending on the value of a specific variable, you might wish to show or hide content in your component.  Use the `control` type variable to signify this.
+Depending on the value of a specific variable, you might wish to show or hide content in your component.
 
 E.g.:
-```js
-Person.templateVars = [ 'name', [ 'show', { type: 'control' } ] ];
+```jsx
+const Person = ({ name, show, status }) => (
+    <>
+        <h1>{ name }</h1>
+        { show && <p>Visible</p> }
+        { status === 'ready' && <p>Ready</p> }
+    </>
+);
+
+Person.templateVars = [ 'name', 'show', 'status' ];
 ```
 
-In this example `show` is used a control variable.
+In this example `show` and `status` are inferred as control variables because
+they are used in supported conditional expressions. If a variable is also
+rendered directly, it can be both a replacement and a control variable.
+
+Handlebars output for strict equality uses the shipped helper registration
+module:
+
+```js
+const {
+    registerJsxTemplateVarsHandlebarsHelpers,
+} = require('babel-plugin-jsx-template-vars/handlebars-helpers');
+
+registerJsxTemplateVarsHandlebarsHelpers(Handlebars);
+```
 
 
 ### 3. Lists (and repeatable elements)
 
-It is important to have a mechanism for showing repeatable content like arrays or lists. 
+It is important to have a mechanism for showing repeatable content like arrays or lists.
 
-This is supported with some limitations, and is signified by the `list` variable type:
+Primitive lists use `[]`:
 
 ```js
-Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list' } ] ];
+Person.templateVars = [ 'name', 'favoriteColors[]' ];
 ```
+
+Object lists declare the item fields that should be exposed. Lists and objects
+can be nested as deeply as the data contract needs:
+
+```js
+ProductList.templateVars = [
+    'products[].name',
+    'products[].url',
+    'products[].available',
+    'products[].badges[].label',
+    'products[].details.manufacturer.name',
+];
+```
+
+The `[]` marker declares list shape. List template wrappers are emitted when the
+declared list is rendered directly as a primitive root list or used with a
+supported `.map()` expression. Other member calls, such as `products.join(', ')`,
+are left as normal JavaScript.
 
 
 ***
 
-**[More information on Variable Types can be found in the Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
+**[More information on template variable roles can be found in the Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ## Exposing variables
 
@@ -149,24 +197,32 @@ const Person = () => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
-Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the object properties as template variables:
+Simple object properties can be declared as paths:
 
 ```jsx
-const aPerson = {
-    name: 'Mary',
-    favoriteColor: 'green'
-};
-const Person = () => {
-    const { name, favoriteColor } = aPerson;
+const Person = ({ profile }) => {
     return (
         <>
-            <h1>{ name }</h1>
-            <p>Favorite color: { favoriteColor }</p>
+            <h1>{ profile.name }</h1>
+            <p>Favorite color: { profile.favoriteColor }</p>
         </>
     );
 };
-Person.templateVars = [ 'name', 'favoriteColor' ];
+Person.templateVars = [ 'profile.name', 'profile.favoriteColor' ];
 ```
+
+Supported source patterns include bare identifiers, simple object member paths,
+nested object member paths, optional member paths, destructure renames,
+intermediate aliases, direct `.map()` usage on declared list paths, safe chained
+list transforms before `.map()`, nested map callbacks, reassigned render aliases,
+helper calls with a single declared list source, declared spread props in mapped
+child components, and same-scope aliases assigned from `.map()`. Automatic
+cross-component inference remains intentionally unsupported; each component still
+declares its own `templateVars`.
+
+Unsupported but recognizable patterns warn by default, and `strict: true` turns
+those warnings into transform errors. See [docs/template-vars.md](docs/template-vars.md)
+for the component-local contract and strict diagnostics.
 
 ## Working examples
 
@@ -188,7 +244,7 @@ More information on languages can be found in the [wiki](https://github.com/rmor
 
 ## Documentation
 
-I think I mentioned that there are **significant limitations** with the different variable types - its important to understand how these work in order to use this transform effectively.
+I think I mentioned that there are **significant limitations** with the different inferred roles - its important to understand how these work in order to use this transform effectively.
 
 [More information is being added to the docs, currently on our github Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki).
 
@@ -199,7 +255,7 @@ This is an exploration on a concept of semi automating the generation of Handleb
 
 _I'd be grateful for any help with the project / suggestions and alternative ideas for exploration / bug reports_.
 
-### Data fetching & loading with `replace` type variables
+### Data fetching & loading with replacement variables
 One thing to watch out for is data fetching and loading.
 
 In complex applications, vars/props will often get passed down into various data fetching routines, and if they are replaced with template tags too early, such as `{{name}}` it might cause them to fail.  They need to succeed and continue as usual to get a true pre-render.
@@ -208,8 +264,10 @@ To work around this you can try to set your template vars only on components tha
 
 In some cases, you might need the template variable passed into the data fetching routine - this is not supported and a limitation of this approach.
 
-### Nested props in `list` type variables
-This transform supports nested vars for children (arrays and objects), but only supports 1 level of depth.
+### Nested props in list variables
+This transform supports flat paths for nested objects and lists, including
+mixed object/list paths such as `catalog.sections[].products[].badges[].label`.
 
-It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
+Each component still owns its own `templateVars` contract; nested declarations
+are not inferred automatically across component boundaries.
 

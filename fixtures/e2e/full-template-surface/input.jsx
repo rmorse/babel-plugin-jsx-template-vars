@@ -34,22 +34,13 @@ ProductCard.templateVars = [
 	'name',
 	'price',
 	'url',
-	[
-		'badges',
-		{
-			type: 'list',
-			aliases: [ 'renderedBadges' ],
-			child: {
-				type: 'object',
-				props: [ 'label', 'tone' ],
-			},
-		},
-	],
-	[ 'available', { type: 'control' } ],
-	[ 'featured', { type: 'control' } ],
-	[ 'mode', { type: 'control' } ],
-	[ 'status', { type: 'control' } ],
-	[ 'tone', { type: 'control' } ],
+	'badges[].label',
+	'badges[].tone',
+	'available',
+	'featured',
+	'mode',
+	'status',
+	'tone',
 ];
 
 const App = ({ title, summary, products, status, visible }) => {
@@ -82,29 +73,17 @@ const App = ({ title, summary, products, status, visible }) => {
 App.templateVars = [
 	'title',
 	'summary',
-	[ 'status', { type: 'control' } ],
-	[ 'visible', { type: 'control' } ],
-	[
-		'products',
-		{
-			type: 'list',
-			aliases: [ 'renderedProducts' ],
-			child: {
-				type: 'object',
-				props: [
-					'name',
-					'price',
-					'url',
-					'available',
-					'featured',
-					'mode',
-					'status',
-					'tone',
-					{ name: 'badges', type: 'list' },
-				],
-			},
-		},
-	],
+	'status',
+	'visible',
+	'products[].name',
+	'products[].price',
+	'products[].url',
+	'products[].available',
+	'products[].featured',
+	'products[].mode',
+	'products[].status',
+	'products[].tone',
+	'products[].badges',
 ];
 
 module.exports = { App };

@@ -45,6 +45,32 @@ describe('ControlController', () => {
 		});
 	});
 
+	it('maps path-based control expressions to language control names', () => {
+		const controller = new ControlController({ names: [ 'hero.visible', 'hero.status' ] }, '_context', babel);
+
+		expect(controller.getExpressionStatement(expressionFrom('hero.visible'))).toEqual({
+			statementType: 'ifTruthy',
+			args: [
+				{
+					type: 'path',
+					value: 'hero.visible',
+					segments: [ 'hero', 'visible' ],
+				},
+			],
+		});
+		expect(controller.getExpressionStatement(expressionFrom(`hero.status === 'ready'`))).toEqual({
+			statementType: 'ifEqual',
+			args: [
+				{
+					type: 'path',
+					value: 'hero.status',
+					segments: [ 'hero', 'status' ],
+				},
+				{ type: 'value', value: "'ready'" },
+			],
+		});
+	});
+
 	it('leaves expressions without configured control identifiers unmatched', () => {
 		const controller = new ControlController({ names: [ 'visible' ] }, '_context', babel);
 
@@ -88,7 +114,7 @@ describe('ControlController', () => {
 			};
 
 			App.templateVars = [
-				[ 'status', { type: 'control' } ],
+				'status',
 			];
 
 			module.exports = { App };

@@ -1,5 +1,6 @@
 .github
 .nvmrc
+agents
 coverage
 fixtures
 node_modules

@@ -51,16 +51,7 @@ describe('templateVarsController', () => {
 				return <>{ items.map((item) => <Child label={ item.label } />) }</>;
 			};
 			App.templateVars = [
-				[
-					'items',
-					{
-						type: 'list',
-						child: {
-							type: 'object',
-							props: [ 'label' ],
-						},
-					},
-				],
+				'items[].label',
 			];
 		`, { language: 'handlebars' });
 

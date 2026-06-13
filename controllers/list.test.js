@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import babel from '@babel/core';
-import { renderTemplateFixture } from '../test-utils/transform.js';
+import {
+	normalizeTemplateOutput,
+	renderTemplateFixture,
+	transformTemplateVars,
+} from '../test-utils/transform.js';
 
 const require = createRequire(import.meta.url);
 const { ListController } = require('./list');
@@ -26,47 +30,47 @@ function statementToCode(statement) {
 }
 
 describe('ListController', () => {
-	it('normalises list variable config to primitive children by default', () => {
-		const controller = createController();
-
-		expect(controller.normaliseListVar()).toEqual({
-			type: 'list',
-			child: { type: 'primitive' },
-		});
-		expect(controller.normaliseListVar({ type: 'list' })).toEqual({
-			type: 'list',
-			child: { type: 'primitive' },
-		});
-	});
-
-	it('normalises primitive and object child properties', () => {
-		const controller = createController();
-
-		expect(controller.normalisedProp('label')).toEqual({
-			name: 'label',
-			type: 'primitive',
-		});
-		expect(controller.normalisedProp({ name: 'children', type: 'list' })).toEqual({
-			name: 'children',
-			type: 'list',
-		});
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	it('builds primitive list placeholder arrays', () => {
 		const controller = createController();
-		const code = statementToCode(controller.buildDeclaration('_items'));
+		const code = statementToCode(controller.buildDeclaration('_items', {
+			name: 'items',
+			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
+			item: { kind: 'primitive' },
+		}));
 
 		expect(code).toContain('let _items = [getLanguageString');
-		expect(code).toContain("getLanguageList('primitive', null, _context)");
+		expect(code).toContain('getLanguageList("primitive", null, _context)');
 	});
 
 	it('builds object list placeholder arrays from child props', () => {
 		const controller = createController();
 		const declaration = controller.buildDeclaration('_items', {
-			type: 'list',
-			child: {
-				type: 'object',
-				props: [ 'label', 'active' ],
+			kind: 'list',
+			item: {
+				kind: 'object',
+				properties: [
+					{
+						name: 'label',
+						kind: 'scalar',
+						segments: [ 'label' ],
+						contextDepth: 1,
+					},
+					{
+						name: 'active',
+						kind: 'scalar',
+						segments: [ 'active' ],
+						contextDepth: 1,
+					},
+				],
 			},
 		});
 		const code = statementToCode(declaration);
@@ -77,32 +81,75 @@ describe('ListController', () => {
 		expect(code).toContain('getLanguageList("objectProperty"');
 	});
 
-	it('represents nested list child props as empty arrays for now', () => {
+	it('builds nested list placeholder arrays recursively', () => {
 		const controller = createController();
 		const declaration = controller.buildDeclaration('_items', {
-			type: 'list',
-			child: {
-				type: 'object',
-				props: [
-					'label',
-					{ name: 'children', type: 'list' },
+			name: 'items',
+			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
+			item: {
+				kind: 'object',
+				properties: [
+					{
+						name: 'label',
+						kind: 'scalar',
+						segments: [ 'label' ],
+						contextDepth: 1,
+					},
+					{
+						name: 'children',
+						kind: 'list',
+						path: 'items[].children[]',
+						sourceKey: 'items[].children',
+						sourceSegments: [ 'children' ],
+						parentContextDepth: 1,
+						itemContextDepth: 2,
+						item: {
+							kind: 'object',
+							properties: [
+								{
+									name: 'label',
+									kind: 'scalar',
+									segments: [ 'label' ],
+									contextDepth: 2,
+								},
+							],
+						},
+					},
 				],
 			},
 		});
 		const code = statementToCode(declaration);
 
 		expect(code).toContain('label: getLanguageString');
-		expect(code).toContain('children: []');
+		expect(code).toContain('children: [{');
+		expect(code).toContain('_context + 1');
 	});
 
-	it('registers list source names and aliases for JSX wrapping', () => {
+	it('registers list source names and registry-derived tag aliases for JSX wrapping', () => {
+		const listMetadata = {
+			name: 'items',
+			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
+			tagAliases: [ 'renderedItems' ],
+			item: { kind: 'primitive' },
+		};
 		const vars = {
 			raw: [
-				[ 'items', { type: 'list', aliases: [ 'renderedItems' ] } ],
+				[ 'items', listMetadata ],
 			],
 			mapped: { items: '_items' },
 			names: [ 'items' ],
 			toTag: {},
+			listMetadata: [ listMetadata ],
 		};
 		const controller = createController(vars);
 		const path = { node: { body: [] } };
@@ -111,8 +158,8 @@ describe('ListController', () => {
 
 		expect(path.node.body).toHaveLength(1);
 		expect(vars.toTag).toEqual({
-			items: 'items',
-			renderedItems: 'items',
+			items: expect.objectContaining({ path: 'items[]' }),
+			renderedItems: expect.objectContaining({ path: 'items[]' }),
 		});
 	});
 
@@ -127,16 +174,7 @@ describe('ListController', () => {
 				return <ul>{ items.map((item) => <Item label={ item.label } />) }</ul>;
 			};
 			App.templateVars = [
-				[
-					'items',
-					{
-						type: 'list',
-						child: {
-							type: 'object',
-							props: [ 'label' ],
-						},
-					},
-				],
+				'items[].label',
 			];
 
 			module.exports = { App };
@@ -147,5 +185,89 @@ describe('ListController', () => {
 		});
 
 		expect(output).toBe('<ul>{{#items}}<li>{{label}}</li>{{/items}}</ul>');
+	});
+
+	it('supports flat primitive direct root list rendering', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <section>{ items }</section>;
+			};
+			App.templateVars = [ 'items[]' ];
+			module.exports = { App };
+		`;
+
+		const handlebars = await renderTemplateFixture('handlebars', source, 'App', {});
+		const php = await renderTemplateFixture('php', source, 'App', {});
+
+		expect(normalizeTemplateOutput(handlebars.output)).toBe('<section>{{#items}}{{.}}{{/items}}</section>');
+		expect(normalizeTemplateOutput(php.output)).toBe("<section><?php foreach ( $data['items'] as $data_1 ) { ?><?php echo $data_1; ?><?php } ?></section>");
+	});
+
+	it('throws for direct object root list rendering', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <section>{ items }</section>;
+			};
+			App.templateVars = [ 'items[].label' ];
+			module.exports = { App };
+		`;
+
+		await expect(renderTemplateFixture('handlebars', source, 'App', {})).rejects.toThrow(/Cannot render object list "items" directly/);
+	});
+
+	it('does not treat non-map list member calls as list wrapping usage', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <p>{ items.join(', ') }</p>;
+			};
+			App.templateVars = [ 'items[]' ];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {
+			items: [ 'red', 'blue' ],
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<p>red, blue</p>');
+	});
+
+	it('warns by default for helper calls with multiple declared list roots', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			const renderCombined = () => 'combined';
+			const App = ({ products = [], promotions = [] }) => {
+				return <section>{ renderCombined(products, promotions) }</section>;
+			};
+			App.templateVars = [
+				'products[].title',
+				'promotions[].label',
+			];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {});
+
+		expect(normalizeTemplateOutput(output)).toBe('<section>combined</section>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('multiple declared list roots'));
+	});
+
+	it('throws in strict mode for rendered aliases with multiple declared list roots', () => {
+		const source = `
+			const renderCombined = () => 'combined';
+			const App = ({ products = [], promotions = [] }) => {
+				const rendered = renderCombined(products, promotions);
+				return <section>{ rendered }</section>;
+			};
+			App.templateVars = [
+				'products[].title',
+				'promotions[].label',
+			];
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			strict: true,
+		})).toThrow(/multiple declared list roots/);
 	});
 });

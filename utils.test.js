@@ -14,35 +14,17 @@ function expressionFrom(source) {
 }
 
 describe('utils', () => {
-	it('reads nested template var config arrays from Babel expressions', () => {
+	it('reads flat template var string arrays from Babel expressions', () => {
 		const expression = expressionFrom(`[
 			'name',
-			[
-				'items',
-				{
-					type: 'list',
-					aliases: [ 'renderedItems' ],
-					child: {
-						type: 'object',
-						props: [ 'label', 'active' ],
-					},
-				},
-			],
+			'hero.summary',
+			'items[].label',
 		]`);
 
 		expect(getArrayFromExpression(expression)).toEqual([
 			'name',
-			[
-				'items',
-				{
-					type: 'list',
-					aliases: [ 'renderedItems' ],
-					child: {
-						type: 'object',
-						props: [ 'label', 'active' ],
-					},
-				},
-			],
+			'hero.summary',
+			'items[].label',
 		]);
 	});
 
@@ -51,6 +33,19 @@ describe('utils', () => {
 
 		expect(getExpressionArgs(expression, babel.types)).toEqual([
 			{ type: 'identifier', value: 'status' },
+			{ type: 'value', value: "'ready'" },
+		]);
+	});
+
+	it('extracts structured path args from member expressions', () => {
+		const expression = expressionFrom(`hero.media.url === 'ready'`);
+
+		expect(getExpressionArgs(expression, babel.types)).toEqual([
+			{
+				type: 'path',
+				value: 'hero.media.url',
+				segments: [ 'hero', 'media', 'url' ],
+			},
 			{ type: 'value', value: "'ready'" },
 		]);
 	});
