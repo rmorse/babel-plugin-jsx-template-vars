@@ -220,6 +220,10 @@ child components, and same-scope aliases assigned from `.map()`. Automatic
 cross-component inference remains intentionally unsupported; each component still
 declares its own `templateVars`.
 
+Unsupported but recognizable patterns warn by default, and `strict: true` turns
+those warnings into transform errors. See [docs/template-vars.md](docs/template-vars.md)
+for the component-local contract and strict diagnostics.
+
 ## Working examples
 
 [There is a working example using PHP output provided here.](https://github.com/rmorse/ssr-preact-php)

@@ -6,6 +6,11 @@ implementation. Earlier first-pass notes are retained as history where useful,
 but the current contract supports nested object and list paths to arbitrary
 declaration depth.
 
+Additional status note: component boundaries remain intentionally local, matching
+the pre-flat API behavior. Each `.templateVars` assignment is processed against
+that component only. Unsupported-pattern diagnostics now warn by default and can
+be promoted to transform errors with `strict: true`.
+
 ## Context
 
 The current public API asks users to declare template variables and, for anything
@@ -86,7 +91,7 @@ Review feedback confirmed the direction, with several amendments:
 - Deep nested list output, such as `products[].badges[].label`, belongs to the
   recursive context follow-up rather than the original first pass.
 - Do not infer template vars across component boundaries. Child components still
-  need their own declarations.
+  need their own declarations when they own dynamic template output.
 
 ## Key Model Change
 
@@ -627,12 +632,13 @@ diagnostics.warn(path, message);
 Use errors for invalid declarations. Use warnings only for valid declarations
 whose source usage cannot be inferred safely.
 
-## Remaining Open Questions
+## Remaining Intentional Non-Goals
 
-- Should unsupported but valid source usage warn by default, or only when a
-  future `strict` option is enabled?
-- Should helper calls that combine multiple declared list roots get a specialized
-  diagnostic when rendered directly?
+- Helper calls that combine multiple declared list roots warn by default and
+  throw under `strict: true`; automatic wrapping is not inferred.
+- Arbitrary helper-body dataflow analysis remains out of scope.
+- Automatic cross-component inference remains out of scope; each component owns
+  its own `templateVars` contract.
 
 ## Recommended Next Step
 

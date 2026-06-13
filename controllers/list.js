@@ -17,16 +17,18 @@ const safeListChainMethods = new Set( [
 ] );
 
 class ListController {
-	constructor( vars, contextName, babel ) {
+	constructor( vars, contextName, babel, config = {} ) {
 		this.vars = vars;
 		this.contextName = contextName;
 		this.babel = babel;
+		this.config = config;
 		this.rootConfigByName = new Map( ( vars.raw || [] ).map( ( [ name, config ] ) => [ name, config ] ) );
 		this.listMetadataByPath = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.listMetadataBySourceKey = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.sourceKey, meta ] ) );
 		this.scalarMetadataByPath = new Map( ( vars.scalarMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.pathAliasesByBinding = new WeakMap();
 		this.renderedListAliasesByBinding = new WeakMap();
+		this.unsupportedRenderedAliasesByBinding = new WeakMap();
 
 		this.initVars = this.initVars.bind( this );
 		this.buildDeclaration = this.buildDeclaration.bind( this );
@@ -63,6 +65,10 @@ class ListController {
 		if ( types.isIdentifier( id ) ) {
 			const renderedUsage = this.resolveRenderedListUsage( init, path );
 			if ( renderedUsage && renderedUsage.kind !== 'source' ) {
+				if ( renderedUsage.kind === 'unsupported' ) {
+					this.registerUnsupportedRenderedAlias( id.name, renderedUsage.message, path );
+					return;
+				}
 				this.registerRenderedListAlias( id.name, renderedUsage.metadata, path );
 				return;
 			}
@@ -92,6 +98,10 @@ class ListController {
 
 		const renderedUsage = this.resolveRenderedListUsage( right, path );
 		if ( renderedUsage && renderedUsage.kind !== 'source' ) {
+			if ( renderedUsage.kind === 'unsupported' ) {
+				this.registerUnsupportedRenderedAlias( left.name, renderedUsage.message, path );
+				return;
+			}
 			this.registerRenderedListAlias( left.name, renderedUsage.metadata, path );
 			return;
 		}
@@ -107,6 +117,13 @@ class ListController {
 		const binding = path.scope.getBinding( localName );
 		if ( binding ) {
 			this.renderedListAliasesByBinding.set( binding.identifier, metadata );
+		}
+	}
+
+	registerUnsupportedRenderedAlias( localName, message, path ) {
+		const binding = path.scope.getBinding( localName );
+		if ( binding ) {
+			this.unsupportedRenderedAliasesByBinding.set( binding.identifier, message );
 		}
 	}
 
@@ -452,6 +469,11 @@ class ListController {
 			return;
 		}
 
+		if ( usage.kind === 'unsupported' ) {
+			this.reportUnsupportedRenderedUsage( usage.message, path );
+			return;
+		}
+
 		this.assertRenderableListUsage( usage, path );
 
 		const partsBefore = this.createListWrapperParts( usage.metadata, 'open' );
@@ -471,6 +493,12 @@ class ListController {
 
 		if ( types.isIdentifier( expressionSource ) ) {
 			const binding = path.scope.getBinding( expressionSource.name );
+			if ( binding && this.unsupportedRenderedAliasesByBinding.has( binding.identifier ) ) {
+				return {
+					kind: 'unsupported',
+					message: this.unsupportedRenderedAliasesByBinding.get( binding.identifier ),
+				};
+			}
 			if ( binding && this.renderedListAliasesByBinding.has( binding.identifier ) ) {
 				return {
 					kind: 'renderedAlias',
@@ -506,7 +534,14 @@ class ListController {
 		}
 
 		if ( types.isCallExpression( expressionSource ) ) {
-			const metadata = this.resolveSingleListArgumentMeta( expressionSource, path );
+			const listArguments = this.resolveListArgumentMetas( expressionSource, path );
+			if ( listArguments.length > 1 ) {
+				return {
+					kind: 'unsupported',
+					message: this.createMultiRootHelperMessage( listArguments ),
+				};
+			}
+			const metadata = listArguments[ 0 ] || null;
 			return metadata ? {
 				kind: 'helperCall',
 				metadata,
@@ -529,6 +564,10 @@ class ListController {
 			path,
 			`Cannot render object list "${ usage.metadata.sourceKey }" directly. Use .map(), a rendered .map() alias, or a helper call that renders the list items.`
 		);
+	}
+
+	reportUnsupportedRenderedUsage( message, path ) {
+		diagnostics.unsupported( path, message, this.config );
 	}
 
 	createListWrapperParts( metadata, action ) {
@@ -643,15 +682,33 @@ class ListController {
 	}
 
 	resolveSingleListArgumentMeta( expression, path ) {
-		const metas = expression.arguments
-			.map( argument => this.resolveListMetaFromExpression( argument, path ) )
-			.filter( Boolean );
+		const metas = this.resolveListArgumentMetas( expression, path );
 
 		if ( metas.length !== 1 ) {
 			return null;
 		}
 
 		return metas[ 0 ];
+	}
+
+	resolveListArgumentMetas( expression, path ) {
+		const metas = [];
+		const seen = new Set();
+
+		expression.arguments.forEach( ( argument ) => {
+			const meta = this.resolveListMetaFromExpression( argument, path );
+			if ( meta && ! seen.has( meta.path ) ) {
+				seen.add( meta.path );
+				metas.push( meta );
+			}
+		} );
+
+		return metas;
+	}
+
+	createMultiRootHelperMessage( metas ) {
+		const names = metas.map( meta => `"${ meta.sourceKey }"` ).join( ', ' );
+		return `Cannot infer list template wrapping for a helper call that uses multiple declared list roots: ${ names }. Render each list separately or expose a single combined list shape.`;
 	}
 
 	resolveExpressionSegments( expression, path ) {

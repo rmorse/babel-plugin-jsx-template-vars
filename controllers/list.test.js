@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import babel from '@babel/core';
 import {
 	normalizeTemplateOutput,
 	renderTemplateFixture,
+	transformTemplateVars,
 } from '../test-utils/transform.js';
 
 const require = createRequire(import.meta.url);
@@ -29,6 +30,10 @@ function statementToCode(statement) {
 }
 
 describe('ListController', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it('builds primitive list placeholder arrays', () => {
 		const controller = createController();
 		const code = statementToCode(controller.buildDeclaration('_items', {
@@ -224,5 +229,45 @@ describe('ListController', () => {
 		});
 
 		expect(normalizeTemplateOutput(output)).toBe('<p>red, blue</p>');
+	});
+
+	it('warns by default for helper calls with multiple declared list roots', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			const renderCombined = () => 'combined';
+			const App = ({ products = [], promotions = [] }) => {
+				return <section>{ renderCombined(products, promotions) }</section>;
+			};
+			App.templateVars = [
+				'products[].title',
+				'promotions[].label',
+			];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {});
+
+		expect(normalizeTemplateOutput(output)).toBe('<section>combined</section>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('multiple declared list roots'));
+	});
+
+	it('throws in strict mode for rendered aliases with multiple declared list roots', () => {
+		const source = `
+			const renderCombined = () => 'combined';
+			const App = ({ products = [], promotions = [] }) => {
+				const rendered = renderCombined(products, promotions);
+				return <section>{ rendered }</section>;
+			};
+			App.templateVars = [
+				'products[].title',
+				'promotions[].label',
+			];
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			strict: true,
+		})).toThrow(/multiple declared list roots/);
 	});
 });

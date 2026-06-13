@@ -43,7 +43,7 @@ const templateVarsController = {
 	},
 	contextIdentifier: null,
 	recursionIdentifier: null,
-	init: function (templateVars, componentName, componentPath, babel) {
+	init: function (templateVars, componentName, componentPath, babel, config = {}) {
 		this.babel = babel;
 		const { types, parse } = babel;
 		// Get the three types of template vars.
@@ -112,7 +112,7 @@ const templateVarsController = {
 		this.recursionIdentifier = componentPath.scope.generateUidIdentifier("uid");
 		let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
-		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel);
+		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel, config);
 		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
 		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
 		if (types.isObjectPattern(componentParam)) {

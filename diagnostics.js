@@ -15,6 +15,17 @@ const diagnostics = {
 			console.warn( message );
 		}
 	},
+
+	unsupported( path, message, config = {} ) {
+		if ( config.strict === true ) {
+			this.error( path, message );
+			return;
+		}
+		if ( config.warnOnUnsupported === false ) {
+			return;
+		}
+		this.warn( path, message );
+	},
 };
 
 module.exports = diagnostics;

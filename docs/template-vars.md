@@ -60,6 +60,30 @@ alias, or a helper call that renders the item markup. Rendering `{ products }`
 for `products[].title` throws a transform error instead of producing
 `[object Object]`.
 
+## Component Boundaries
+
+`templateVars` is component-local. The transform processes each
+`Component.templateVars` assignment against that component only; it does not
+infer a child component's template contract from a parent component.
+
+This matches the original pre-flat API design. Parent components can still pass
+already-templated placeholder values through props, but any component that owns
+dynamic output should declare its own `templateVars`.
+
+```jsx
+const ProductCard = ({ title }) => <article>{ title }</article>;
+ProductCard.templateVars = [ 'title' ];
+
+const App = ({ products }) => (
+	<section>
+		{ products.map((product) => (
+			<ProductCard title={ product.title } />
+		)) }
+	</section>
+);
+App.templateVars = [ 'products[].title' ];
+```
+
 ## Nested Lists And Context
 
 Nested list wrappers are generated relative to the current list context.
@@ -139,3 +163,28 @@ Still unsupported:
 - arbitrary helper-call dataflow analysis inside helper bodies
 - automatic cross-component inference; each component still declares its own
   `templateVars`
+
+## Unsupported Pattern Diagnostics
+
+Unsupported but valid source patterns warn by default when the transform can
+identify them clearly. For example, rendering a helper call that combines two
+declared list roots is ambiguous because there is no single list wrapper to
+emit:
+
+```jsx
+return <section>{ renderCombined(products, promotions) }</section>;
+```
+
+Use `strict: true` to turn those warnings into transform errors:
+
+```js
+plugins: [
+	[ 'babel-plugin-jsx-template-vars', {
+		language: 'handlebars',
+		strict: true,
+	} ],
+];
+```
+
+Use `warnOnUnsupported: false` to suppress unsupported-pattern warnings when
+you intentionally leave the expression as runtime JavaScript.

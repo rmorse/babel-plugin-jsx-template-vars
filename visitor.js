@@ -130,7 +130,7 @@ function templateVarsVisitor( babel, config ) {
 			}
 
 			const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, path );
-			templateVarsController.init( templateVars, componentName, componentPath, babel );
+			templateVarsController.init( templateVars, componentName, componentPath, babel, config );
 		}
 	}
 };
