@@ -45,6 +45,9 @@ npm pack --dry-run
 source files. It verifies that `.npmignore` continues to exclude test-only files
 from published packages.
 
+CI reads the Node.js version from `.nvmrc`. Keep that file pinned to an exact
+version so npm lockfile behavior does not drift as new Node patch releases ship.
+
 ## Docs-only changes
 
 CI should always start, even for documentation-only changes. Workflow-level path
