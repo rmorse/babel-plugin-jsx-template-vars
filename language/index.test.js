@@ -72,10 +72,18 @@ describe('language presets', () => {
 				},
 				else: {
 					open: expect.any(String),
-					close: expect.any(String),
 				},
 			},
 		});
+	});
+
+	it('does not keep legacy PHP generic control tokens in the preset', () => {
+		const php = readLanguage('php');
+
+		expect(php.control).not.toHaveProperty('if');
+		expect(php.control).not.toHaveProperty('elseif');
+		expect(php.control).not.toHaveProperty('end');
+		expect(php.control.else).not.toHaveProperty('close');
 	});
 
 	it('documents the required Handlebars equality helper names in the preset', () => {

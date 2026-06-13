@@ -65,10 +65,8 @@ class ControlController {
 			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
 			
 
-			// create a new expression to add together 3 strings
-			// if = expressionSource.consequent
-			// else = expressionSource.alternate
-			// Create a binary expression with the + operator
+			// Ternaries are emitted as one control block with an inverse branch:
+			// open -> consequent -> else transition -> alternate -> close.
 			const parts = [
 				languageOpen,
 				controlStartString,
