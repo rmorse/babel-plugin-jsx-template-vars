@@ -1,6 +1,6 @@
 const ProductLink = ({ label, url, available }) => {
 	return (
-		<a href={ url }>
+		<a href={ url } data-available={ available }>
 			{ available ? <strong>{ label }</strong> : <span>Hidden</span> }
 		</a>
 	);
@@ -26,7 +26,8 @@ const App = ({ title, hero, products, status, visible }) => {
 			<h1>{ title }</h1>
 			<p>{ hero.summary }</p>
 			{ status === 'published' && <aside>{ status }</aside> }
-			{ visible && <section>{ renderedProducts }</section> }
+			{ visible && <footer>Visible</footer> }
+			{ products && <section>{ renderedProducts }</section> }
 		</main>
 	);
 };
