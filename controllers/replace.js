@@ -33,7 +33,7 @@ class ReplaceController {
 			// Now lets carefully update the node in 'ObjectProperty' types.
 			// We can only re-assign the property value name, not the property key name
 			// So we want { varName } to become { varName: _uid } or { something: varName } to become { something: _uid }
-			if ( types.isObjectProperty( path.parentPath.node ) ) {
+			if ( types.isObjectProperty( path.parentPath.node ) && ! types.isObjectPattern( path.parentPath.parentPath.node ) ) {
 				if ( types.isIdentifier( path.parentPath.node.value ) ) {
 					const valueName = path.parentPath.node.value.name;
 					if ( this.vars.names.includes( valueName ) ) {
