@@ -157,9 +157,6 @@ class ListController {
 								}
 							}
 						}
-					} else {
-						// Support other member expressions.
-						path.node.name = this.vars.mapped[ path.node.name ];
 					}
 				} else {
 					path.node.name = this.vars.mapped[ path.node.name ];

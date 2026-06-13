@@ -1,4 +1,23 @@
 
+const {
+	getArgObjectExpression,
+	getLanguageCallExpression,
+	getMemberExpressionSegments,
+} = require( '../utils' );
+
+function createTemplateArg( varName, varConfig, types ) {
+	const segments = Array.isArray( varConfig.segments ) ? varConfig.segments : null;
+	return {
+		type: segments && segments.length > 1 ? 'path' : 'identifier',
+		value: varName,
+		segments,
+	};
+}
+
+function isPartialMemberExpression( path, types ) {
+	return types.isMemberExpression( path.parentPath?.node ) && path.parentPath.node.object === path.node;
+}
+
 
 class ReplaceController {
 	constructor( vars, contextName, babel ) {
@@ -7,16 +26,34 @@ class ReplaceController {
 		this.babel = babel;
 		this.initVars = this.initVars.bind( this );
 		this.updateIdentifierNames = this.updateIdentifierNames.bind( this );
+		this.updateMemberExpressionNames = this.updateMemberExpressionNames.bind( this );
 	}
 	initVars( path ) {
 		// Add the new replace vars to to top of the block statement.
-		const { parse } = this.babel;
+		const { types } = this.babel;
 		const self = this;
 		this.vars.raw.forEach( ( templateVar ) => {
 			const [ varName, varConfig ] = templateVar;
 			// Alway declare as `let` so we don't need to worry about its usage later.
-			const replaceString = `getLanguageString( [ 'language', 'open' ], [], ${ this.contextName } ) + getLanguageReplace( 'format', { value: '${ varName }' }, ${ self.contextName } ) + getLanguageString( [ 'language', 'close' ], [], ${ this.contextName } )`; 
-			path.node.body.unshift( parse(`let ${ self.vars.mapped[ varName ] } = ${ replaceString };`) );
+			const languageOpen = getLanguageCallExpression( [ 'language', 'open' ], [], this.contextName, types );
+			const replaceCall = types.callExpression(
+				types.identifier( 'getLanguageReplace' ),
+				[
+					types.stringLiteral( 'format' ),
+					getArgObjectExpression( createTemplateArg( varName, varConfig, types ), types ),
+					types.identifier( self.contextName ),
+				]
+			);
+			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
+			const replaceExpression = types.binaryExpression(
+				'+',
+				types.binaryExpression( '+', languageOpen, replaceCall ),
+				languageClose
+			);
+
+			path.node.body.unshift( types.variableDeclaration( 'let', [
+				types.variableDeclarator( types.identifier( self.vars.mapped[ varName ] ), replaceExpression ),
+			] ) );
 		} );
 	}
 	updateIdentifierNames( path ) {
@@ -42,6 +79,24 @@ class ReplaceController {
 				}
 			}
 		}
+	}
+	updateMemberExpressionNames( path ) {
+		const { types } = this.babel;
+		if ( isPartialMemberExpression( path, types ) ) {
+			return;
+		}
+
+		const segments = getMemberExpressionSegments( path.node, types );
+		if ( ! segments ) {
+			return;
+		}
+
+		const pathName = segments.join( '.' );
+		if ( ! this.vars.names.includes( pathName ) ) {
+			return;
+		}
+
+		path.replaceWith( types.identifier( this.vars.mapped[ pathName ] ) );
 	}
 };
 

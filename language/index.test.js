@@ -124,6 +124,26 @@ describe('language runtime', () => {
 		)).toBe("'ready'");
 	});
 
+	it('expands structured path args for PHP and Handlebars presets', () => {
+		const php = readLanguage('php');
+		const handlebars = readLanguage('handlebars');
+		const pathArg = {
+			type: 'path',
+			value: 'hero.summary',
+			segments: [ 'hero', 'summary' ],
+		};
+
+		withLanguage(php, () => {
+			expect(getLanguageReplace('format', pathArg, 0)).toBe("echo $data['hero']['summary'];");
+			expect(getLanguageControl([ 'ifTruthy', 'open' ], [ pathArg ], 0)).toBe("if ( $data['hero']['summary'] ) {");
+		});
+
+		withLanguage(handlebars, () => {
+			expect(getLanguageReplace('format', pathArg, 0)).toBe('{{hero.summary}}');
+			expect(getLanguageControl([ 'ifTruthy', 'open' ], [ pathArg ], 0)).toBe('{{#if hero.summary}}');
+		});
+	});
+
 	it('reads nested language strings from the active language preset', () => {
 		const php = readLanguage('php');
 

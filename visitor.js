@@ -45,18 +45,7 @@ const {
 } = require( './utils' );
 
 const templateVarsController = require( './controller' );
-/**
- * Ensure the config prop is an array of two elements, with the first item being the var name and the second being the var config.
- * 
- * @param {Array|String} prop - The prop to normalise
- * @returns 
- */
-function normaliseConfigProp( prop ) {
-	if ( ! Array.isArray( prop ) ) {
-		return [ prop, {} ];
-	}
-	return prop;
-}
+const { createTemplateVarsRegistry } = require( './template-vars-registry' );
 const defaultLanguage = 'handlebars';
 
 /**
@@ -94,28 +83,7 @@ function getTemplateVarsFromExpression( expression, types ) {
 			// Then we have an array to process the props.
 			templatePropsValue = getArrayFromExpression( right );
 		}
-		const templateVars = {
-			replace: [],
-			control: [],
-			list: [],
-		}
-
-		// Build template prop queues for processing at different times.
-		templatePropsValue.forEach( ( prop ) => {
-			const normalisedProp = normaliseConfigProp( prop );
-			const [ varName, varConfig ] = normalisedProp;
-
-			// If the type is not set assume it is `replace`
-			if ( varConfig.type === 'replace' || ! varConfig.type ) {
-				templateVars.replace.push( normalisedProp );
-			} else if ( varConfig.type === 'control' ) {
-				templateVars.control.push( normalisedProp );
-			} else if ( varConfig.type === 'list' ) {
-				templateVars.list.push( normalisedProp );
-			}
-			
-		} );
-		return templateVars;
+		return templatePropsValue;
 	}
 	return false;
 }
@@ -139,9 +107,9 @@ function templateVarsVisitor( babel, config ) {
 			
 			const { expression } = path.node;
 			
-			// Process the expression and get template vars as an object
-			const templateVars = getTemplateVarsFromExpression( expression, types );
-			if ( ! templateVars ) {
+			// Process the expression and get the raw template var declarations.
+			const templatePropsValue = getTemplateVarsFromExpression( expression, types );
+			if ( ! templatePropsValue ) {
 				return;
 			}
 
@@ -163,6 +131,7 @@ function templateVarsVisitor( babel, config ) {
 				return;
 			}
 
+			const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, path );
 			templateVarsController.init( templateVars, componentName, componentPath, babel );
 		}
 	}

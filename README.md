@@ -59,9 +59,9 @@ _This should only be added to your **pre-render** build._
 
 ### 3. Define which variables in your components will be template variables.
 
-Add a `templateVars` property to your component to specificy which variables will be exposed.
+Add a `templateVars` property to your component to specify which variables will be exposed.
 
-The format is an array, of strings (or arrays with additional config):
+The format is an array of flat data-path strings:
 
 ```jsx
 const Person = ( { name, favoriteColor } ) => {
@@ -75,53 +75,84 @@ const Person = ( { name, favoriteColor } ) => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
+Object paths and one-level list item paths can be declared in the same flat array:
+
+```jsx
+ProductCard.templateVars = [
+    'title',
+    'hero.summary',
+    'products[].name',
+    'products[].url',
+];
+```
+
 
 ## Template variable types
 
-There are 3 types of variables that have different behaviours.
+There are 3 usage roles that have different behaviours. Roles are inferred from
+how the declared path is used in the component.
 
 > **Note**
 > **There are significant limitations with `control` and `list` type variables, [check the docs for more information](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki/Variable-types).**
 
 ### 1. Replacement variables
 
-Replacement variables are variables that will need to be replaced by a dynamic variable.
+Replacement variables are declared paths that appear in rendered output.
 
 In Handlebars this would be: `{{name}}`, and if using PHP this would be: `<?php echo $data['name'] ?>`.
 
-The default variable type is a replacement variable:
+Scalar paths and object paths are supported:
 
 ```js
-Person.templateVars = [ 'name' ];
-```
-
-The type can also be passed as an argument:
-
-```js
-Person.templateVars = [ [ 'name', { type: 'replace' } ] ];
+Person.templateVars = [ 'name', 'profile.favoriteColor' ];
 ```
 
 
 ### 2. Control variables (showing/hiding content)
-Depending on the value of a specific variable, you might wish to show or hide content in your component.  Use the `control` type variable to signify this.
+Depending on the value of a specific variable, you might wish to show or hide content in your component.
 
 E.g.:
-```js
-Person.templateVars = [ 'name', [ 'show', { type: 'control' } ] ];
+```jsx
+const Person = ({ name, show, status }) => (
+    <>
+        <h1>{ name }</h1>
+        { show && <p>Visible</p> }
+        { status === 'ready' && <p>Ready</p> }
+    </>
+);
+
+Person.templateVars = [ 'name', 'show', 'status' ];
 ```
 
-In this example `show` is used a control variable.
+In this example `show` and `status` are inferred as control variables because
+they are used in supported conditional expressions. If a variable is also
+rendered directly, it can be both a replacement and a control variable.
 
 
 ### 3. Lists (and repeatable elements)
 
-It is important to have a mechanism for showing repeatable content like arrays or lists. 
+It is important to have a mechanism for showing repeatable content like arrays or lists.
 
-This is supported with some limitations, and is signified by the `list` variable type:
+Primitive lists use `[]`:
 
 ```js
-Person.templateVars = [ 'name', [ 'favoriteColors', { type: 'list' } ] ];
+Person.templateVars = [ 'name', 'favoriteColors[]' ];
 ```
+
+Object lists declare the item fields that should be exposed:
+
+```js
+ProductList.templateVars = [
+    'products[].name',
+    'products[].url',
+    'products[].available',
+];
+```
+
+The `[]` marker declares list shape. List template wrappers are emitted when the
+declared list is rendered directly as a primitive root list or used with a
+supported `.map()` expression. Other member calls, such as `products.join(', ')`,
+are left as normal JavaScript.
 
 
 ***
@@ -149,24 +180,24 @@ const Person = () => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
-Object properties (e.g. `aPerson.favoriteColor`) are not yet supported but it should be possible to add support for this in the future.  In these cases you can destructure the object and use the object properties as template variables:
+Simple object properties can be declared as paths:
 
 ```jsx
-const aPerson = {
-    name: 'Mary',
-    favoriteColor: 'green'
-};
-const Person = () => {
-    const { name, favoriteColor } = aPerson;
+const Person = ({ profile }) => {
     return (
         <>
-            <h1>{ name }</h1>
-            <p>Favorite color: { favoriteColor }</p>
+            <h1>{ profile.name }</h1>
+            <p>Favorite color: { profile.favoriteColor }</p>
         </>
     );
 };
-Person.templateVars = [ 'name', 'favoriteColor' ];
+Person.templateVars = [ 'profile.name', 'profile.favoriteColor' ];
 ```
+
+The first pass supports bare identifiers, simple object member paths, and
+one-level list item paths. Destructure renames, optional chaining, spreads,
+chained list transforms before `.map()`, and deep nested list output are not
+supported yet.
 
 ## Working examples
 

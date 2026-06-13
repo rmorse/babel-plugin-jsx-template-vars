@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import babel from '@babel/core';
-import { renderTemplateFixture } from '../test-utils/transform.js';
+import {
+	normalizeTemplateOutput,
+	renderTemplateFixture,
+} from '../test-utils/transform.js';
 
 const require = createRequire(import.meta.url);
 const { ListController } = require('./list');
@@ -147,5 +150,37 @@ describe('ListController', () => {
 		});
 
 		expect(output).toBe('<ul>{{#items}}<li>{{label}}</li>{{/items}}</ul>');
+	});
+
+	it('supports flat primitive direct root list rendering', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <section>{ items }</section>;
+			};
+			App.templateVars = [ 'items[]' ];
+			module.exports = { App };
+		`;
+
+		const handlebars = await renderTemplateFixture('handlebars', source, 'App', {});
+		const php = await renderTemplateFixture('php', source, 'App', {});
+
+		expect(normalizeTemplateOutput(handlebars.output)).toBe('<section>{{#items}}{{.}}{{/items}}</section>');
+		expect(normalizeTemplateOutput(php.output)).toBe("<section><?php foreach ( $data['items'] as $data_1 ) { ?><?php echo $data_1; ?><?php } ?></section>");
+	});
+
+	it('does not treat non-map list member calls as list wrapping usage', async () => {
+		const source = `
+			const App = ({ items }) => {
+				return <p>{ items.join(', ') }</p>;
+			};
+			App.templateVars = [ 'items[]' ];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {
+			items: [ 'red', 'blue' ],
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<p>red, blue</p>');
 	});
 });

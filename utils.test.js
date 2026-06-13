@@ -54,4 +54,17 @@ describe('utils', () => {
 			{ type: 'value', value: "'ready'" },
 		]);
 	});
+
+	it('extracts structured path args from member expressions', () => {
+		const expression = expressionFrom(`hero.media.url === 'ready'`);
+
+		expect(getExpressionArgs(expression, babel.types)).toEqual([
+			{
+				type: 'path',
+				value: 'hero.media.url',
+				segments: [ 'hero', 'media', 'url' ],
+			},
+			{ type: 'value', value: "'ready'" },
+		]);
+	});
 });

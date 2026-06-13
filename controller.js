@@ -14,12 +14,15 @@ const { ControlController } = require('./controllers/control');
  * @param {Object} vars The vars to generate uids for.
  * @returns 
  */
-function generateVarTypeUids(scope, vars) {
+function generateVarTypeUids(scope, vars, sharedVarMap = {}) {
 	const varMap = {};
 	const varNames = [];
 	vars.forEach(([varName, varConfig]) => {
-		const newIdentifier = scope.generateUidIdentifier("uid");
-		varMap[varName] = newIdentifier.name;
+		if ( ! sharedVarMap[ varName ] ) {
+			const newIdentifier = scope.generateUidIdentifier("uid");
+			sharedVarMap[ varName ] = newIdentifier.name;
+		}
+		varMap[varName] = sharedVarMap[ varName ];
 		varNames.push(varName);
 	});
 
@@ -45,9 +48,10 @@ const templateVarsController = {
 		const { types, parse } = babel;
 		// Get the three types of template vars.
 		const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
+		const sharedVarMap = {};
 
 		// Build the map of vars to replace.
-		const replaceVarsParsed = generateVarTypeUids(componentPath.scope, replaceVars);
+		const replaceVarsParsed = generateVarTypeUids(componentPath.scope, replaceVars, sharedVarMap);
 		this.vars.replace = {
 			raw: replaceVars,
 			mapped: replaceVarsParsed[0],
@@ -57,7 +61,7 @@ const templateVarsController = {
 		//replaceVarsInv
 
 		// Get the control vars names
-		const [controlVarsMap, controlVarsNames] = generateVarTypeUids(componentPath.scope, controlVars);
+		const [controlVarsMap, controlVarsNames] = generateVarTypeUids(componentPath.scope, controlVars, sharedVarMap);
 		this.vars.control = {
 			raw: controlVars,
 			mapped: controlVarsMap,
@@ -65,7 +69,7 @@ const templateVarsController = {
 		}
 
 		// Build the map of var lists.
-		const [listVarsMap, listVarsNames] = generateVarTypeUids(componentPath.scope, listVars);
+		const [listVarsMap, listVarsNames] = generateVarTypeUids(componentPath.scope, listVars, sharedVarMap);
 		this.vars.list = {
 			raw: listVars,
 			mapped: listVarsMap,
@@ -276,6 +280,10 @@ const templateVarsController = {
 				// we created earlier.
 				replaceController.updateIdentifierNames(subPath);
 				listController.updateIdentifierNames(subPath);
+			},
+			MemberExpression(subPath) {
+				controlController.updateTernaryMemberConditions(subPath);
+				replaceController.updateMemberExpressionNames(subPath);
 			},
 			// Track vars in JSX expressions in case we need have any control vars to process
 			JSXExpressionContainer(subPath) {

@@ -23,6 +23,18 @@ function isArgString( arg ) {
 function getVariableString( arg, context ) {
 	return getLanguageString( 'variable', [], [], context ).replace( "||%v||", arg );
 }
+
+function getVariableArgValue( arg, string ) {
+	if ( Array.isArray( arg.segments ) && arg.segments.length > 0 ) {
+		if ( string.includes( "['[%_variable_]']" ) ) {
+			return arg.segments.join( "']['" );
+		}
+		return arg.segments.join( '.' );
+	}
+
+	return arg.value;
+}
+
 /**
  * Replaces tokens such as ||%1|| and ||%2|| with the arguments passed in.
  *
@@ -45,7 +57,7 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
 			return `data_${ context + 1 }`;
 		} else if ( tagName === '_variable_' ) {
 			const returnArg = argsArray.shift();
-			return returnArg.value;
+			return getVariableArgValue( returnArg, string );
 		}
 
 		// Now lets get custom language tags.
@@ -58,7 +70,7 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
 			// Instead of getting the language string, return the actual string or value.
 			if ( variableNames.includes( tagName ) ) {
 				// Instead of getting the language string, return the value.
-				if ( argsArray[0].type === 'value' ) {
+				if ( argsArray[0] && argsArray[0].type === 'value' ) {
 					const arg = argsArray.shift();
 					return arg.value;
 				}

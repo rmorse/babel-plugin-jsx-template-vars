@@ -35,6 +35,36 @@ function getArrayFromExpression( expression ) {
 	return props;
 };
 
+function getMemberExpressionSegments( expression, types ) {
+	if ( types.isIdentifier( expression ) ) {
+		return [ expression.name ];
+	}
+
+	if ( ! types.isMemberExpression( expression ) || expression.computed ) {
+		return null;
+	}
+
+	const objectSegments = getMemberExpressionSegments( expression.object, types );
+	if ( ! objectSegments ) {
+		return null;
+	}
+
+	if ( types.isIdentifier( expression.property ) ) {
+		return [ ...objectSegments, expression.property.name ];
+	}
+
+	return null;
+}
+
+function getExpressionPath( expression, types ) {
+	if ( types.isIdentifier( expression ) ) {
+		return expression.name;
+	}
+
+	const segments = getMemberExpressionSegments( expression, types );
+	return segments ? segments.join( '.' ) : null;
+}
+
 function getExpressionArgs( expression, types ) {
 	let args = [];
 	// let currentNode = expression.left;
@@ -46,11 +76,20 @@ function getExpressionArgs( expression, types ) {
 		// Should handle booleans, integers, floats etc
 		args.push( { type: 'value', value: String( expression.value ) } );
 	} else if ( types.isMemberExpression( expression )) {
-		args.push( { type: 'identifier', value: `${ expression.object.name }.${ expression.property.name }` } );
+		const segments = getMemberExpressionSegments( expression, types );
+		if ( segments ) {
+			args.push( { type: 'path', value: segments.join( '.' ), segments } );
+		}
 	} else if ( types.isUnaryExpression( expression ) ) {
 		args = [ ...args, ...getExpressionArgs( expression.argument, types ) ];
 	}
 	else if ( types.isBinaryExpression( expression ) ) {
+		args = [
+			...args,
+			...getExpressionArgs( expression.left, types ),
+			...getExpressionArgs( expression.right, types )
+		];
+	} else if ( types.isLogicalExpression( expression ) ) {
 		args = [
 			...args,
 			...getExpressionArgs( expression.left, types ),
@@ -111,11 +150,7 @@ function getLanguageCallExpression( targets, args, context, types ) {
 	// using types, create a new object with the properties "type" and "value":
 	const argsNodes = [];
 	args.map( ( arg ) => {
-		const objectWithProps = types.objectExpression( [
-			types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
-			types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
-		] );
-		argsNodes.push( objectWithProps );
+		argsNodes.push( getArgObjectExpression( arg, types ) );
 	} );
 		
 	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
@@ -128,9 +163,29 @@ function getLanguageListCallExpression( action, name, context, types ) {
 	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, types.identifier( context ) ] );
 }
 
+function getArgObjectExpression( arg, types ) {
+	const props = [
+		types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
+		types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
+	];
+
+	if ( Array.isArray( arg.segments ) ) {
+		props.push(
+			types.objectProperty(
+				types.identifier( 'segments' ),
+				types.arrayExpression( arg.segments.map( segment => types.stringLiteral( segment ) ) )
+			)
+		);
+	}
+
+	return types.objectExpression( props );
+}
+
 
 module.exports = {
 	getExpressionArgs,
+	getExpressionPath,
+	getMemberExpressionSegments,
 	getArrayFromExpression,
 	getObjectFromExpression,
 	injectContextToJSXElementComponents,
@@ -138,4 +193,5 @@ module.exports = {
 	isJSXElementInput,
 	getLanguageCallExpression,
 	getLanguageListCallExpression,
+	getArgObjectExpression,
 };
