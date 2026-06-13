@@ -6,28 +6,59 @@ against the current plugin implementation (visitor bucketing, three controllers,
 language presets, `__context__` depth, and existing tests/fixtures).
 
 **Verdict:** The direction is sound — flat paths plus a normalized registry with
-multi-role usage is the right long-term model. The phased rollout is sensible,
-but several gaps between the proposed API and what the transform can actually do
-today are understated. The biggest risks are (1) compiling flat paths into the
-legacy list config without fixing its one-level depth limit, (2) treating
-declaration shape (`products[]`) as equivalent to usage role (list wrapping),
-and (3) assuming dotted paths are mostly a language-output problem when they
-also require AST matching and controller changes throughout.
+multi-role usage is the right long-term model. The phased rollout is sensible as
+an internal build sequence. **Assumption:** nothing ships until all phases are
+complete; intermediate stages exist to lock foundations, not to expose partial
+APIs.
+
+That release strategy **does not remove** the technical gaps below — they must
+still be resolved before the single release. It **does** change how several
+findings should be read: interim replace-only behavior, partial inference, and
+legacy shims are acceptable *during development* but must not survive as the
+shipped architecture or documented public contract.
+
+The biggest **ship-blocking** risks remain: (1) compiling flat paths into legacy
+list config and never replacing it, (2) treating declaration shape (`products[]`)
+as equivalent to usage role (list wrapping), (3) assuming dotted paths are
+mostly a language-output problem when they also require AST matching and
+controller changes throughout, and (4) nested list examples in the plan that
+exceed today's one-level context machinery unless a later phase explicitly builds
+that machinery.
+
+---
+
+## Release strategy: what changes in this review
+
+| Finding | Partial-release reading | Full-release-only reading |
+| --- | --- | --- |
+| Flat strings are replace-only until Phase 3 | User-facing gap; document interim limitations | Internal sequencing only; fine until Phase 3 lands, not a public concern |
+| Opt-in inference / phased major version | Needed to protect users mid-rollout | One migration at release; document breaking changes once, not per phase |
+| Phase 1 → legacy list compile | Risky if users adopt early | Acceptable **temporary** shim if removed before release |
+| Narrow v1 grammar / defer deep paths | Scope cut for first public API | Scope cut for **the release** unless a phase explicitly delivers deep lists |
+| Interim docs saying "replace-only for now" | Required | Unnecessary; docs can describe the finished API only |
+| Duplicate UIDs across phases | User-visible bug if any phase ships | Internal test debt; still fix before release, less urgency mid-sequence |
+| Semantic change when inference lands | Breaks existing apps incrementally | Breaks existing apps **once** at release — still worth cataloguing |
+
+**Bottom line:** phasing lowers **external migration** risk but not **internal
+architecture** risk. The review's structural recommendations (registry-first,
+path ↔ AST resolution, single UID per path, language arg extensions) still
+apply; several "document the interim gap" and "opt-in flag" items become
+release-note items instead.
 
 ---
 
 ## Executive summary
 
-| Area | Risk | Recommendation |
+| Area | Ship-blocking? | Recommendation |
 | --- | --- | --- |
-| Flat `products[].badges[].label` | High | Mark deep nested lists as out of scope for v1 flat API; keep child-component pattern |
-| Phase 1 → legacy list compile | High | Build registry first; treat legacy compile as optional shim, not target architecture |
-| Multi-role (`status` replace + control) | Medium | Single UID per path from Phase 1; defer bucket removal to Phase 4 |
-| Object paths (`hero.title`) | Medium | Path-aware AST matching + language arg shape change, not just PHP/Handlebars presets |
-| Role inference (Phase 3) | Medium | Default to explicit legacy behavior until inference ships; document the gap |
-| `__context__` depth | High | Current +1-per-map model cannot support nested list paths without redesign |
-| Custom languages | Medium | Add structured path args; preserve flat `variable` arg for backward compatibility |
-| Aliases (`renderedProducts`) | Medium | Flat API has no alias story; inference cannot recover alias-based list wrapping |
+| Flat `products[].badges[].label` | Yes, if in release grammar | Either add explicit deep-list phase before release or cut from release grammar |
+| Phase 1 → legacy list compile | Yes, if it becomes final | Fine as interim shim; registry must be the architecture that ships |
+| Multi-role (`status` replace + control) | Yes | Single UID per path before release; Phase 4 remains required, not optional polish |
+| Object paths (`hero.title`) | Yes | Path-aware AST matching + language arg shape change, not just PHP/Handlebars presets |
+| Role inference (Phase 3) | Yes | Must be complete and tested before release; no opt-in needed for internal phases |
+| `__context__` depth | Yes, for nested flat paths | Redesign required if `products[].badges[].label` is in the release API |
+| Custom languages | Yes | Add structured path args; one-time custom-language migration note at release |
+| Aliases (`renderedProducts`) | Yes, if flat API replaces legacy | Resolve via map-assignment inference or keep legacy escape hatch in release docs |
 
 ---
 
@@ -69,14 +100,13 @@ if (varConfig.type === 'replace' || !varConfig.type) {
 } else if (varConfig.type === 'control') { ... }
 ```
 
-Until Phase 3–4 land, a flat string like `'visible'` defaults to **replace only**.
-A component using `{ visible && ... }` without `{ type: 'control' }` will get
-replacement UIDs in JSX conditions — wrong output — if users adopt the flat API
-early.
+Until Phase 3–4 land, a flat string like `'visible'` defaults to **replace only**
+internally. That is acceptable while phases are incomplete, but it must not be
+what ships: at release, `{ visible && ... }` must infer or assign control without
+requiring duplicate declarations.
 
-**Gap in plan:** Phase 1 should state clearly that flat strings remain
-replace-only until Phase 3, *or* Phase 1 should populate the registry and derive
-buckets without changing semantics (legacy explicit types still win).
+**Gap in plan:** No explicit checkpoint that Phase 4 is release-blocking. Add a
+“release gate” test suite covering multi-role paths before any public cut.
 
 ### 3. List role from `[]` in declaration vs from `.map()` usage
 
@@ -178,9 +208,12 @@ control**, not **default to replace in a conditional context**.
 
 ---
 
-## Risky migration paths
+## Internal phase sequencing risks (not partial-release migration)
 
-### Phase 1: flat → legacy list config
+With a single release at the end, these are **implementation discipline** risks,
+not user migration risks.
+
+### Phase 1: flat → legacy list config as a shim
 
 Compiling:
 
@@ -189,17 +222,15 @@ Compiling:
 ```
 
 into legacy `{ type: 'list', child: { type: 'object', props: [...] } }` is a
-fast win but **inherits all legacy limits** (one-level nesting, empty nested list
-placeholders, no multi-role on `products` when also used as control).
+reasonable way to keep controllers working while the registry is built. It
+**inherits all legacy limits** until later phases replace it (one-level nesting,
+empty nested list placeholders, no multi-role on `products` when also used as
+control).
 
-Users reading the flat API examples may assume nested paths work because the
-**syntax** allows them.
-
-**Safer migration:**
-
-1. Parse flat paths into a **normalized registry** (plan’s conceptual shape).
-2. Optionally derive legacy buckets for controllers that are not registry-aware yet.
-3. Gate flat nested-list syntax behind validation errors until deep list phase ships.
+**Risk:** the shim becomes the de facto shipped architecture because tests pass
+against it. **Mitigation:** mark shim code paths with explicit removal criteria;
+add release-gate tests that fail if nested paths or multi-role behavior still
+route through legacy list config.
 
 ### Phase 2 before Phase 4 (object paths without unified UIDs)
 
@@ -208,18 +239,23 @@ before multi-role unification, the same logical field could still get separate
 replace and control UIDs when also used in `{ hero.title && ... }` — the plan
 already flags duplicated UIDs as a likely bug source.
 
-**Recommendation:** Introduce `{ type: 'path', segments: [...] }` language args
-and **one generated binding per declared path** in Phase 1 registry work, even if
-controllers still read from derived buckets.
+**Recommendation unchanged:** introduce `{ type: 'path', segments: [...] }`
+language args and **one generated binding per declared path** in Phase 1 registry
+work. Mid-sequence duplicate UIDs are tolerable in failing or incomplete tests;
+they are not tolerable in the release gate suite.
 
-### Inference changing behavior for existing users
+### Inference changing behavior for existing users (at release only)
 
 Projects that already use implicit replace (`'name'`) plus control patterns
-without declaring control will **change behavior** when Phase 3 ships. This is
-not a breaking API syntax change but a **semantic** one.
+without declaring control will **change behavior** when the full work ships.
+This is not a breaking API syntax change but a **semantic** one — and it happens
+once, not phase-by-phase.
 
-**Recommendation:** Opt-in flag (`inferRoles: true`) or major version bump with
-migration guide listing patterns that gain control/list wrapping.
+**Revised recommendation:** no opt-in flag needed for internal phases. At
+release, ship a migration guide listing patterns that gain control/list
+wrapping, and treat it as a major-version behavioral change. Regression tests on
+existing fixtures (e.g. `full-template-surface`) should prove equivalent or
+improved output under flat declarations.
 
 ---
 
@@ -323,36 +359,29 @@ walk the component AST once with the registry:
 
 This aligns directly with multi-role semantics and avoids duplicate UIDs by construction.
 
-### C. Keep roles explicit in flat API v1; infer in v2
+### C. Keep roles explicit during development only (not at release)
 
-Flat paths alone solve the biggest UX pain (nested list config). Defer inference:
+If inference slips, an internal fallback is explicit roles in flat declarations:
 
 ```js
 Component.templateVars = [
   'hero.title',
   'products[].title',
-  [ 'visible', { roles: ['control'] } ],  // optional explicit roles
+  [ 'visible', { roles: ['control'] } ],
 ];
 ```
 
-Inference becomes an additive optimization, not a behavior change for `'visible'`.
+With a single release, this is a **schedule/contingency** pattern, not the
+target UX. The shipped API should still be "declare paths, infer roles" as the
+plan describes.
 
-### D. Narrow first-pass grammar to match implementation
+### D. Scope nested flat paths for the release, not for "v1"
 
-Ship v1 flat syntax as:
-
-```txt
-title
-hero.title
-hero.media.url
-products[].title
-products[].price
-products[]          // primitive list only
-```
-
-Defer `products[].badges[].label` until context depth and nested list placeholders
-are implemented. Validation error with message pointing to child components or
-legacy nested list config.
+If deep lists are in the release grammar, a phase must deliver context depth and
+nested placeholders — not documentation workarounds alone. If that work is too
+large, cut `products[].badges[].label` from **release** examples and grammar,
+not merely from an interim phase. The child-component pattern remains valid
+either way.
 
 ### E. Validation layer upfront
 
@@ -368,12 +397,12 @@ Centralize contradictions with clear errors at parse time:
 ## Decisions to lock before Phase 1
 
 1. **`products[]` + `products[].title`:** Upgrade to object list (recommended).
-2. **Deep nested list paths in flat syntax:** Defer with validation error (recommended).
-3. **Flat string default type until Phase 3:** Document as replace-only; no inference claims in Phase 1–2 docs.
-4. **Alias support in flat API:** Defer; document map-assignment tracking or keep legacy aliases.
+2. **Deep nested list paths:** In or out of **release** scope — if in, assign a phase with context-depth work; if out, remove from release grammar and examples.
+3. **Interim replace-only flat strings:** Acceptable internally until Phase 3; not acceptable in release docs or behavior.
+4. **Alias support:** Resolve before release via map-assignment inference, or document legacy `aliases` as a supported escape hatch in the finished API.
 5. **Language arg shape:** Add structured `path` type in Phase 2 alongside presets.
-6. **Single UID per path:** Start in registry phase, not Phase 4.
-7. **Opt-in inference:** Consider plugin option to avoid silent semantic migration.
+6. **Single UID per path:** Start in registry phase, not Phase 4 — still avoids rework even without partial release.
+7. **Release migration:** One major-version note for inference semantics; no opt-in flag required for internal phasing.
 
 ---
 
@@ -390,7 +419,10 @@ Centralize contradictions with clear errors at parse time:
    - `hero.title` member expression in JSX and conditions
    - map-assignment alias without legacy `aliases` config
    - invalid nested flat path rejected at parse time
-7. Note **semantic major version** when Phase 3 inference ships.
+7. Add a **release gate** checklist: multi-role, object paths, alias/map patterns,
+   nested lists (if in scope), custom language path args, and e2e fixture parity
+   under flat declarations.
+8. Note **semantic major version** once at release, not per phase.
 
 ---
 
@@ -398,12 +430,27 @@ Centralize contradictions with clear errors at parse time:
 
 The plan correctly identifies the core problem (implementation-leaky config,
 mutually exclusive roles) and the right destination (flat paths, registry,
-multi-role). The main pressure-test finding is that **syntax, registry, AST
-matching, context depth, and language emission are four separate problems** —
-collapsing flat paths into today’s list config in Phase 1 risks shipping a nicer
-declaration syntax on top of the same structural ceiling.
+multi-role). **Shipping only when complete does not relax the technical bar** —
+it reframes several earlier findings from "protect users during rollout" to
+"keep internal shims from becoming the final design."
 
-Proceed with the test-first sequence and path parser, but treat the normalized
-registry and single-UID-per-path as Phase 1 deliverables, not Phase 4. Keep
-deep nested lists and role inference out of the first flat API surface until the
-underlying context and usage-resolution machinery catches up.
+Unchanged priorities before release:
+
+- **Syntax, registry, AST matching, context depth, and language emission are
+  separate problems** — the registry must be what ships, not a permanent compile
+  step into legacy list config.
+- **Path ↔ AST resolution** remains a missing phase and is release-blocking for
+  object paths and list-item paths.
+- **Deep nested flat paths** remain incompatible with current context machinery
+  unless explicitly built; that is a release scope decision, not just phasing.
+
+What the release strategy simplifies:
+
+- Interim replace-only behavior and legacy shims are fine **between** phases.
+- No need for opt-in inference or interim public docs describing partial behavior.
+- Migration guidance is written once, against the finished flat API.
+
+Proceed with the test-first sequence and path parser. Treat the normalized
+registry and single-UID-per-path as early deliverables because they reduce rework,
+not because users will see them early. Add an explicit release gate so Phase 1
+machinery cannot accidentally ship as the final architecture.
