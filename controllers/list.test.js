@@ -29,38 +29,21 @@ function statementToCode(statement) {
 }
 
 describe('ListController', () => {
-	it('normalises list variable config to primitive children by default', () => {
-		const controller = createController();
-
-		expect(controller.normaliseListVar()).toEqual({
-			kind: 'list',
-			item: { kind: 'primitive' },
-		});
-		expect(controller.normaliseListVar({ kind: 'list' })).toEqual({
-			kind: 'list',
-			item: { kind: 'primitive' },
-		});
-	});
-
-	it('normalises primitive and object child properties', () => {
-		const controller = createController();
-
-		expect(controller.normalisedProp('label')).toEqual({
-			name: 'label',
-			kind: 'primitive',
-		});
-		expect(controller.normalisedProp({ name: 'children', kind: 'list' })).toEqual({
-			name: 'children',
-			kind: 'list',
-		});
-	});
-
 	it('builds primitive list placeholder arrays', () => {
 		const controller = createController();
-		const code = statementToCode(controller.buildDeclaration('_items'));
+		const code = statementToCode(controller.buildDeclaration('_items', {
+			name: 'items',
+			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
+			item: { kind: 'primitive' },
+		}));
 
 		expect(code).toContain('let _items = [getLanguageString');
-		expect(code).toContain("getLanguageList('primitive', null, _context)");
+		expect(code).toContain('getLanguageList("primitive", null, _context)');
 	});
 
 	it('builds object list placeholder arrays from child props', () => {
@@ -69,7 +52,20 @@ describe('ListController', () => {
 			kind: 'list',
 			item: {
 				kind: 'object',
-				properties: [ 'label', 'active' ],
+				properties: [
+					{
+						name: 'label',
+						kind: 'scalar',
+						segments: [ 'label' ],
+						contextDepth: 1,
+					},
+					{
+						name: 'active',
+						kind: 'scalar',
+						segments: [ 'active' ],
+						contextDepth: 1,
+					},
+				],
 			},
 		});
 		const code = statementToCode(declaration);
@@ -80,26 +76,67 @@ describe('ListController', () => {
 		expect(code).toContain('getLanguageList("objectProperty"');
 	});
 
-	it('represents nested list child props as empty arrays for now', () => {
+	it('builds nested list placeholder arrays recursively', () => {
 		const controller = createController();
 		const declaration = controller.buildDeclaration('_items', {
+			name: 'items',
 			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
 			item: {
 				kind: 'object',
 				properties: [
-					'label',
-					{ name: 'children', kind: 'list' },
+					{
+						name: 'label',
+						kind: 'scalar',
+						segments: [ 'label' ],
+						contextDepth: 1,
+					},
+					{
+						name: 'children',
+						kind: 'list',
+						path: 'items[].children[]',
+						sourceKey: 'items[].children',
+						sourceSegments: [ 'children' ],
+						parentContextDepth: 1,
+						itemContextDepth: 2,
+						item: {
+							kind: 'object',
+							properties: [
+								{
+									name: 'label',
+									kind: 'scalar',
+									segments: [ 'label' ],
+									contextDepth: 2,
+								},
+							],
+						},
+					},
 				],
 			},
 		});
 		const code = statementToCode(declaration);
 
 		expect(code).toContain('label: getLanguageString');
-		expect(code).toContain('children: []');
+		expect(code).toContain('children: [{');
+		expect(code).toContain('_context + 1');
 	});
 
 	it('registers list source names and registry-derived tag aliases for JSX wrapping', () => {
-		const listMetadata = { kind: 'list', tagAliases: [ 'renderedItems' ] };
+		const listMetadata = {
+			name: 'items',
+			kind: 'list',
+			path: 'items[]',
+			sourceKey: 'items',
+			sourceSegments: [ 'items' ],
+			parentContextDepth: 0,
+			itemContextDepth: 1,
+			tagAliases: [ 'renderedItems' ],
+			item: { kind: 'primitive' },
+		};
 		const vars = {
 			raw: [
 				[ 'items', listMetadata ],
@@ -107,6 +144,7 @@ describe('ListController', () => {
 			mapped: { items: '_items' },
 			names: [ 'items' ],
 			toTag: {},
+			listMetadata: [ listMetadata ],
 		};
 		const controller = createController(vars);
 		const path = { node: { body: [] } };
@@ -115,8 +153,8 @@ describe('ListController', () => {
 
 		expect(path.node.body).toHaveLength(1);
 		expect(vars.toTag).toEqual({
-			items: 'items',
-			renderedItems: 'items',
+			items: expect.objectContaining({ path: 'items[]' }),
+			renderedItems: expect.objectContaining({ path: 'items[]' }),
 		});
 	});
 

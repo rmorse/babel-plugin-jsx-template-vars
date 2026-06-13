@@ -6,10 +6,11 @@ const {
 	getMemberExpressionSegments,
 } = require( '../utils' );
 class ControlController {
-	constructor( vars, contextName, babel ) {
+	constructor( vars, contextName, babel, listController = null ) {
 		this.vars = vars;
 		this.babel = babel;
 		this.contextName = contextName;
+		this.listController = listController;
 		this.updateTernaryConditions = this.updateTernaryConditions.bind( this );
 		this.updateTernaryMemberConditions = this.updateTernaryMemberConditions.bind( this );
 		this.updateTernaryExpressions = this.updateTernaryExpressions.bind( this );
@@ -75,7 +76,7 @@ class ControlController {
 			return;
 		}
 
-		const { statementType, args } = this.getExpressionStatement( expressionSource.test );
+		const { statementType, args } = this.getExpressionStatement( expressionSource.test, currentPath );
 		
 		if ( statementType && args.length > 0 ) {
 			// Build the opening and closing expression tags.
@@ -128,20 +129,21 @@ class ControlController {
 		}
 	}
 
-	getExpressionStatement( sourceExpression ) {
+	getExpressionStatement( sourceExpression, currentPath = null ) {
 
 		const { types } = this.babel;
 
 		let statementType;
 
-		const args = getExpressionArgs( sourceExpression, types );
+		const args = getExpressionArgs( sourceExpression, types )
+			.map( arg => this.listController ? this.listController.resolveTemplateArg( arg, currentPath ) : arg );
 		
 		let conditionsMatched = 0;
 		let identifierCount = 0;
 		args.forEach( arg => {
 			if ( arg.type === 'identifier' || arg.type === 'path' ) {
 				identifierCount++;
-				if ( this.vars.names.includes( arg.value ) ) {
+				if ( this.vars.names.includes( arg.value ) || arg.matchedTemplatePath ) {
 					conditionsMatched++;
 				}
 			}
@@ -179,7 +181,7 @@ class ControlController {
 			return;
 		}
 
-		const { statementType, args } = this.getExpressionStatement( expressionSource.left );
+		const { statementType, args } = this.getExpressionStatement( expressionSource.left, currentPath );
 
 		if ( statementType && args.length > 0 ) {
 			const { types } = this.babel;
@@ -190,12 +192,36 @@ class ControlController {
 			const controlStopString = getLanguageControlCallExpression( [ statementType, 'close' ], args, this.contextName, types );
 
 			const languageClose = getLanguageCallExpression( [ 'language', 'close' ], [], this.contextName, types );
-			
-			
+
 			let hasInserted = false;
 			// Now check to see if the right of the expression is a list variable, as we need to wrap them
 			// in helper tags.
-			if ( types.isIdentifier( expressionSource.right ) ) {
+			if ( this.listController ) {
+				const listMetadata = this.listController.resolveRenderedListMeta( expressionSource.right, currentPath );
+				if ( listMetadata ) {
+
+					const listOpen = this.listController.createListBoundaryExpression( listMetadata, 'open' );
+					const listClose = this.listController.createListBoundaryExpression( listMetadata, 'close' );
+
+					const parts = [
+						languageOpen,
+						controlStartString,
+						languageClose,
+						languageOpen,
+						listOpen,
+						languageClose,
+						expressionSource.right,
+						languageOpen,
+						listClose,
+						languageClose,
+						languageOpen,
+						controlStopString,
+						languageClose,
+					];
+					currentPath.replaceWithMultiple( parts );
+					hasInserted = true;
+				}
+			} else if ( types.isIdentifier( expressionSource.right ) ) {
 				const objectName = expressionSource.right.name;
 				if ( listVarsToTag[ objectName ] ) {
 					const listVarSourceName = listVarsToTag[ objectName ];

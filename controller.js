@@ -73,8 +73,11 @@ const templateVarsController = {
 		this.vars.list = {
 			raw: listVars,
 			mapped: listVarsMap,
+			mapInv: Object.fromEntries(Object.entries(listVarsMap).map(a => a.reverse())),
 			names: listVarsNames,
 			toTag: {},
+			listMetadata: templateVars.listMetadata || [],
+			scalarMetadata: templateVars.scalarMetadata || [],
 		}
 
 
@@ -111,7 +114,7 @@ const templateVarsController = {
 
 		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel);
 		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel);
-		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel);
+		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
 
 
 		// Prevent infinite recursion by adding early return statements.
@@ -157,9 +160,9 @@ const templateVarsController = {
 				// and if so, inject a `__context__` JSXAttribute.
 				if (isJSXElementComponent(subPath)) {
 					let expression;
-					// check if the component is inside a `map` and increase the context by 1
-					if (parentPathHasMap(subPath, types)) {
-						expression = types.binaryExpression('+', self.contextIdentifier, types.numericLiteral(1));
+					const contextOffset = listController.getContainingListContextOffset(subPath);
+					if (contextOffset > 0) {
+						expression = types.binaryExpression('+', self.contextIdentifier, types.numericLiteral(contextOffset));
 					} else {
 						expression = types.identifier(self.contextIdentifier.name);
 					}
@@ -281,6 +284,12 @@ const templateVarsController = {
 				replaceController.updateIdentifierNames(subPath);
 				listController.updateIdentifierNames(subPath);
 			},
+			CallExpression(subPath) {
+				listController.trackMapAliases(subPath);
+			},
+			ConditionalExpression(subPath) {
+				controlController.updateTernaryExpressions(subPath.node, subPath);
+			},
 			MemberExpression(subPath) {
 				controlController.updateTernaryMemberConditions(subPath);
 				replaceController.updateMemberExpressionNames(subPath);
@@ -311,23 +320,6 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 	);
 	return earlyReturn;
 }
-
-
-// check if any parent paths contain a map call
-function parentPathHasMap(path, types) {
-	let parentPath = path.parentPath;
-	while (parentPath) {
-		if (types.isCallExpression(parentPath.node) && types.isMemberExpression(parentPath.node.callee)) {
-			const memberExpression = parentPath.node.callee;
-			if (types.isIdentifier(memberExpression.property) && memberExpression.property.name === 'map') {
-				return true;
-			}
-		}
-		parentPath = parentPath.parentPath;
-	}
-	return false;
-}
-
 
 
 module.exports = templateVarsController;

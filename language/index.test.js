@@ -144,6 +144,25 @@ describe('language runtime', () => {
 		});
 	});
 
+	it('applies per-argument context offsets for nested list controls', () => {
+		const php = readLanguage('php');
+
+		withLanguage(php, () => {
+			expect(getLanguageControl(
+				[ 'ifTruthy', 'open' ],
+				[
+					{
+						type: 'identifier',
+						value: 'available',
+						segments: [ 'available' ],
+						contextOffset: 2,
+					},
+				],
+				0
+			)).toBe("if ( $data_2['available'] ) {");
+		});
+	});
+
 	it('reads nested language strings from the active language preset', () => {
 		const php = readLanguage('php');
 

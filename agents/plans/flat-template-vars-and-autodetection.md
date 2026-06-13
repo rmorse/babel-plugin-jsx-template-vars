@@ -1,5 +1,11 @@
 # Flat template vars and autodetection plan
 
+Status note: the clean-break flat API has shipped on this workstream, and the
+recursive nested object/list path follow-up is now part of the target
+implementation. Earlier first-pass notes are retained as history where useful,
+but the current contract supports nested object and list paths to arbitrary
+declaration depth.
+
 ## Context
 
 The current public API asks users to declare template variables and, for anything
@@ -46,16 +52,17 @@ Review feedback confirmed the direction, with several amendments:
   list tags".
 - List wrapping should be driven by usage, such as `.map()` or a rendered alias
   assigned from `.map()`.
-- Deep nested list paths are not first-pass scope because today's context and
-  placeholder machinery only support one list level reliably.
+- Deep nested list paths were not first-pass scope, but were promoted into the
+  recursive path follow-up once context and placeholder generation were
+  redesigned.
 - Multi-role variables and single identity per declared path are release
   requirements, not optional polish.
 
 ## Goals
 
 - Preserve existing behavior with regression tests before changing the model.
-- Introduce flat path notation for scalar values, object paths, and one-level
-  lists.
+- Introduce flat path notation for scalar values, object paths, and recursive
+  list paths.
 - Support multiple usage roles for the same declared variable or path.
 - Build a normalized registry early and derive controller inputs from it.
 - Provide explicit overrides only where inference is intentionally ambiguous;
@@ -76,8 +83,8 @@ Review feedback confirmed the direction, with several amendments:
   represent the target behavior.
 - Do not infer complex list child shape from ambiguous patterns such as spread
   props in the first pass.
-- Do not support deep nested list output, such as
-  `products[].badges[].label`, in the first pass.
+- Deep nested list output, such as `products[].badges[].label`, belongs to the
+  recursive context follow-up rather than the original first pass.
 - Do not infer template vars across component boundaries. Child components still
   need their own declarations.
 
@@ -114,7 +121,7 @@ The target internal model should represent:
 - declared path: `products[].available`
 - shape: scalar, object, list
 - roles: replace, control, list
-- context depth: root or one-level list item in the first pass
+- context depth: root or nested list item depth
 - one generated identity per declared path
 
 ## Proposed Internal Registry
@@ -172,7 +179,7 @@ should own path identity and validation from the start.
 
 ## Flat Path Grammar
 
-Supported first-pass grammar:
+Supported grammar:
 
 ```txt
 title
@@ -182,13 +189,9 @@ products[]
 products[].title
 products[].price
 products[].available
-```
-
-Deferred grammar:
-
-```txt
 products[].badges[]
 products[].badges[].label
+catalog.sections[].products[].badges[].label
 ```
 
 Rules:
@@ -221,8 +224,8 @@ First-pass supported resolution:
 - bare identifiers matching root declarations, such as `title`
 - simple member expressions matching object paths, such as `hero.title`
 - simple nested member expressions, such as `hero.media.url`
-- map callback member access for one-level lists, such as `product.title`
-  inside `products.map((product) => ...)`
+- map callback member access for list items, such as `product.title` inside
+  `products.map((product) => ...)`
 
 First-pass unsupported resolution:
 
@@ -302,8 +305,7 @@ Cover:
 - control expressions inside list item components
 - parent components rendering child components inside `.map()`, including
   `__context__ + 1`
-- nested list child props currently represented as empty arrays, so the current
-  one-level depth limit is explicit
+- nested list child props represented as recursive placeholder arrays
 - aliases from current `aliases` config
 - map-assignment alias inference as the future replacement for most current
   alias config
@@ -393,7 +395,7 @@ Deliverables:
 
 - Match root identifiers to root paths.
 - Match simple member expressions to object paths.
-- Match one-level list callback item properties to list child paths.
+- Match nested list callback item properties to list child paths.
 - Keep an explicit unsupported list for renames, optional chaining, spreads, and
   complex aliases.
 - Add tests for each supported and unsupported pattern.
@@ -496,7 +498,7 @@ Document limitations:
 - Explicit declaration is still required.
 - Ambiguous list shapes may require explicit overrides or simpler local bindings.
 - Child components still need their own declarations.
-- Deep nested list paths are deferred until deeper context support exists.
+- Recursive nested list paths are supported after the context-depth follow-up.
 - Unsupported AST patterns require explicit config or simpler local bindings.
 - Handlebars strict equality and ternary helpers still need to be provided by the
   consuming app or a compatible helper package.
@@ -505,9 +507,9 @@ There are no external consumers to preserve during this workstream. Refactor the
 project that uses this package in lockstep with the final API rather than adding
 transitional code or compatibility branches.
 
-## Deferred Phase: Deep List Contexts
+## Implemented Follow-Up: Recursive List Contexts
 
-Only add deep paths such as:
+Deep paths such as:
 
 ```js
 Component.templateVars = [
@@ -515,9 +517,9 @@ Component.templateVars = [
 ];
 ```
 
-after explicit context-depth work.
+are supported after explicit context-depth work.
 
-Required work:
+Completed work:
 
 - count nested `.map()` depth, not just "inside any map"
 - support list open/close at each nested depth
@@ -525,7 +527,8 @@ Required work:
 - extend PHP context/subcontext generation beyond one level
 - add e2e fixtures for nested list output in PHP and Handlebars
 
-Until then, use the child-component pattern:
+The child-component pattern remains supported and child components rendered
+inside nested maps receive the matching context offset:
 
 ```js
 // Parent component
@@ -591,8 +594,8 @@ Do not document or release the flat API until these checks pass:
 
 - current documented behavior remains covered by tests
 - flat scalar paths work
-- one-level object paths work
-- one-level list paths work
+- nested object paths work
+- recursive list paths work
 - `[]` acts as shape, not automatic wrapping
 - map-assignment aliases work without the old `aliases` config for common cases
 - any retained explicit alias override is part of the new registry model, not a
@@ -647,7 +650,6 @@ Start with tests that describe current behavior across all documented examples,
 with extra e2e focus on list variants. Then implement the registry and path
 parser, deriving the current controller inputs as a temporary shim.
 
-Keep the first implementation narrow: scalar paths, one-level object paths,
-one-level list paths, map-assignment aliases, and explicit overrides where they
-are part of the new registry model. Defer deep nested lists until the context
-machinery is deliberately redesigned.
+The first implementation stayed narrow: scalar paths, one-level object paths,
+one-level list paths, and map-assignment aliases. The recursive context
+machinery now extends that model to nested object/list paths.

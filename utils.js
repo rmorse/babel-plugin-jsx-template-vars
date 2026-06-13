@@ -130,14 +130,16 @@ function getLanguageCallExpression( targets, args, context, types ) {
 		argsNodes.push( getArgObjectExpression( arg, types ) );
 	} );
 		
-	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), types.identifier( context ) ] );
+	return types.callExpression( types.identifier( 'getLanguageString' ), [ types.arrayExpression( targetsNodes ), types.arrayExpression( argsNodes ), getContextExpression( context, types ) ] );
 }
 function getLanguageListCallExpression( action, name, context, types ) {
-	const nameObject = types.objectExpression( [
-		types.objectProperty( types.identifier('type'), types.stringLiteral( 'identifier' ) ),
-		types.objectProperty( types.identifier('value'), types.stringLiteral( name ) ),
-	] );
-	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, types.identifier( context ) ] );
+	const nameObject = name && typeof name === 'object'
+		? getArgObjectExpression( name, types )
+		: typeof name === 'string' ? types.objectExpression( [
+			types.objectProperty( types.identifier('type'), types.stringLiteral( 'identifier' ) ),
+			types.objectProperty( types.identifier('value'), types.stringLiteral( name ) ),
+		] ) : types.nullLiteral();
+	return types.callExpression( types.identifier( 'getLanguageList' ), [ types.stringLiteral( action ), nameObject, getContextExpression( context, types ) ] );
 }
 
 function getArgObjectExpression( arg, types ) {
@@ -155,9 +157,24 @@ function getArgObjectExpression( arg, types ) {
 		);
 	}
 
+	if ( typeof arg.contextOffset === 'number' ) {
+		props.push(
+			types.objectProperty(
+				types.identifier( 'contextOffset' ),
+				types.numericLiteral( arg.contextOffset )
+			)
+		);
+	}
+
 	return types.objectExpression( props );
 }
 
+function getContextExpression( context, types ) {
+	if ( typeof context === 'string' ) {
+		return types.identifier( context );
+	}
+	return context;
+}
 
 module.exports = {
 	getExpressionArgs,
@@ -170,4 +187,5 @@ module.exports = {
 	getLanguageCallExpression,
 	getLanguageListCallExpression,
 	getArgObjectExpression,
+	getContextExpression,
 };

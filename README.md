@@ -75,16 +75,19 @@ const Person = ( { name, favoriteColor } ) => {
 Person.templateVars = [ 'name', 'favoriteColor' ];
 ```
 
-Object paths and one-level list item paths can be declared in the same flat array:
+Object paths and nested list item paths can be declared in the same flat array:
 
 ```jsx
 ProductCard.templateVars = [
     'title',
     'hero.summary',
-    'products[].name',
-    'products[].url',
+    'catalog.sections[].products[].name',
+    'catalog.sections[].products[].badges[].label',
 ];
 ```
+
+See [docs/template-vars.md](docs/template-vars.md) for the full flat path
+contract.
 
 
 ## Template variable roles
@@ -139,13 +142,16 @@ Primitive lists use `[]`:
 Person.templateVars = [ 'name', 'favoriteColors[]' ];
 ```
 
-Object lists declare the item fields that should be exposed:
+Object lists declare the item fields that should be exposed. Lists and objects
+can be nested as deeply as the data contract needs:
 
 ```js
 ProductList.templateVars = [
     'products[].name',
     'products[].url',
     'products[].available',
+    'products[].badges[].label',
+    'products[].details.manufacturer.name',
 ];
 ```
 
@@ -194,10 +200,11 @@ const Person = ({ profile }) => {
 Person.templateVars = [ 'profile.name', 'profile.favoriteColor' ];
 ```
 
-The first pass supports bare identifiers, simple object member paths, and
-one-level list item paths. Destructure renames, optional chaining, spreads,
-chained list transforms before `.map()`, and deep nested list output are not
-supported yet.
+Supported source patterns include bare identifiers, simple object member paths,
+nested object member paths, direct `.map()` usage on declared list paths, nested
+map callbacks, and same-scope aliases assigned from `.map()`. Destructure
+renames, optional chaining, spreads, chained list transforms before `.map()`,
+and aliases that cross component/function boundaries are not supported yet.
 
 ## Working examples
 
@@ -240,7 +247,9 @@ To work around this you can try to set your template vars only on components tha
 In some cases, you might need the template variable passed into the data fetching routine - this is not supported and a limitation of this approach.
 
 ### Nested props in list variables
-This transform supports nested vars for children (arrays and objects), but only supports 1 level of depth.
+This transform supports flat paths for nested objects and lists, including
+mixed object/list paths such as `catalog.sections[].products[].badges[].label`.
 
-It is recommended to set template vars on components that reside further down the tree and deal with those nested props directly.
+Each component still owns its own `templateVars` contract; nested declarations
+are not inferred automatically across component boundaries.
 

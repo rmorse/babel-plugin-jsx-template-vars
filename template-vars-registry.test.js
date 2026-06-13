@@ -37,7 +37,7 @@ function buildRegistry(templateVars, source) {
 }
 
 describe('template vars registry', () => {
-	it('parses scalar, object, and one-level list paths', () => {
+	it('parses scalar, object, and recursive list paths', () => {
 		expect(parseTemplateVarPath('title')).toMatchObject({
 			segments: [ 'title' ],
 			isList: false,
@@ -52,12 +52,19 @@ describe('template vars registry', () => {
 			rootName: 'products',
 			childSegments: [ 'title' ],
 		});
+		expect(parseTemplateVarPath('products[].badges[].label')).toMatchObject({
+			segments: [ 'products', 'badges', 'label' ],
+			isList: true,
+			rootName: 'products',
+			hasList: true,
+			listDepth: 2,
+		});
 	});
 
-	it('rejects malformed and deferred paths', () => {
+	it('rejects malformed paths', () => {
 		expect(() => parseTemplateVarPath('hero..title')).toThrow(/cannot be empty/);
-		expect(() => parseTemplateVarPath('products[].badges[].label')).toThrow(/Deep nested list paths are deferred/);
-		expect(() => parseTemplateVarPath('products[].meta.title')).toThrow(/one child property/);
+		expect(() => parseTemplateVarPath('products[0].label')).toThrow(/List markers must use/);
+		expect(() => parseTemplateVarPath('products[].bad-name')).toThrow(/not a supported identifier/);
 	});
 
 	it('rejects legacy array or object declaration entries', () => {
@@ -116,14 +123,86 @@ describe('template vars registry', () => {
 			[
 				'products',
 				{
+					name: 'products',
 					kind: 'list',
+					path: 'products[]',
+					sourceKey: 'products',
+					sourceSegments: [ 'products' ],
+					parentContextDepth: 0,
+					itemContextDepth: 1,
 					item: {
 						kind: 'object',
-						properties: [ 'label', 'url' ],
+						properties: [
+							{
+								name: 'label',
+								kind: 'scalar',
+								segments: [ 'label' ],
+								contextDepth: 1,
+							},
+							{
+								name: 'url',
+								kind: 'scalar',
+								segments: [ 'url' ],
+								contextDepth: 1,
+							},
+						],
 					},
 					tagAliases: [ 'renderedProducts' ],
 				},
 			],
 		]);
+	});
+
+	it('derives recursive object/list metadata for nested declarations', () => {
+		const result = buildRegistry([
+			'catalog.title',
+			'catalog.sections[].heading',
+			'catalog.sections[].products[].details.sku',
+			'catalog.sections[].products[].badges[].label',
+		], `
+			const App = ({ catalog }) => {
+				return (
+					<main>
+						<h1>{ catalog.title }</h1>
+						{ catalog.sections.map((section) => (
+							<section>
+								<h2>{ section.heading }</h2>
+								{ section.products.map((product) => (
+									<article data-sku={ product.details.sku }>
+										{ product.badges.map((badge) => <span>{ badge.label }</span>) }
+									</article>
+								)) }
+							</section>
+						)) }
+					</main>
+				);
+			};
+		`);
+
+		expect(result.listMetadata).toEqual([
+			expect.objectContaining({
+				path: 'catalog.sections[]',
+				sourceSegments: [ 'catalog', 'sections' ],
+				parentContextDepth: 0,
+				itemContextDepth: 1,
+			}),
+			expect.objectContaining({
+				path: 'catalog.sections[].products[]',
+				sourceSegments: [ 'products' ],
+				parentContextDepth: 1,
+				itemContextDepth: 2,
+			}),
+			expect.objectContaining({
+				path: 'catalog.sections[].products[].badges[]',
+				sourceSegments: [ 'badges' ],
+				parentContextDepth: 2,
+				itemContextDepth: 3,
+			}),
+		]);
+		expect(result.scalarMetadata).toContainEqual({
+			path: 'catalog.sections[].products[].badges[].label',
+			segments: [ 'label' ],
+			contextDepth: 3,
+		});
 	});
 });

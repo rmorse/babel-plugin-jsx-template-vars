@@ -74,6 +74,9 @@ export function createLanguageString( string, argsArray, context, tags = {} ) {
 					const arg = argsArray.shift();
 					return arg.value;
 				}
+				if ( argsArray[0] && typeof argsArray[0].contextOffset === 'number' ) {
+					return createLanguageString( tags[ tagName ], argsArray, context + argsArray[0].contextOffset, tags );
+				}
 			}
 			return createLanguageString( tags[ tagName ], argsArray, context, tags );
 		}
