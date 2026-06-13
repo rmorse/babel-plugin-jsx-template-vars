@@ -40,7 +40,7 @@ Component.templateVars = [
 Review feedback confirmed the direction, with several amendments:
 
 - The normalized registry should be the architecture that ships.
-- Flat paths compiled into legacy list config are acceptable only as an internal
+- Flat paths compiled into current list config are acceptable only as an internal
   stepping stone.
 - `[]` declares data shape. It does not by itself mean "wrap this JSX usage with
   list tags".
@@ -58,12 +58,13 @@ Review feedback confirmed the direction, with several amendments:
   lists.
 - Support multiple usage roles for the same declared variable or path.
 - Build a normalized registry early and derive controller inputs from it.
-- Keep explicit legacy config working as an escape hatch and compatibility path.
+- Provide explicit overrides only where inference is intentionally ambiguous;
+  avoid preserving old config solely for compatibility.
 - Keep inference conservative: infer only when source usage is clear.
 - Add a release gate so partial parser shims cannot become the final
   architecture accidentally.
-- Keep custom language output stable where possible, but accept that path-aware
-  variables require a documented language argument extension.
+- Update bundled and project language definitions to use path-aware arguments;
+  do not add compatibility shims for older custom language examples.
 
 ## Non-goals
 
@@ -71,7 +72,8 @@ Review feedback confirmed the direction, with several amendments:
   Users should still explicitly declare the template data contract.
 - Do not require runtime proof that a declared path exists in data. A declaration
   like `products[].title` is a user-owned template contract.
-- Do not remove legacy nested config until the flat API is proven and documented.
+- Do not keep old nested config solely for compatibility once the flat API can
+  represent the target behavior.
 - Do not infer complex list child shape from ambiguous patterns such as spread
   props in the first pass.
 - Do not support deep nested list output, such as
@@ -165,8 +167,8 @@ The exact implementation can be simpler, but this is the conceptual separation
 we need: paths describe data, roles describe usage.
 
 The registry should be introduced before broad inference work. Even if early
-controller compatibility uses a legacy-config shim, the registry should own path
-identity and validation from the start.
+controller integration uses a temporary current-controller shim, the registry
+should own path identity and validation from the start.
 
 ## Flat Path Grammar
 
@@ -230,8 +232,8 @@ First-pass unsupported resolution:
 - spread props, such as `<Card {...product} />`
 - chained transforms before map, such as `products.filter(...).map(...)`
 
-Unsupported patterns should remain explicit legacy-config territory until they
-are intentionally implemented.
+Unsupported patterns should remain explicit override territory until they are
+intentionally implemented.
 
 ## Test-First Sequence
 
@@ -281,7 +283,7 @@ have several distinct usage shapes.
 
 Cover:
 
-- primitive list declared with legacy `{ type: 'list' }`
+- primitive list declared with current `{ type: 'list' }` config
 - primitive list mapped directly in JSX:
   `{ favoriteColors.map((color) => <p>{ color }</p>) }`
 - object list declared with child props:
@@ -292,17 +294,25 @@ Cover:
 - list item property replacement in text
 - list item property replacement in attributes
 - list output rendered from a precomputed alias, as used by the advanced fixture
-- direct root list output if current behavior supports it; if it does not,
-  capture the current limitation before changing it
+- primitive direct root list output, which is supported today:
+  `{ favoriteColors }` renders list tags and primitive item output
+- object direct root list output, which is not useful today:
+  `{ products }` is wrapped in list tags but renders `[object Object]`
 - list output wrapped by a control expression
 - control expressions inside list item components
 - parent components rendering child components inside `.map()`, including
   `__context__ + 1`
 - nested list child props currently represented as empty arrays, so the current
   one-level depth limit is explicit
-- aliases from legacy `aliases` config
-- map-assignment alias inference as the future replacement for most legacy
-  `aliases` config
+- aliases from current `aliases` config
+- map-assignment alias inference as the future replacement for most current
+  alias config
+
+Primitive direct root list rendering should remain supported because it works
+today and has clear semantics. Object direct root list rendering should not be
+documented as supported until we define meaningful output semantics; the first
+implementation should either preserve the current limitation in tests or add a
+clear diagnostic.
 
 ### Custom Language And Preset Baseline
 
@@ -312,7 +322,7 @@ Cover:
 - PHP list context and subcontext output
 - PHP control output
 - Handlebars replacement, list, and control output
-- custom language behavior that uses `variables.variable` and
+- language runtime behavior that uses `variables.variable` and
   `variables.subvariable`
 - a future failing or pending test for path-aware args, so we have a clear target
   for `$data['hero']['title']` instead of `$data['hero.title']`
@@ -338,13 +348,14 @@ Deliverables:
 
 - Parse string declarations into path segment metadata.
 - Preserve existing string declarations like `name`.
-- Preserve existing array config declarations.
+- Read existing array config declarations for baseline tests and temporary
+  shims, but do not make them the final architecture.
 - Merge duplicate flat declarations into one registry entry.
 - Validate obvious malformed paths.
 - Assign one internal identity per declared path.
 - Add temporary derivation from registry to the current controller buckets.
 
-Temporary compatibility shim:
+Temporary current-controller shim:
 
 ```js
 [
@@ -353,8 +364,8 @@ Temporary compatibility shim:
 ]
 ```
 
-can derive the equivalent legacy list input while controllers are still being
-refactored:
+can derive the equivalent current list-controller input while controllers are
+still being refactored:
 
 ```js
 [
@@ -372,7 +383,7 @@ refactored:
 ```
 
 This shim must not become the final architecture. The release gate should fail
-if multi-role behavior still depends on mutually exclusive legacy buckets.
+if multi-role behavior still depends on mutually exclusive type buckets.
 
 ## Phase 1.5: Path To AST Resolution
 
@@ -413,9 +424,9 @@ Expected output:
 $data['hero']['title']
 ```
 
-Custom languages need a migration note. Existing custom language definitions
-should continue working for flat identifiers, but nested paths require the new
-structured path behavior.
+Path-aware args replace raw dotted identifier handling for nested paths. Update
+bundled presets and our project language definitions in lockstep; do not add
+compatibility shims for older custom language definitions.
 
 ## Phase 3: Conservative Role Inference
 
@@ -441,9 +452,10 @@ Important rule:
 
 Unsupported control-like usage should not silently become a replacement
 inference. It should either remain untouched with a test-documented limitation
-or require explicit legacy config until we support it.
+or require an explicit override until we support it.
 
-Explicit legacy config remains authoritative.
+Explicit overrides remain authoritative if they are retained in the new registry
+model.
 
 ## Phase 4: Multi-Role Controller Inputs
 
@@ -461,7 +473,7 @@ is used in multiple roles.
 
 This phase is release-blocking.
 
-## Phase 5: Documentation And Migration
+## Phase 5: Documentation And Final API
 
 Update README/wiki-facing docs to make the flat API primary:
 
@@ -476,21 +488,22 @@ Component.templateVars = [
 ];
 ```
 
-Document legacy config as supported advanced configuration.
+Document explicit overrides only if they are intentionally retained in the new
+registry model. Do not document old config as part of the final API.
 
 Document limitations:
 
 - Explicit declaration is still required.
-- Ambiguous list shapes may require legacy config.
+- Ambiguous list shapes may require explicit overrides or simpler local bindings.
 - Child components still need their own declarations.
 - Deep nested list paths are deferred until deeper context support exists.
 - Unsupported AST patterns require explicit config or simpler local bindings.
 - Handlebars strict equality and ternary helpers still need to be provided by the
   consuming app or a compatible helper package.
 
-This should be treated as a semantic major-version change because projects that
-currently rely on implicit replacement may gain control or list behavior once
-role inference lands.
+There are no external consumers to preserve during this workstream. Refactor the
+project that uses this package in lockstep with the final API rather than adding
+transitional code or compatibility branches.
 
 ## Deferred Phase: Deep List Contexts
 
@@ -522,6 +535,56 @@ App.templateVars = [ 'products[].name', 'products[].badges' ];
 ProductCard.templateVars = [ 'name', 'badges[].label' ];
 ```
 
+## Deferred Phase: Broader Alias And List Compatibility
+
+First release alias inference should support simple same-scope map assignment:
+
+```js
+const renderedProducts = products.map((product) => (
+	<ProductCard name={ product.name } />
+));
+
+return <section>{ renderedProducts }</section>;
+```
+
+It should also support the same alias when wrapped by supported control syntax:
+
+```js
+{ visible && renderedProducts }
+```
+
+Defer broader alias compatibility to follow-up work:
+
+- aliases created through helper functions, such as
+  `const renderedProducts = renderProducts(products)`
+- aliases created through reassignment, such as `let renderedProducts;`
+- aliases based on chained calls, such as `products.filter(...).map(...)`
+- aliases that cross function or component boundaries
+- aliases that combine multiple list roots
+
+Direct root list compatibility should match current useful behavior in the first
+release:
+
+- primitive root list rendering remains supported:
+  `{ favoriteColors }`
+- object root list rendering is not documented as supported because today's
+  output is `[object Object]`
+
+Verified current output:
+
+```hbs
+<section>{{#items}}{{.}}{{/items}}</section>
+<section>{{#items}}[object Object]{{/items}}</section>
+```
+
+```php
+<section><?php foreach ( $data['items'] as $data_1 ) { ?><?php echo $data_1; ?><?php } ?></section>
+<section><?php foreach ( $data['items'] as $data_1 ) { ?>[object Object]<?php } ?></section>
+```
+
+Follow-up work can add diagnostics for object root list rendering, or support a
+new explicit rendering semantic if we define what markup should be generated.
+
 ## Release Gate
 
 Do not document or release the flat API until these checks pass:
@@ -531,28 +594,52 @@ Do not document or release the flat API until these checks pass:
 - one-level object paths work
 - one-level list paths work
 - `[]` acts as shape, not automatic wrapping
-- map-assignment aliases work without legacy `aliases` for common cases
-- legacy `aliases` still work as an escape hatch
+- map-assignment aliases work without the old `aliases` config for common cases
+- any retained explicit alias override is part of the new registry model, not a
+  compatibility branch for old config
 - same value can be replacement and control
 - same list root can be control and list
 - same list item field can be replacement and control in an item component
 - one generated identity per declared path
 - PHP nested object paths render as nested array access
 - Handlebars nested object paths render as dotted paths
-- custom language migration is documented
+- bundled and project language definitions use the path-aware argument contract
 - unsupported AST patterns fail clearly or stay explicitly documented
 
-## Risks And Open Questions
+## Resolved Risk Decisions
 
-- Should malformed flat paths throw during transform, or warn and ignore?
-- What should the exact error message be for conflicting path shapes?
-- How much alias detection is enough for the first release?
-- Should direct root list rendering be part of the official API if current
-  behavior is inconsistent?
-- How should custom language authors express path-aware variables if they copied
-  older `php.json` examples from the wiki?
-- How far should we go with warnings before this plugin needs a structured
-  diagnostics surface?
+- Malformed flat paths should throw during transform. A malformed declaration is
+  an invalid template contract, not a recoverable runtime uncertainty.
+- Shape conflicts should produce component-scoped errors that include the
+  conflicting declarations and the chosen rule. `products[]` plus
+  `products[].title` upgrades to an object list; incompatible shapes that cannot
+  be safely upgraded should throw.
+- First release alias inference should support simple same-scope map assignment
+  and control-wrapped aliases. Broader alias detection belongs in the deferred
+  alias compatibility phase.
+- Primitive direct root list rendering is supported today and should remain
+  supported. Object direct root list rendering currently outputs
+  `[object Object]`; do not document it as supported without new semantics.
+- Path-aware language args are the final contract for nested paths. Update
+  bundled and project language definitions directly; do not add custom-language
+  compatibility shims.
+- Add a small diagnostics helper before adding warnings or transform errors:
+
+```js
+diagnostics.error(path, message);
+diagnostics.warn(path, message);
+```
+
+Use errors for invalid declarations. Use warnings only for valid declarations
+whose source usage cannot be inferred safely.
+
+## Remaining Open Questions
+
+- What exact diagnostics API should be exposed internally to tests?
+- Should unsupported but valid source usage warn by default, or only when a
+  future `strict` option is enabled?
+- What explicit override syntax, if any, should remain in the new registry model
+  for intentionally ambiguous cases?
 
 ## Recommended Next Step
 
@@ -561,5 +648,6 @@ with extra e2e focus on list variants. Then implement the registry and path
 parser, deriving the current controller inputs as a temporary shim.
 
 Keep the first implementation narrow: scalar paths, one-level object paths,
-one-level list paths, map-assignment aliases, and legacy config overrides. Defer
-deep nested lists until the context machinery is deliberately redesigned.
+one-level list paths, map-assignment aliases, and explicit overrides where they
+are part of the new registry model. Defer deep nested lists until the context
+machinery is deliberately redesigned.
