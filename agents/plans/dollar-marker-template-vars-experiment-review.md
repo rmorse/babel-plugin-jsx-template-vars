@@ -15,11 +15,11 @@ with how the flat API already separates **shape declaration** from **role
 inference at usage sites**. The phased spike (scalar/control first, lists
 second) is the right sequencing.
 
-The plan understates three areas that will determine success: (1) **component
-discovery** scope and false positives, (2) **marker stripping and AST
-rewriting** before the existing controllers run, and (3) **gaps versus
-`deferred-resolution` and child-component boundaries**, which are harder than
-the fixtures named in the test plan.
+The latest plan addresses the major fixture coverage gaps. The remaining
+success risks are implementation-heavy: (1) **component discovery** scope and
+false positives, (2) **marker stripping and AST rewriting** before the existing
+controllers run, and (3) **marker-origin alias/destructure tracking** for
+`deferred-resolution` and child-component boundaries.
 
 Long term, marker syntax can plausibly **complement** flat `templateVars` for
 most rendered paths, but full **replacement** is unlikely without either
@@ -35,6 +35,7 @@ accepting documented parity gaps or adding explicit shape-only marker syntax.
 | Component discovery | High | Start narrow; add explicit negative tests for helpers/HOCs |
 | Marker strip / rewrite pass | High | Treat as release-blocking for any marker-enabled output |
 | Scalar + nested object paths | Low | Straightforward; add optional chaining early |
+| Plain aliases + destructures | High | Require a marked source origin; do not infer from unmarked aliases |
 | List path discovery from `.map()` | Medium–High | Feasible for direct/nested maps; harder for aliases and helpers |
 | Parity with e2e fixtures | Medium | Named fixtures are necessary but not sufficient |
 | Child components | Medium | Each component still owns its contract via markers or flat API |
@@ -143,21 +144,24 @@ assert whether it is transformed or rejected with a clear diagnostic.
 
 ## Missing AST cases
 
-The plan covers the happy paths well. The following appear in the shipped flat
-API or fixtures but are absent or implicit in the experiment plan.
+The plan covers the happy paths well and now names most of the hard fixture
+cases. The remaining concern is making those cases precise enough that tests can
+pin implementation behavior.
 
 ### Marker placement and expression forms
 
 | Pattern | Flat API today | Plan coverage |
 | --- | --- | --- |
-| `$$hero?.summary` | supported (`hero?.summary`) | not mentioned |
-| `$$title` in JSX attributes | supported | implied, not explicit |
+| `$$hero?.summary` | supported (`hero?.summary`) | explicit |
+| `$$title` in JSX attributes | supported | explicit |
 | `hero.$$summary` | unsupported | correctly rejected |
 | bare `$$` | n/a | correctly rejected |
 | computed access `$$items[0]` | unsupported | should stay unsupported + diagnostic |
+| `const $$title = ...` | n/a | should reject binding-position markers |
 
-Add optional chaining to the first scalar spike; it appears in
-`deferred-resolution` (`heroAlias?.summary`).
+Keep optional chaining in the first scalar spike; it appears in
+`deferred-resolution` (`heroAlias?.summary`) and exercises both marker stripping
+and alias resolution.
 
 ### Control expressions
 
@@ -168,7 +172,9 @@ Flat API supports controls via `getExpressionArgs()` over:
 - unary `!` on identifiers/paths (`!available` in fixtures)
 - binary comparisons (`status !== 'archived'`, `mode === 'grid'`)
 
-The plan shows `$$status === 'ready' && ...` but not:
+The plan now includes these in collection and unit-test scope; implementation
+should still prove all of the current control expression forms continue through
+the stripped AST:
 
 - `{ !$$available && ... }`
 - `{ $$status !== 'archived' && ... }`
@@ -177,9 +183,10 @@ The plan shows `$$status === 'ready' && ...` but not:
   (see `flat-template-vars`: `products && <section>` with declared
   `products[].label`)
 
-List-root controls are multi-role (control + list) and require the list shape
-to be inferred even when `.map()` is not marked directly on the same expression
-(e.g. control on `products`, list on `renderedProducts` alias).
+List-root controls are multi-role (control + list). They require the list shape
+to be inferred even when `.map()` is not marked directly on the same expression,
+for example control on `products` with list output through a `renderedProducts`
+alias.
 
 ### List usage beyond direct `.map()`
 
@@ -193,8 +200,8 @@ Current list support (see `docs/template-vars.md` and `ListController`) includes
 - destructuring in map callbacks (`({ title, available }) => ...`)
 - spread props to child (`<ProductCard {...product} />`)
 
-The plan covers direct and nested `.map()` on marked roots. It does not yet
-specify marker behavior for:
+The plan now names these behaviors, but they still need exact contracts and
+tests:
 
 | Pattern | Marker question |
 | --- | --- |
@@ -203,9 +210,10 @@ specify marker behavior for:
 | `renderHelperProducts($$products)` | Must mark call argument; helper body unmarked |
 | `<ProductCard {...product} />` inside `$$products.map` | Item fields inferred from spread, not from `$$` on props |
 | `badges={ product.badges }` without `badges.map` in parent | Flat API declares `products[].badges`; marker mode may miss intermediate object-list props passed to children |
+| `const heroAlias = $$hero; const { title: heading } = heroAlias` | Marker-origin map must synthesize `hero.title`, not `heading` |
 
-The last row is important for `full-template-surface`, where `ProductCard`
-receives `badges={ product.badges }` and declares its own nested list paths.
+The pass-through `badges={ product.badges }` row is important for
+`full-template-surface`, where `ProductCard` declares its own nested list paths.
 Parent marker mode can infer `products[].name` from rendered JSX props, but
 **pass-through list props** may need either child markers or an explicit
 `products[].badges` path inferred from prop assignment shape analysis.
@@ -229,6 +237,17 @@ unless that is an intentional experiment-only advantage.
 
 `$$hero.summary` → `hero.summary` is a direct mapping. This aligns with how
 `getExpressionPath()` and scalar metadata already work. Confidence: **high**.
+
+### Aliased object paths — yes, with a marked origin
+
+`deferred-resolution` proves the flat API can resolve intermediate aliases and
+destructures after a path is declared. Marker mode adds a new requirement before
+that existing machinery can help: collection must know which unmarked aliases
+come from a marked source. For example, `const heroAlias = $$hero` can seed an
+origin map, and `const { title: heading } = heroAlias` can then synthesize
+`hero.title` when `{ heading }` is rendered. Without that marked origin, marker
+mode should not guess that `heading` belongs to `hero.title`. Confidence:
+**medium**.
 
 ### Nested list paths — yes, with constraints
 
@@ -262,10 +281,10 @@ Examples at risk:
 - shape-only declarations for server-side data contracts not yet referenced in JSX
 - list roots used only as controls (`products && ...`) while rendering uses an alias
 
-The plan's list-control gap and primitive-list gap are related. **Recommendation:**
+The pass-through gap and primitive-list gap are related. **Recommendation:**
 during the experiment, accept that marker-only components may need flat
-`templateVars` for pass-through shapes — or extend collection to inspect JSX
-prop assignments (`badges={ product.badges }` → `products[].badges`).
+`templateVars` for pass-through shapes, or extend collection to inspect JSX prop
+assignments (`badges={ product.badges }` -> `products[].badges`).
 
 ### Primitive root lists — correctly flagged as a gap
 
@@ -279,14 +298,14 @@ silent inference; it would conflate scalar replace with list shape.
 
 Current fixtures under `fixtures/e2e/`:
 
-| Fixture | Marker parity difficulty | In plan? |
+| Fixture | Marker parity difficulty | Plan status |
 | --- | --- | --- |
-| `basic-replace-input` | trivial | no (should add) |
+| `basic-replace-input` | trivial | included as first e2e clone |
 | `flat-template-vars` | medium | yes |
 | `nested-template-vars` | high | yes |
-| `full-template-surface` | high | yes (partial) |
-| `list-object-controls` | low–medium | no |
-| `deferred-resolution` | very high | **no** |
+| `full-template-surface` | high | yes, after list parity |
+| `list-object-controls` | low–medium | yes, phase-2 gate |
+| `deferred-resolution` | very high | partial clone with explicit gaps |
 
 ### `flat-template-vars`
 
@@ -317,7 +336,7 @@ components, hidden input replace paths. Marker duplication must decide:
 
 Both are valid; the plan should state which parity mode the fixtures use.
 
-### `deferred-resolution` — critical missing fixture
+### `deferred-resolution` — critical parity fixture
 
 This fixture stress-tests features marker mode is most likely to miss:
 
@@ -329,8 +348,8 @@ This fixture stress-tests features marker mode is most likely to miss:
 - helper call rendering (`renderHelperProducts(products)`)
 - spread props child (`<ProductCard {...product} />`)
 
-If marker mode never duplicates `deferred-resolution`, parity claims remain
-weak. **Recommendation:** add it to the e2e parity list with explicit
+If marker mode only duplicates the easy parts of `deferred-resolution`, parity
+claims remain weak. **Recommendation:** keep it in the e2e list with explicit
 sub-bullets for patterns that remain flat-only during the experiment.
 
 ### `list-object-controls`
@@ -351,6 +370,8 @@ The proposed unit and e2e tests are a solid skeleton. Strengthen them as follows
 - **unary/binary controls** (`!$$visible`, `$$status !== 'archived'`)
 - **list root control** without marked `.map()` on same node (`$$products && ...`)
 - **filter/map chain** on marked root
+- **marker-origin aliases** (`const heroAlias = $$hero`)
+- **marker-origin destructures** (`const { title: heading } = heroAlias`)
 - **map assignment alias** with marked source only on root
 - **helper call** with single marked list argument
 - **nested map** three deep (minimal synthetic component)
@@ -358,10 +379,12 @@ The proposed unit and e2e tests are a solid skeleton. Strengthen them as follows
 - **coexistence merge** — flat + marker declarations merge; conflicting shapes error
 - **discovery negatives** — helper with JSX, nested function, non-component arrow
 - **child component isolation** — parent markers do not auto-declare child paths
+- **binding-position diagnostics** — `const $$title = ...` rejects clearly
+- **node_modules filename gate** — no discovery or stripping in dependency files
 - **output hygiene** — transformed source contains no `$$` identifiers when option enabled
 - **disabled mode** — `experimentalDollarMarkers: false` leaves `$$foo` untouched
 
-### E2e tests to add
+### E2e test emphasis
 
 - `basic-replace-input` marker clone (smoke)
 - `list-object-controls` marker clone
@@ -375,6 +398,7 @@ The plan mentions primitive root lists. Also add explicit pending/failing tests 
 - pass-through list props without usage in declaring component
 - shape-only declarations with no marker occurrence
 - helper bodies that consume marked arguments (unless call-site mark is sufficient)
+- alias/destructure chains where no marked source origin is present
 - any `deferred-resolution` pattern not yet implemented
 
 Use Vitest `it.fails` or tagged pending tests so gaps are visible in CI during

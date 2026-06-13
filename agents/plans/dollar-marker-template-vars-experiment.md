@@ -62,6 +62,7 @@ Determine whether usage-site markers can replace or complement
 
 - scalar replacement
 - nested object paths
+- plain object aliases and destructure aliases
 - recursive nested object/list paths
 - control inference
 - list inference
@@ -282,7 +283,8 @@ const App = (props) => <main>{ $$props.title }</main>;
   JSX/list traversal
 - skip nested local functions by default, even if they return JSX and contain
   markers
-- do not process `node_modules` or imported dependency source
+- do not process files whose Babel filename is under `node_modules`
+- do not follow imports into dependency source
 
 Follow-up scope:
 
@@ -316,6 +318,9 @@ Required collection behavior:
 - identify root identifiers starting with `$$`
 - reject bare `$$` as invalid
 - reject markers on non-root path segments, such as `hero.$$summary`
+- reject marker identifiers in binding positions, such as `const $$title = ...`,
+  function parameters, object patterns, import specifiers, and JSX component
+  names
 - reject computed access such as `$$items[0]` unless a future phase explicitly
   supports it
 - reject markers outside supported component JSX/control/list contexts
@@ -329,9 +334,17 @@ Required collection behavior:
   `$$products.filter(Boolean).map(...)`
 - support helper calls with one marked list source, such as
   `renderProducts($$products)`
+- track marker-origin plain aliases, such as `const heroAlias = $$hero`
+- track marker-origin object destructures, such as
+  `const { title: heading } = heroAlias`
 - follow map callback aliases to discover rendered item fields
 - follow destructured map callback aliases where the flat API supports them
 - follow nested map aliases recursively
+- collect JSX prop assignments from list item aliases as parent shape hints, such
+  as `title={ product.title } -> products[].title`
+- collect supported spread props from list item aliases as parent shape hints,
+  such as `<ProductCard {...product} /> -> products[].*` only where an explicit
+  flat declaration or child contract can make the fields concrete
 - collect optional member paths, such as `$$hero?.summary`
 - record unsupported but recognizable patterns through the existing diagnostics
   helper
@@ -339,6 +352,11 @@ Required collection behavior:
 The collection pass itself should not mutate the AST. It should emit candidate
 flat declarations and metadata. A separate strip pass should then rewrite the
 markers before the registry and controllers run.
+
+Plain alias collection is required for parity with `deferred-resolution`.
+Without a marked origin such as `const heroAlias = $$hero`, later rendered uses
+like `{ heading }` or `{ heroAlias?.summary }` cannot be mapped back to the
+canonical `hero.title` and `hero.summary` paths.
 
 ## Marker Strip Pass
 
@@ -351,6 +369,8 @@ The strip pass should:
   `$$hero?.summary`, to unmarked roots
 - rewrite marked list roots before `.map()`, helper calls, and safe chain calls
 - run before `createTemplateVarsRegistry(..., componentPath, ...)`
+- refuse to rewrite marker identifiers in binding positions; those are syntax
+  errors for this experiment, not alternate source declarations
 - leave `$foo` untouched
 - leave `$$foo` untouched when `experimentalDollarMarkers` is disabled
 - guarantee transformed output contains no `$$` identifiers for marker-enabled
@@ -453,6 +473,8 @@ Unit tests:
 - collect direct `.map()` list declarations
 - collect safe chain `.map()` list declarations
 - collect nested `.map()` list declarations
+- collect marker-origin plain aliases
+- collect marker-origin object destructure aliases
 - collect same-scope map-assignment aliases
 - collect reassigned map aliases
 - collect helper calls with one marked list source
@@ -468,6 +490,8 @@ Unit tests:
 - preserve component-local boundaries; parent markers must not auto-declare a
   child component contract
 - diagnose unsupported helper calls with multiple marked list roots
+- reject marker identifiers in binding positions with a clear diagnostic
+- skip marker discovery and stripping for `node_modules` filenames
 
 E2e parity fixtures:
 
@@ -503,6 +527,7 @@ Known parity gap tests:
 - shape-only declarations used as server-side data contracts
 - helper bodies that consume marked arguments in ways not visible from the call
   site
+- alias/destructure chains where no marked source origin is present
 
 These should be explicit pending or skipped tests during the experiment, not
 hidden limitations. Keep the pending set small and high signal so CI remains
@@ -517,6 +542,8 @@ useful on the draft branch.
   the existing controllers to miss declarations.
 - List path discovery becomes harder because JavaScript cannot express `[]` in
   identifiers.
+- Alias and destructure discovery may need a marker-origin map before the
+  existing controller alias tracking can help.
 - The marker may make JSX look less like normal application code.
 - Nested list discovery may duplicate complexity already handled by the
   registry/list controller layer.
