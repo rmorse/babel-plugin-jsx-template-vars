@@ -128,7 +128,7 @@ function templateVarsVisitor( babel, config ) {
 				? getTemplateVarsFromExpression( flatAssignmentPath.node.expression, types )
 				: [];
 
-			const markerTemplateVars = collectDollarMarkerTemplateVars( path, functionPath, babel, path );
+			const markerTemplateVars = collectDollarMarkerTemplateVars( path, functionPath, babel, path, flatTemplateVars );
 			if ( ! markerTemplateVars.hasMarkers ) {
 				return;
 			}

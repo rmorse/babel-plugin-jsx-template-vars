@@ -235,18 +235,54 @@ function getListSourceInfo( expression, types, aliasesByBinding, path ) {
 	return getMarkerExpressionInfo( expression, types, aliasesByBinding, path );
 }
 
-function normalizeAliasInfo( source ) {
+function normalizeAliasInfo( source, listHintPaths = new Set() ) {
 	if ( typeof source === 'string' ) {
 		return {
 			path: source,
 			markerOrigin: source.includes( '[]' ),
+			listCandidate: isListHintPath( source, listHintPaths ),
 		};
 	}
 
 	return {
 		path: source.path,
 		markerOrigin: source.markerOrigin === true,
+		listCandidate: source.listCandidate === true || isListHintPath( source.path, listHintPaths ),
 	};
+}
+
+function isListHintPath( sourcePath, listHintPaths ) {
+	return sourcePath.includes( '[]' ) || listHintPaths.has( sourcePath );
+}
+
+function createListHintPaths( declarations = [] ) {
+	const listHintPaths = new Set();
+
+	declarations.forEach( ( declaration ) => {
+		if ( typeof declaration !== 'string' ) {
+			return;
+		}
+
+		const rawParts = declaration.split( '.' );
+		const canonicalParts = [];
+		rawParts.forEach( ( rawPart ) => {
+			const isList = rawPart.endsWith( '[]' );
+			const name = isList ? rawPart.slice( 0, -2 ) : rawPart;
+			if ( ! name ) {
+				return;
+			}
+
+			if ( isList ) {
+				listHintPaths.add( [ ...canonicalParts, name ].join( '.' ) );
+				canonicalParts.push( `${ name }[]` );
+				return;
+			}
+
+			canonicalParts.push( name );
+		} );
+	} );
+
+	return listHintPaths;
 }
 
 function isSafeListChainCall( expression, types ) {
@@ -258,10 +294,11 @@ function isSafeListChainCall( expression, types ) {
 	);
 }
 
-function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, errorPath = componentPath ) {
+function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, errorPath = componentPath, flatTemplateVars = [] ) {
 	const { types } = babel;
 	const declarations = new Set();
 	const aliasesByBinding = new WeakMap();
+	const listHintPaths = createListHintPaths( flatTemplateVars );
 	let markerCount = 0;
 
 	function addDeclaration( pathName ) {
@@ -279,11 +316,12 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	function registerIdentifierAlias( localName, sourcePath, path ) {
 		const binding = path.scope.getBinding( localName );
 		if ( binding && sourcePath ) {
-			aliasesByBinding.set( binding.identifier, normalizeAliasInfo( sourcePath ) );
+			aliasesByBinding.set( binding.identifier, normalizeAliasInfo( sourcePath, listHintPaths ) );
 		}
 	}
 
-	function registerPatternAliases( pattern, basePath, path ) {
+	function registerPatternAliases( pattern, baseSource, path ) {
+		const baseInfo = normalizeAliasInfo( baseSource, listHintPaths );
 		( pattern.properties || [] ).forEach( ( property ) => {
 			if ( property.type === 'RestElement' ) {
 				return;
@@ -294,14 +332,17 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 				return;
 			}
 
-			const propertyPath = `${ basePath }.${ propertyName }`;
+			const propertyInfo = {
+				path: `${ baseInfo.path }.${ propertyName }`,
+				markerOrigin: baseInfo.markerOrigin,
+			};
 			if ( types.isIdentifier( property.value ) ) {
-				registerIdentifierAlias( property.value.name, propertyPath, path );
+				registerIdentifierAlias( property.value.name, propertyInfo, path );
 				return;
 			}
 
 			if ( types.isObjectPattern( property.value ) ) {
-				registerPatternAliases( property.value, propertyPath, path );
+				registerPatternAliases( property.value, propertyInfo, path );
 			}
 		} );
 	}
@@ -406,7 +447,7 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 				return;
 			}
 
-			if ( isDirectMarkedRootArgument( argument, types ) || isMarkerOriginAliasArgument( argument, sourceInfo, path ) ) {
+			if ( isDirectMarkedRootArgument( argument, types ) || isMarkerOriginListAliasArgument( argument, sourceInfo, path ) ) {
 				addListDeclaration( sourcePath );
 				listArguments.add( argument );
 			}
@@ -418,13 +459,17 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 		return types.isIdentifier( argument ) && isDollarMarkerName( argument.name );
 	}
 
-	function isMarkerOriginAliasArgument( argument, sourceInfo, path ) {
+	function isMarkerOriginListAliasArgument( argument, sourceInfo, path ) {
 		if ( ! sourceInfo.markerOrigin || ! types.isIdentifier( argument ) || isDollarMarkerName( argument.name ) ) {
 			return false;
 		}
 
 		const binding = path.scope.getBinding( argument.name );
-		return Boolean( binding && aliasesByBinding.has( binding.identifier ) );
+		if ( ! binding || ! aliasesByBinding.has( binding.identifier ) ) {
+			return false;
+		}
+
+		return sourceInfo.listCandidate || ! sourceInfo.path.includes( '.' );
 	}
 
 	function registerMapCallbackAliases( callPath, itemPath ) {
@@ -531,7 +576,7 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 			}
 
 			if ( types.isObjectPattern( id ) ) {
-				registerPatternAliases( id, sourceInfo.path, path );
+				registerPatternAliases( id, sourceInfo, path );
 			}
 		},
 		CallExpression( path ) {

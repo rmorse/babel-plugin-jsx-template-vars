@@ -2,9 +2,12 @@
 
 ## Status
 
-Experimental implementation spike in progress on draft PR #22. This workstream
-is not intended for release until we decide marker mode is stable enough to
-document as public API.
+Experimental implementation spike in progress on draft PR #22. The initial
+implementation, review hardening pass, and marker-origin list alias follow-ups
+are now implemented on the draft branch.
+
+This workstream is still not intended for release until we decide marker mode is
+stable enough to document as public API.
 
 The first implementation slice is behind `experimentalDollarMarkers` and keeps
 the stable flat `templateVars` API unchanged.
@@ -60,15 +63,20 @@ experiment so collision behavior is easy to isolate.
 
 ## Implementation Status
 
-Implemented in the first spike:
+Implemented on the draft branch:
 
 - marker parsing and stripping for `$$name`, `$$hero.summary`, and
   `$$hero?.summary`
 - invalid marker diagnostics for bare `$$`, non-root markers, computed marker
-  access, binding-position markers, and JSX marker names
+  access, binding-position markers, imports, object patterns, params, rest and
+  default params, and JSX marker names
 - opt-in discovery through `experimentalDollarMarkers`
-- `node_modules` filename skip
+- hardened absolute and relative `node_modules` filename skip
 - capitalized variable-declared function component discovery
+- explicit non-support tests for function declarations, default exports,
+  HOC/wrapper forms, and multi-declarator component declarations
+- diagnostics for markers inside skipped nested local functions
+- tidy-only behavior and flat+marker registry conflict coverage
 - expression-bodied arrow components normalized to block bodies before the
   existing controllers run
 - marker collection -> strip -> synthesized flat declarations -> registry ->
@@ -79,15 +87,23 @@ Implemented in the first spike:
 - direct `.map()`, safe-chain `.map()`, map assignment aliases, reassigned map
   aliases, helper calls with one marked list source, and nested `.map()` paths
 - marker-origin plain aliases and object destructure aliases
+- marker-origin root and nested list aliases in `.map()` and helper-call
+  contexts
+- scalar guard coverage so nested scalar aliases passed to helpers are not
+  misclassified as list wrappers
 - marker e2e parity clones for all current fixture families:
   `basic-replace-input`, `flat-template-vars`, `list-object-controls`,
   `nested-template-vars`, `full-template-surface`, and `deferred-resolution`
+- output hygiene checks proving processed marker e2e fixtures emit no `$$`
 
 Remaining explicit gaps:
 
 - `{ $$tags }` does not infer primitive root list shape
 - shape-only declarations still require flat `templateVars`
 - alias/destructure chains without a marked source origin are not inferred
+- opaque helper bodies are not inspected for item fields; helper-only object
+  lists need visible item usage elsewhere or flat `templateVars` shape hints
+- single-dollar marker syntax remains deferred
 
 ## Experiment Goal
 
@@ -607,14 +623,16 @@ which parts must stay on flat `templateVars`.
 ## Follow-Up Work From Review
 
 Review feedback after the first implementation spike found several experiment
-boundary issues that should be addressed before the draft PR is promoted out of
-draft. Review #1 mostly clarified boundaries and missing tests; Review #2 added
-two concrete behavior fixes that should be implemented next: binding-position
-rejection and helper-only list inference.
+boundary issues. Those review follow-ups are now implemented on the draft branch.
+Review #1 mostly clarified boundaries and missing tests; Review #2 added two
+concrete behavior fixes: binding-position rejection and helper-only list
+inference.
+
+The notes below are kept as a record of what was agreed and implemented.
 
 ### 1. Complete Binding-Position Marker Validation
 
-Status: agreed, high priority.
+Status: completed.
 
 Markers are value-use syntax. They must not define or rename bindings. The
 current implementation rejects some binding positions, but review probes showed
@@ -659,7 +677,7 @@ incorrect transforms.
 
 ### 2. Make Capitalized Helper Discovery An Explicit Experiment Rule
 
-Status: agreed with clarification.
+Status: completed with clarification.
 
 The current discovery rule intentionally starts simple:
 
@@ -692,7 +710,7 @@ Non-goal for now:
 
 ### 3. Reject Or Diagnose Markers In Skipped Nested Local Functions
 
-Status: agreed, high priority.
+Status: completed.
 
 The collector intentionally skips nested local functions that are not map
 callbacks. That boundary is correct, but current behavior can still discover the
@@ -731,7 +749,7 @@ Required tests:
 
 ### 4. Fix Helper-Only List Source Inference
 
-Status: agreed, medium priority but concrete bug.
+Status: completed.
 
 This should be enough to synthesize a root list declaration:
 
@@ -758,10 +776,19 @@ Required tests:
 - helper-only root does not require a second `.map()` occurrence elsewhere
 - helper call with multiple marked list roots still warns/throws through the
   existing unsupported-pattern path
+- marker-origin list aliases, including nested aliases with shape hints, wrap
+  correctly
+- nested scalar marker aliases passed to helpers do not become list wrappers
+
+Helper body limitation:
+
+- helper bodies are intentionally opaque to the collector
+- item fields such as `row.title` inside a helper are not inferred unless the
+  same shape is visible elsewhere or supplied through flat `templateVars`
 
 ### 5. Harden `node_modules` Filename Skipping
 
-Status: agreed, low-risk fix.
+Status: completed.
 
 The skip helper currently handles absolute paths containing `/node_modules/`,
 but relative filenames such as `node_modules/pkg/App.jsx` should also be
@@ -780,7 +807,7 @@ Required tests:
 
 ### 6. Decide Multi-Declarator Behavior
 
-Status: acceptable gap for the experiment, but make it visible.
+Status: completed as an explicit experiment gap.
 
 The current candidate discovery requires exactly one variable declarator:
 
@@ -807,7 +834,7 @@ Implementation preference:
 
 ### 7. Add Output-Hygiene Coverage Across Marker Fixtures
 
-Status: agreed, useful confidence test.
+Status: completed.
 
 Current unit tests check selected transformed output for `$$` removal. We should
 also prove this across the marker e2e fixture family.
@@ -822,7 +849,7 @@ Required tests:
 
 ### 8. Add Explicit Non-Support Tests For Component Forms
 
-Status: agreed, documentation/test gap.
+Status: completed.
 
 The experiment intentionally does not discover broader component forms yet:
 
@@ -838,7 +865,7 @@ Required follow-up:
 
 ### 9. Add Tidy-Only And Conflict Tests
 
-Status: agreed.
+Status: completed.
 
 The current visitor skips marker processing in `tidyOnly` mode. That should be
 locked with tests.
@@ -869,7 +896,7 @@ shape conflicts.
 
 ### 10. Add Focused Unit Coverage Where E2e Is Too Broad
 
-Status: agree selectively.
+Status: completed selectively.
 
 The marker e2e fixtures are valuable and should remain the primary parity
 signal, but a few collector behaviors deserve direct unit tests because they are
@@ -887,7 +914,7 @@ experiment is still moving.
 
 ### 11. Keep Known Syntax Decisions Separate From Stability Fixes
 
-Status: agreed.
+Status: completed.
 
 `$$` is still the experiment marker. Single-dollar syntax may be viable later,
 especially if we only process user-authored component files and never traverse

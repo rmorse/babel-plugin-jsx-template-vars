@@ -216,6 +216,24 @@ describe('dollar marker template vars experiment', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
 	});
 
+	it('renders destructured helper-only nested list aliases from marked roots with shape hints', async () => {
+		const source = `
+			const renderRows = (rows) => rows.map((row) => <li>{ row.title }</li>);
+			const App = ({ catalog = {} }) => {
+				const { sections } = $$catalog;
+				return <ul>{ renderRows(sections) }</ul>;
+			};
+			App.templateVars = [ 'catalog.sections[].title' ];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
+	});
+
 	it('renders direct nested list alias maps from marker-origin aliases', async () => {
 		const source = `
 			const App = ({ catalog = {} }) => {
@@ -230,6 +248,56 @@ describe('dollar marker template vars experiment', () => {
 		});
 
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
+	});
+
+	it('renders direct destructured nested list alias maps from marked roots', async () => {
+		const source = `
+			const App = ({ catalog = {} }) => {
+				const { sections } = $$catalog;
+				return <ul>{ sections.map((section) => <li>{ section.title }</li>) }</ul>;
+			};
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
+	});
+
+	it('does not treat nested scalar marker aliases passed to helpers as lists', async () => {
+		const source = `
+			const formatTitle = (title) => \`Title: \${ title }\`;
+			const App = ({ hero = {} }) => {
+				const title = $$hero.title;
+				return <h1>{ formatTitle(title) }</h1>;
+			};
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>Title: {{hero.title}}</h1>');
+	});
+
+	it('does not treat destructured nested scalar marker aliases passed to helpers as lists', async () => {
+		const source = `
+			const formatTitle = (title) => \`Title: \${ title }\`;
+			const App = ({ hero = {} }) => {
+				const { title } = $$hero;
+				return <h1>{ formatTitle(title) }</h1>;
+			};
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>Title: {{hero.title}}</h1>');
 	});
 
 	it('infers list item fields from safe-chain callbacks', async () => {
