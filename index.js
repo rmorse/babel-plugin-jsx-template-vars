@@ -54,7 +54,7 @@ module.exports = ( babel, config ) => {
 			Program(path, state) {
 				const root = path;
 				// The main plugin visitor.
-				path.traverse( templateVarsVisitor( babel, config ) );
+				path.traverse( templateVarsVisitor( babel, config ), state );
 				
 				if ( tidyOnly ) {
 					return;

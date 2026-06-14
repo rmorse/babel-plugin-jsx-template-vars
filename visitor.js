@@ -45,6 +45,11 @@ const {
 
 const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
+const {
+	collectDollarMarkerTemplateVars,
+	findComponentFunctionPath,
+	isMarkerComponentCandidate,
+} = require( './dollar-marker-template-vars' );
 const defaultLanguage = 'handlebars';
 
 /**
@@ -96,8 +101,54 @@ function getTemplateVarsFromExpression( expression, types ) {
 function templateVarsVisitor( babel, config ) {
 	const { types } = babel;
 	const tidyOnly = config.tidyOnly ?? false;
+	const experimentalDollarMarkers = config.experimentalDollarMarkers ?? false;
+	const processedComponents = new WeakSet();
+	const processedTemplateVarAssignments = new WeakSet();
 
 	return {
+		VariableDeclaration( path, state ) {
+			if ( ! experimentalDollarMarkers || tidyOnly ) {
+				return;
+			}
+
+			const filename = getFilename( path, state );
+			if ( ! isMarkerComponentCandidate( path, babel, filename ) ) {
+				return;
+			}
+
+			const declaration = path.node.declarations[ 0 ];
+			const componentName = declaration.id.name;
+			const functionPath = findComponentFunctionPath( path, types );
+			if ( ! functionPath ) {
+				return;
+			}
+
+			const flatAssignmentPath = findTemplateVarsAssignmentPath( path.parentPath, componentName, types );
+			const flatTemplateVars = flatAssignmentPath
+				? getTemplateVarsFromExpression( flatAssignmentPath.node.expression, types )
+				: [];
+
+			const markerTemplateVars = collectDollarMarkerTemplateVars( path, functionPath, babel, path, flatTemplateVars );
+			if ( ! markerTemplateVars.hasMarkers ) {
+				return;
+			}
+
+			if ( flatAssignmentPath ) {
+				processedTemplateVarAssignments.add( flatAssignmentPath.node );
+				flatAssignmentPath.remove();
+			}
+
+			markerTemplateVars.stripMarkers();
+			processTemplateVarsComponent(
+				[ ...flatTemplateVars, ...markerTemplateVars.declarations ],
+				componentName,
+				path,
+				babel,
+				config,
+				path
+			);
+			processedComponents.add( path.node );
+		},
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
@@ -108,6 +159,10 @@ function templateVarsVisitor( babel, config ) {
 			// Process the expression and get the raw template var declarations.
 			const templatePropsValue = getTemplateVarsFromExpression( expression, types );
 			if ( ! templatePropsValue ) {
+				return;
+			}
+
+			if ( processedTemplateVarAssignments.has( path.node ) ) {
 				return;
 			}
 
@@ -129,11 +184,38 @@ function templateVarsVisitor( babel, config ) {
 				return;
 			}
 
-			const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, path );
-			templateVarsController.init( templateVars, componentName, componentPath, babel, config );
+			if ( processedComponents.has( componentPath.node ) ) {
+				return;
+			}
+
+			processTemplateVarsComponent( templatePropsValue, componentName, componentPath, babel, config, path );
+			processedComponents.add( componentPath.node );
 		}
 	}
 };
+
+function processTemplateVarsComponent( templatePropsValue, componentName, componentPath, babel, config, errorPath ) {
+	const functionPath = findComponentFunctionPath( componentPath, babel.types );
+	if ( functionPath ) {
+		ensureBlockFunctionBody( functionPath, babel.types );
+	}
+	const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, errorPath );
+	templateVarsController.init( templateVars, componentName, componentPath, babel, config );
+}
+
+function ensureBlockFunctionBody( functionPath, types ) {
+	if ( types.isBlockStatement( functionPath.node.body ) ) {
+		return;
+	}
+
+	functionPath.node.body = types.blockStatement( [
+		types.returnStatement( functionPath.node.body ),
+	] );
+}
+
+function getFilename( path, state ) {
+	return state?.file?.opts?.filename || path.hub?.file?.opts?.filename || '';
+}
 
 // Find and return a component (variable declaration) path via traversal by its name.
 function getComponentPath( path, componentName ) {
@@ -148,6 +230,25 @@ function getComponentPath( path, componentName ) {
 		}
 	} );
 	return componentPath;
+}
+
+function findTemplateVarsAssignmentPath( path, componentName, types ) {
+	let assignmentPath = null;
+	path.traverse( {
+		ExpressionStatement( subPath ) {
+			const templatePropsValue = getTemplateVarsFromExpression( subPath.node.expression, types );
+			if ( templatePropsValue === false ) {
+				return;
+			}
+
+			const objectName = subPath.node.expression.left.object.name;
+			if ( objectName === componentName ) {
+				assignmentPath = subPath;
+				subPath.stop();
+			}
+		}
+	} );
+	return assignmentPath;
 }
 
 module.exports = templateVarsVisitor;

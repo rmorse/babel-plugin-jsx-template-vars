@@ -1,0 +1,1 @@
+<section><h1><?php echo $data['title']; ?></h1><ul><?php foreach ( $data['items'] as $data_1 ) { ?><li><?php if ( $data_1['active'] ) { ?><span><?php echo $data_1['label']; ?></span><?php } ?></li><?php } ?></ul><?php if ( $data['status'] !== 'archived' ) { ?><footer>Visible</footer><?php } ?></section>

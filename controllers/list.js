@@ -326,6 +326,13 @@ class ListController {
 		const sourceVarName = path.node.name;
 
 		if ( ! this.vars.names.includes( sourceVarName ) ) {
+			const aliasReplacement = this.getExperimentalAliasReplacementExpression( path );
+			if ( ! aliasReplacement || ! this.shouldReplaceListAliasIdentifier( path ) ) {
+				return;
+			}
+
+			path.replaceWith( aliasReplacement );
+			path.skip();
 			return;
 		}
 
@@ -334,6 +341,60 @@ class ListController {
 		}
 
 		path.node.name = this.vars.mapped[ sourceVarName ];
+	}
+
+	getExperimentalAliasReplacementExpression( path ) {
+		if ( this.config.experimentalDollarMarkers !== true ) {
+			return null;
+		}
+
+		const { types } = this.babel;
+		const binding = path.scope.getBinding( path.node.name );
+		if ( ! binding || ! this.pathAliasesByBinding.has( binding.identifier ) ) {
+			return null;
+		}
+
+		const alias = this.pathAliasesByBinding.get( binding.identifier );
+		const metadata = this.resolveListMetaFromSegments( alias.segments, path );
+		if ( ! metadata || metadata.sourceSegments.length === 0 ) {
+			return null;
+		}
+
+		const rootName = metadata.sourceSegments[ 0 ];
+		const rootMappedName = this.vars.mapped[ rootName ];
+		if ( ! rootMappedName ) {
+			return null;
+		}
+
+		return metadata.sourceSegments.slice( 1 ).reduce(
+			( expression, segment ) => types.memberExpression( expression, types.identifier( segment ) ),
+			types.identifier( rootMappedName )
+		);
+	}
+
+	shouldReplaceListAliasIdentifier( path ) {
+		const { types } = this.babel;
+		const parentNode = path.parentPath?.node;
+		if ( ! parentNode ) {
+			return false;
+		}
+
+		if ( [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern', 'ObjectPattern', 'AssignmentPattern' ].includes( parentNode.type ) ) {
+			return false;
+		}
+
+		if ( types.isMemberExpression( parentNode ) ) {
+			if ( parentNode.property === path.node && ! parentNode.computed ) {
+				return false;
+			}
+
+			return types.isIdentifier( parentNode.property ) && (
+				parentNode.property.name === 'map' ||
+				safeListChainMethods.has( parentNode.property.name )
+			);
+		}
+
+		return types.isCallExpression( parentNode ) && parentNode.arguments.includes( path.node );
 	}
 
 	shouldReplaceIdentifier( path ) {
