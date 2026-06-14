@@ -606,9 +606,11 @@ which parts must stay on flat `templateVars`.
 
 ## Follow-Up Work From Review
 
-Review feedback after the first implementation spike found a few experiment
+Review feedback after the first implementation spike found several experiment
 boundary issues that should be addressed before the draft PR is promoted out of
-draft.
+draft. Review #1 mostly clarified boundaries and missing tests; Review #2 added
+two concrete behavior fixes that should be implemented next: binding-position
+rejection and helper-only list inference.
 
 ### 1. Complete Binding-Position Marker Validation
 
@@ -621,6 +623,7 @@ these can still be transformed silently:
 ```jsx
 const App = ({ $$title }) => <h1>{ title }</h1>;
 const App = ($$props) => <h1>{ props.title }</h1>;
+const App = ({ $$title: heading }) => <h1>{ heading }</h1>;
 ```
 
 Those rewrites change source binding semantics and violate the experiment
@@ -631,6 +634,8 @@ Required fixes:
 - reject arrow/function parameters named with `$$`
 - reject object-pattern parameter keys and shorthand bindings, including
   `{ $$title }`
+- reject renamed object-pattern marker bindings, including
+  `{ $$title: heading }`
 - reject nested object-pattern bindings, such as
   `{ hero: { $$title } }`
 - reject assignment-pattern bindings where the left side is a marker
@@ -643,10 +648,14 @@ Required tests:
 
 - `const App = ($$props) => ...` throws
 - `const App = ({ $$title }) => ...` throws
+- `const App = ({ $$title: heading }) => ...` throws
 - nested object-pattern marker bindings throw
 - assignment-pattern marker bindings throw
 - import marker bindings throw or are documented if parser setup makes the test
   impractical
+
+Do this as an implementation fix, not just a plan note. These are actual
+incorrect transforms.
 
 ### 2. Make Capitalized Helper Discovery An Explicit Experiment Rule
 
@@ -681,7 +690,76 @@ Non-goal for now:
 
 - do not add broad "is this function used as JSX" analysis in this spike
 
-### 3. Harden `node_modules` Filename Skipping
+### 3. Reject Or Diagnose Markers In Skipped Nested Local Functions
+
+Status: agreed, high priority.
+
+The collector intentionally skips nested local functions that are not map
+callbacks. That boundary is correct, but current behavior can still discover the
+parent component because the broad JSX scan sees JSX inside the skipped helper.
+If the only marker is inside that skipped nested helper, the component may be
+processed with no useful declarations and the marker can remain in emitted code.
+
+Example:
+
+```jsx
+const App = () => {
+	const helper = () => <h1>{ $$title }</h1>;
+	return helper();
+};
+```
+
+Preferred behavior:
+
+- do not silently leave processable-looking markers in emitted code when
+  `experimentalDollarMarkers` is enabled
+- either avoid discovering the component when all markers are inside skipped
+  nested functions, or throw a clear unsupported-pattern diagnostic
+
+Recommendation:
+
+- throw a clear diagnostic for markers inside skipped nested local functions
+  during marker-enabled processing
+- message should explain that marker mode only supports component body usage and
+  map callback usage in this spike
+
+Required tests:
+
+- nested local helper with the only marker throws clearly
+- nested local helper markers do not get stripped silently
+- map callback markers remain supported
+
+### 4. Fix Helper-Only List Source Inference
+
+Status: agreed, medium priority but concrete bug.
+
+This should be enough to synthesize a root list declaration:
+
+```jsx
+<section>{ renderRows($$products) }</section>
+```
+
+Current behavior only adds a helper-call list declaration when the source path
+already contains `[]`, which means helper-only list roots are missed unless the
+same list is also mapped elsewhere.
+
+Required fix:
+
+- when a helper call receives a marked root argument such as `$$products`, treat
+  that as a list root declaration for wrapping purposes
+- synthesize `products[]` at minimum
+- do not infer item fields from an opaque helper body unless they are visible
+  elsewhere or supplied by flat declarations
+- keep multi-root helper diagnostics unchanged
+
+Required tests:
+
+- `renderRows($$products)` wraps output with list open/close tags
+- helper-only root does not require a second `.map()` occurrence elsewhere
+- helper call with multiple marked list roots still warns/throws through the
+  existing unsupported-pattern path
+
+### 5. Harden `node_modules` Filename Skipping
 
 Status: agreed, low-risk fix.
 
@@ -700,7 +778,7 @@ Required tests:
 - relative `node_modules/pkg/App.jsx` remains skipped
 - marker stripping does not run for skipped dependency filenames
 
-### 4. Decide Multi-Declarator Behavior
+### 6. Decide Multi-Declarator Behavior
 
 Status: acceptable gap for the experiment, but make it visible.
 
@@ -727,7 +805,7 @@ Implementation preference:
 - only add diagnostics if the skip proves confusing during implementation or
   review
 
-### 5. Add Output-Hygiene Coverage Across Marker Fixtures
+### 7. Add Output-Hygiene Coverage Across Marker Fixtures
 
 Status: agreed, useful confidence test.
 
@@ -742,7 +820,72 @@ Required tests:
 - keep skipped dependency filename cases separate, because those intentionally
   leave marker syntax untouched
 
-### 6. Keep Known Syntax Decisions Separate From Stability Fixes
+### 8. Add Explicit Non-Support Tests For Component Forms
+
+Status: agreed, documentation/test gap.
+
+The experiment intentionally does not discover broader component forms yet:
+
+- `function App() { ... }`
+- default export components
+- HOC or wrapper forms such as `memo(() => ...)`
+
+Required follow-up:
+
+- add tests proving these forms are untouched or documented as unsupported
+- make sure they do not half-transform and leave broken code
+- keep discovery expansion separate from this stability pass
+
+### 9. Add Tidy-Only And Conflict Tests
+
+Status: agreed.
+
+The current visitor skips marker processing in `tidyOnly` mode. That should be
+locked with tests.
+
+Required tests:
+
+- `tidyOnly: true` plus `experimentalDollarMarkers: true` leaves markers
+  untouched
+- flat `templateVars` declarations are still removed in tidy-only mode
+- marker plus flat declaration conflicts still surface through the registry
+  validation errors
+
+Example conflict:
+
+```jsx
+const App = ({ hero, products }) => (
+	<main>
+		<h1>{ $$hero.title }</h1>
+		{ $$products.map((product) => <p>{ product.title }</p>) }
+	</main>
+);
+
+App.templateVars = [ 'hero[]' ];
+```
+
+The conflict should fail through the same registry validation path as flat-only
+shape conflicts.
+
+### 10. Add Focused Unit Coverage Where E2e Is Too Broad
+
+Status: agree selectively.
+
+The marker e2e fixtures are valuable and should remain the primary parity
+signal, but a few collector behaviors deserve direct unit tests because they are
+small and fragile:
+
+- empty-declaration guard for marker-enabled components
+- strip pass scope boundaries
+- safe-chain alias origin tracking
+- filter predicate field inference, such as `product.available` and
+  `badge.visible`
+- helper-only list root declaration
+
+Avoid overfitting unit tests to every internal traversal detail while the
+experiment is still moving.
+
+### 11. Keep Known Syntax Decisions Separate From Stability Fixes
 
 Status: agreed.
 
