@@ -340,8 +340,14 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 		}
 
 		if ( types.isCallExpression( expression ) ) {
-			collectCallExpression( path );
-			expression.arguments.forEach( ( argument ) => collectExpression( argument, path ) );
+			const listArguments = collectCallExpression( path );
+			expression.arguments.forEach( ( argument ) => {
+				if ( listArguments?.has( argument ) ) {
+					return;
+				}
+
+				collectExpression( argument, path );
+			} );
 			return;
 		}
 
@@ -354,38 +360,39 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	function collectCallExpression( path ) {
 		const { node } = path;
 		if ( ! types.isCallExpression( node ) ) {
-			return;
+			return null;
 		}
 
 		if ( ! isStaticMemberExpression( node.callee, types ) ) {
-			collectHelperListArguments( path );
-			return;
+			return collectHelperListArguments( path );
 		}
 
 		if ( ! types.isIdentifier( node.callee.property ) ) {
-			return;
+			return null;
 		}
 
 		const sourcePath = getListSourcePath( node.callee.object, types, aliasesByBinding, path );
 		if ( ! sourcePath ) {
-			return;
+			return null;
 		}
 
 		if ( safeListChainMethods.has( node.callee.property.name ) ) {
 			addListDeclaration( sourcePath );
 			registerMapCallbackAliases( path, `${ sourcePath }[]` );
-			return;
+			return null;
 		}
 
 		if ( node.callee.property.name !== 'map' ) {
-			return;
+			return null;
 		}
 
 		addListDeclaration( sourcePath );
 		registerMapCallbackAliases( path, `${ sourcePath }[]` );
+		return null;
 	}
 
 	function collectHelperListArguments( path ) {
+		const listArguments = new WeakSet();
 		path.node.arguments.forEach( ( argument ) => {
 			const sourceInfo = getListSourceInfo( argument, types, aliasesByBinding, path );
 			const sourcePath = sourceInfo?.path;
@@ -395,21 +402,29 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 
 			if ( sourcePath.includes( '[]' ) ) {
 				addListDeclaration( sourcePath.endsWith( '[]' ) ? sourcePath.slice( 0, -2 ) : sourcePath );
+				listArguments.add( argument );
 				return;
 			}
 
-			if ( isDirectMarkedRootArgument( argument, types ) || isMarkerOriginRootPath( sourceInfo ) ) {
+			if ( isDirectMarkedRootArgument( argument, types ) || isMarkerOriginAliasArgument( argument, sourceInfo, path ) ) {
 				addListDeclaration( sourcePath );
+				listArguments.add( argument );
 			}
 		} );
+		return listArguments;
 	}
 
 	function isDirectMarkedRootArgument( argument, types ) {
 		return types.isIdentifier( argument ) && isDollarMarkerName( argument.name );
 	}
 
-	function isMarkerOriginRootPath( sourceInfo ) {
-		return sourceInfo.markerOrigin && ! sourceInfo.path.includes( '.' ) && ! sourceInfo.path.includes( '[]' );
+	function isMarkerOriginAliasArgument( argument, sourceInfo, path ) {
+		if ( ! sourceInfo.markerOrigin || ! types.isIdentifier( argument ) || isDollarMarkerName( argument.name ) ) {
+			return false;
+		}
+
+		const binding = path.scope.getBinding( argument.name );
+		return Boolean( binding && aliasesByBinding.has( binding.identifier ) );
 	}
 
 	function registerMapCallbackAliases( callPath, itemPath ) {

@@ -326,12 +326,13 @@ class ListController {
 		const sourceVarName = path.node.name;
 
 		if ( ! this.vars.names.includes( sourceVarName ) ) {
-			const aliasReplacementName = this.getExperimentalAliasReplacementName( path );
-			if ( ! aliasReplacementName || ! this.shouldReplaceListAliasIdentifier( path ) ) {
+			const aliasReplacement = this.getExperimentalAliasReplacementExpression( path );
+			if ( ! aliasReplacement || ! this.shouldReplaceListAliasIdentifier( path ) ) {
 				return;
 			}
 
-			path.node.name = aliasReplacementName;
+			path.replaceWith( aliasReplacement );
+			path.skip();
 			return;
 		}
 
@@ -342,11 +343,12 @@ class ListController {
 		path.node.name = this.vars.mapped[ sourceVarName ];
 	}
 
-	getExperimentalAliasReplacementName( path ) {
+	getExperimentalAliasReplacementExpression( path ) {
 		if ( this.config.experimentalDollarMarkers !== true ) {
 			return null;
 		}
 
+		const { types } = this.babel;
 		const binding = path.scope.getBinding( path.node.name );
 		if ( ! binding || ! this.pathAliasesByBinding.has( binding.identifier ) ) {
 			return null;
@@ -358,7 +360,16 @@ class ListController {
 			return null;
 		}
 
-		return this.vars.mapped[ metadata.sourceSegments[ 0 ] ] || null;
+		const rootName = metadata.sourceSegments[ 0 ];
+		const rootMappedName = this.vars.mapped[ rootName ];
+		if ( ! rootMappedName ) {
+			return null;
+		}
+
+		return metadata.sourceSegments.slice( 1 ).reduce(
+			( expression, segment ) => types.memberExpression( expression, types.identifier( segment ) ),
+			types.identifier( rootMappedName )
+		);
 	}
 
 	shouldReplaceListAliasIdentifier( path ) {

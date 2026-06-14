@@ -198,6 +198,40 @@ describe('dollar marker template vars experiment', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{.}}</li>{{/products}}</ul>');
 	});
 
+	it('renders helper-only nested list aliases from marker-origin aliases', async () => {
+		const source = `
+			const renderRows = (rows) => rows.map((row) => <li>{ row.title }</li>);
+			const App = ({ catalog = {} }) => {
+				const sections = $$catalog.sections;
+				return <ul>{ renderRows(sections) }</ul>;
+			};
+			App.templateVars = [ 'catalog.sections[].title' ];
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
+	});
+
+	it('renders direct nested list alias maps from marker-origin aliases', async () => {
+		const source = `
+			const App = ({ catalog = {} }) => {
+				const sections = $$catalog.sections;
+				return <ul>{ sections.map((section) => <li>{ section.title }</li>) }</ul>;
+			};
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#catalog.sections}}<li>{{title}}</li>{{/catalog.sections}}</ul>');
+	});
+
 	it('infers list item fields from safe-chain callbacks', async () => {
 		const source = `
 			const App = ({ products = [] }) => {
