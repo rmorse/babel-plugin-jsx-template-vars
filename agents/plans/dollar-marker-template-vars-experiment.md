@@ -603,3 +603,157 @@ plan:
 Do not release marker mode until the e2e parity suite proves it can match the
 flat API for the important supported surface, or until we deliberately document
 which parts must stay on flat `templateVars`.
+
+## Follow-Up Work From Review
+
+Review feedback after the first implementation spike found a few experiment
+boundary issues that should be addressed before the draft PR is promoted out of
+draft.
+
+### 1. Complete Binding-Position Marker Validation
+
+Status: agreed, high priority.
+
+Markers are value-use syntax. They must not define or rename bindings. The
+current implementation rejects some binding positions, but review probes showed
+these can still be transformed silently:
+
+```jsx
+const App = ({ $$title }) => <h1>{ title }</h1>;
+const App = ($$props) => <h1>{ props.title }</h1>;
+```
+
+Those rewrites change source binding semantics and violate the experiment
+contract.
+
+Required fixes:
+
+- reject arrow/function parameters named with `$$`
+- reject object-pattern parameter keys and shorthand bindings, including
+  `{ $$title }`
+- reject nested object-pattern bindings, such as
+  `{ hero: { $$title } }`
+- reject assignment-pattern bindings where the left side is a marker
+- keep import binding diagnostics where parser/source setup allows practical
+  coverage
+- make the error message explicit that markers cannot be used in binding
+  positions
+
+Required tests:
+
+- `const App = ($$props) => ...` throws
+- `const App = ({ $$title }) => ...` throws
+- nested object-pattern marker bindings throw
+- assignment-pattern marker bindings throw
+- import marker bindings throw or are documented if parser setup makes the test
+  impractical
+
+### 2. Make Capitalized Helper Discovery An Explicit Experiment Rule
+
+Status: agreed with clarification.
+
+The current discovery rule intentionally starts simple:
+
+```txt
+top-level capitalized variable-declared function + JSX + marker -> processed
+```
+
+That means a helper like this is processed:
+
+```jsx
+const RenderRow = ({ label }) => <li>{ $$label }</li>;
+```
+
+This is broader than "only functions used as JSX components", but that is an
+intentional tradeoff for the experiment. Proving actual component usage would
+require cross-reference analysis and would add complexity before we know marker
+syntax is worth shipping.
+
+Required follow-up:
+
+- document the current discovery rule in the plan and PR summary
+- add a test confirming capitalized JSX helpers are processed intentionally
+- keep the existing lowercase helper negative test
+- revisit stricter discovery only if real usage shows the blast radius is too
+  broad
+
+Non-goal for now:
+
+- do not add broad "is this function used as JSX" analysis in this spike
+
+### 3. Harden `node_modules` Filename Skipping
+
+Status: agreed, low-risk fix.
+
+The skip helper currently handles absolute paths containing `/node_modules/`,
+but relative filenames such as `node_modules/pkg/App.jsx` should also be
+skipped.
+
+Required fixes:
+
+- normalize `\` to `/`
+- match both `/node_modules/` and `node_modules/` at the start of the filename
+
+Required tests:
+
+- absolute Windows/Unix-like path under `node_modules` remains skipped
+- relative `node_modules/pkg/App.jsx` remains skipped
+- marker stripping does not run for skipped dependency filenames
+
+### 4. Decide Multi-Declarator Behavior
+
+Status: acceptable gap for the experiment, but make it visible.
+
+The current candidate discovery requires exactly one variable declarator:
+
+```jsx
+const App = ({ title }) => <h1>{ $$title }</h1>, other = 1;
+```
+
+This is skipped silently today. For the experiment, keeping multi-declarator
+component declarations unsupported is fine, but it should not be a hidden
+surprise.
+
+Preferred follow-up:
+
+- add a known-gap test or targeted diagnostic when a skipped multi-declarator
+  declaration contains a valid-looking marker
+- document that marker-enabled components should use one component declaration
+  per `const` statement
+
+Implementation preference:
+
+- keep the first fix small: add a known-gap/pending test and plan note
+- only add diagnostics if the skip proves confusing during implementation or
+  review
+
+### 5. Add Output-Hygiene Coverage Across Marker Fixtures
+
+Status: agreed, useful confidence test.
+
+Current unit tests check selected transformed output for `$$` removal. We should
+also prove this across the marker e2e fixture family.
+
+Required tests:
+
+- transform every `fixtures/e2e/dollar-marker-*` fixture with
+  `experimentalDollarMarkers: true`
+- assert transformed code contains no `$$`
+- keep skipped dependency filename cases separate, because those intentionally
+  leave marker syntax untouched
+
+### 6. Keep Known Syntax Decisions Separate From Stability Fixes
+
+Status: agreed.
+
+`$$` is still the experiment marker. Single-dollar syntax may be viable later,
+especially if we only process user-authored component files and never traverse
+dependencies. Do not spend implementation effort on single-dollar syntax until
+the current marker pipeline is stable.
+
+Current syntax stance:
+
+- support `$$` only
+- leave `$foo` untouched
+- keep single-dollar as a future product decision, not part of this stability
+  follow-up
