@@ -326,6 +326,12 @@ class ListController {
 		const sourceVarName = path.node.name;
 
 		if ( ! this.vars.names.includes( sourceVarName ) ) {
+			const aliasReplacementName = this.getExperimentalAliasReplacementName( path );
+			if ( ! aliasReplacementName || ! this.shouldReplaceListAliasIdentifier( path ) ) {
+				return;
+			}
+
+			path.node.name = aliasReplacementName;
 			return;
 		}
 
@@ -334,6 +340,50 @@ class ListController {
 		}
 
 		path.node.name = this.vars.mapped[ sourceVarName ];
+	}
+
+	getExperimentalAliasReplacementName( path ) {
+		if ( this.config.experimentalDollarMarkers !== true ) {
+			return null;
+		}
+
+		const binding = path.scope.getBinding( path.node.name );
+		if ( ! binding || ! this.pathAliasesByBinding.has( binding.identifier ) ) {
+			return null;
+		}
+
+		const alias = this.pathAliasesByBinding.get( binding.identifier );
+		const metadata = this.resolveListMetaFromSegments( alias.segments, path );
+		if ( ! metadata || metadata.sourceSegments.length === 0 ) {
+			return null;
+		}
+
+		return this.vars.mapped[ metadata.sourceSegments[ 0 ] ] || null;
+	}
+
+	shouldReplaceListAliasIdentifier( path ) {
+		const { types } = this.babel;
+		const parentNode = path.parentPath?.node;
+		if ( ! parentNode ) {
+			return false;
+		}
+
+		if ( [ 'ObjectProperty', 'VariableDeclarator', 'ArrayPattern', 'ObjectPattern', 'AssignmentPattern' ].includes( parentNode.type ) ) {
+			return false;
+		}
+
+		if ( types.isMemberExpression( parentNode ) ) {
+			if ( parentNode.property === path.node && ! parentNode.computed ) {
+				return false;
+			}
+
+			return types.isIdentifier( parentNode.property ) && (
+				parentNode.property.name === 'map' ||
+				safeListChainMethods.has( parentNode.property.name )
+			);
+		}
+
+		return types.isCallExpression( parentNode ) && parentNode.arguments.includes( path.node );
 	}
 
 	shouldReplaceIdentifier( path ) {

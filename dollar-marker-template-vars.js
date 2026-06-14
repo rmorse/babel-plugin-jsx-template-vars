@@ -179,10 +179,20 @@ function isFunctionNode( node ) {
 }
 
 function getMarkerExpressionPath( expression, types, aliasesByBinding, path ) {
+	const markerPath = getMarkerExpressionInfo( expression, types, aliasesByBinding, path );
+	return markerPath?.path || null;
+}
+
+function getMarkerExpressionInfo( expression, types, aliasesByBinding, path ) {
 	if ( types.isIdentifier( expression ) ) {
 		if ( isDollarMarkerName( expression.name ) ) {
 			const sourceName = unmarkName( expression.name );
-			return sourceName || null;
+			return sourceName
+				? {
+					path: sourceName,
+					markerOrigin: true,
+				}
+				: null;
 		}
 
 		const binding = path?.scope?.getBinding( expression.name );
@@ -202,19 +212,41 @@ function getMarkerExpressionPath( expression, types, aliasesByBinding, path ) {
 			diagnostics.error( path, `Invalid dollar marker "${ expression.property.name }". Markers are only supported on root identifiers.` );
 		}
 
-		const objectPath = getMarkerExpressionPath( expression.object, types, aliasesByBinding, path );
-		return objectPath ? `${ objectPath }.${ expression.property.name }` : null;
+		const objectInfo = getMarkerExpressionInfo( expression.object, types, aliasesByBinding, path );
+		return objectInfo ? {
+			path: `${ objectInfo.path }.${ expression.property.name }`,
+			markerOrigin: objectInfo.markerOrigin,
+		} : null;
 	}
 
 	return null;
 }
 
 function getListSourcePath( expression, types, aliasesByBinding, path ) {
+	const sourceInfo = getListSourceInfo( expression, types, aliasesByBinding, path );
+	return sourceInfo?.path || null;
+}
+
+function getListSourceInfo( expression, types, aliasesByBinding, path ) {
 	if ( isSafeListChainCall( expression, types ) ) {
-		return getListSourcePath( expression.callee.object, types, aliasesByBinding, path );
+		return getListSourceInfo( expression.callee.object, types, aliasesByBinding, path );
 	}
 
-	return getMarkerExpressionPath( expression, types, aliasesByBinding, path );
+	return getMarkerExpressionInfo( expression, types, aliasesByBinding, path );
+}
+
+function normalizeAliasInfo( source ) {
+	if ( typeof source === 'string' ) {
+		return {
+			path: source,
+			markerOrigin: source.includes( '[]' ),
+		};
+	}
+
+	return {
+		path: source.path,
+		markerOrigin: source.markerOrigin === true,
+	};
 }
 
 function isSafeListChainCall( expression, types ) {
@@ -247,7 +279,7 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	function registerIdentifierAlias( localName, sourcePath, path ) {
 		const binding = path.scope.getBinding( localName );
 		if ( binding && sourcePath ) {
-			aliasesByBinding.set( binding.identifier, sourcePath );
+			aliasesByBinding.set( binding.identifier, normalizeAliasInfo( sourcePath ) );
 		}
 	}
 
@@ -355,7 +387,8 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 
 	function collectHelperListArguments( path ) {
 		path.node.arguments.forEach( ( argument ) => {
-			const sourcePath = getListSourcePath( argument, types, aliasesByBinding, path );
+			const sourceInfo = getListSourceInfo( argument, types, aliasesByBinding, path );
+			const sourcePath = sourceInfo?.path;
 			if ( ! sourcePath ) {
 				return;
 			}
@@ -365,7 +398,7 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 				return;
 			}
 
-			if ( isDirectMarkedRootArgument( argument, types ) ) {
+			if ( isDirectMarkedRootArgument( argument, types ) || isMarkerOriginRootPath( sourceInfo ) ) {
 				addListDeclaration( sourcePath );
 			}
 		} );
@@ -373,6 +406,10 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 
 	function isDirectMarkedRootArgument( argument, types ) {
 		return types.isIdentifier( argument ) && isDollarMarkerName( argument.name );
+	}
+
+	function isMarkerOriginRootPath( sourceInfo ) {
+		return sourceInfo.markerOrigin && ! sourceInfo.path.includes( '.' ) && ! sourceInfo.path.includes( '[]' );
 	}
 
 	function registerMapCallbackAliases( callPath, itemPath ) {
@@ -467,19 +504,19 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 				return;
 			}
 
-			const sourcePath = getMarkerExpressionPath( init, types, aliasesByBinding, path ) ||
-				getListSourcePath( init, types, aliasesByBinding, path );
-			if ( ! sourcePath ) {
+			const sourceInfo = getMarkerExpressionInfo( init, types, aliasesByBinding, path ) ||
+				getListSourceInfo( init, types, aliasesByBinding, path );
+			if ( ! sourceInfo ) {
 				return;
 			}
 
 			if ( types.isIdentifier( id ) ) {
-				registerIdentifierAlias( id.name, sourcePath, path );
+				registerIdentifierAlias( id.name, sourceInfo, path );
 				return;
 			}
 
 			if ( types.isObjectPattern( id ) ) {
-				registerPatternAliases( id, sourcePath, path );
+				registerPatternAliases( id, sourceInfo.path, path );
 			}
 		},
 		CallExpression( path ) {

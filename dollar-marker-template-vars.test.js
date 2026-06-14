@@ -181,6 +181,23 @@ describe('dollar marker template vars experiment', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{.}}</li>{{/products}}</ul>');
 	});
 
+	it('renders helper-only primitive list roots from marker-origin aliases', async () => {
+		const source = `
+			const renderRows = (rows) => rows.map((row) => <li>{ row }</li>);
+			const App = ({ products = [] }) => {
+				const rows = $$products;
+				return <ul>{ renderRows(rows) }</ul>;
+			};
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			experimentalDollarMarkers: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{.}}</li>{{/products}}</ul>');
+	});
+
 	it('infers list item fields from safe-chain callbacks', async () => {
 		const source = `
 			const App = ({ products = [] }) => {
