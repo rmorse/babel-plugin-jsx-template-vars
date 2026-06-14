@@ -44,6 +44,10 @@ function assertValidMarkerIdentifierPath( path, types ) {
 		diagnostics.error( path, `Invalid dollar marker "${ node.name }". Markers cannot be used in binding positions.` );
 	}
 
+	if ( referencesMarkerBinding( path ) ) {
+		diagnostics.error( path, `Invalid dollar marker "${ node.name }". Markers cannot reference marker-named bindings.` );
+	}
+
 	if ( types.isMemberExpression( parentPath?.node ) || parentPath?.node?.type === 'OptionalMemberExpression' ) {
 		if ( parentPath.node.property === node && ! parentPath.node.computed ) {
 			diagnostics.error( path, `Invalid dollar marker "${ node.name }". Markers are only supported on root identifiers.` );
@@ -56,18 +60,121 @@ function assertValidMarkerIdentifierPath( path, types ) {
 }
 
 function isBindingIdentifierPath( path ) {
+	if ( isImportSpecifierPath( path ) ) {
+		return true;
+	}
+
+	if ( path.node?.type === 'ObjectProperty' && path.parentPath?.node?.type === 'ObjectPattern' ) {
+		return true;
+	}
+
+	const parentPath = path.parentPath;
+	const parent = parentPath?.node;
+	if ( ! parent ) {
+		return false;
+	}
+
+	if ( isImportBindingPath( path ) ) {
+		return true;
+	}
+
+	if ( parent.type === 'VariableDeclarator' && parent.id === path.node ) {
+		return true;
+	}
+
+	if (
+		( parent.type === 'FunctionDeclaration' || parent.type === 'FunctionExpression' ) &&
+		parent.id === path.node
+	) {
+		return true;
+	}
+
+	return isInsideBindingPattern( path );
+}
+
+function referencesMarkerBinding( path ) {
+	const binding = path.scope?.getBinding?.( path.node.name );
+	if ( ! binding?.path || binding.path === path ) {
+		return false;
+	}
+
+	return isBindingIdentifierPath( binding.path );
+}
+
+function isImportBindingPath( path ) {
+	if ( isImportSpecifierPath( path ) ) {
+		return true;
+	}
+
 	const parent = path.parentPath?.node;
 	if ( ! parent ) {
 		return false;
 	}
 
 	return (
-		( parent.type === 'VariableDeclarator' && parent.id === path.node ) ||
-		( parent.type === 'FunctionDeclaration' && parent.id === path.node ) ||
-		( parent.type === 'FunctionExpression' && parent.id === path.node ) ||
-		( parent.type === 'ObjectProperty' && parent.value === path.node && parent.parent?.type === 'ObjectPattern' ) ||
-		( parent.type === 'RestElement' && parent.argument === path.node ) ||
-		( parent.type === 'ImportSpecifier' || parent.type === 'ImportDefaultSpecifier' || parent.type === 'ImportNamespaceSpecifier' )
+		( parent.type === 'ImportSpecifier' && parent.local === path.node ) ||
+		( parent.type === 'ImportDefaultSpecifier' && parent.local === path.node ) ||
+		( parent.type === 'ImportNamespaceSpecifier' && parent.local === path.node )
+	);
+}
+
+function isImportSpecifierPath( path ) {
+	return (
+		path.node?.type === 'ImportSpecifier' ||
+		path.node?.type === 'ImportDefaultSpecifier' ||
+		path.node?.type === 'ImportNamespaceSpecifier'
+	);
+}
+
+function isInsideBindingPattern( path ) {
+	let currentPath = path;
+
+	while ( currentPath.parentPath ) {
+		const parentPath = currentPath.parentPath;
+		const parent = parentPath.node;
+
+		if ( parent.type === 'ObjectPattern' || parent.type === 'ArrayPattern' ) {
+			return true;
+		}
+
+		if ( parent.type === 'VariableDeclarator' && parent.id === currentPath.node ) {
+			return true;
+		}
+
+		if ( isFunctionNode( parent ) && parent.params?.includes( currentPath.node ) ) {
+			return true;
+		}
+
+		if (
+			parent.type === 'ObjectProperty' &&
+			parentPath.parentPath?.node?.type === 'ObjectPattern' &&
+			( parent.key === currentPath.node || parent.value === currentPath.node )
+		) {
+			currentPath = currentPath.parentPath;
+			continue;
+		}
+
+		if (
+			( parent.type === 'AssignmentPattern' && parent.left === currentPath.node ) ||
+			( parent.type === 'RestElement' && parent.argument === currentPath.node )
+		) {
+			currentPath = currentPath.parentPath;
+			continue;
+		}
+
+		return false;
+	}
+
+	return false;
+}
+
+function isFunctionNode( node ) {
+	return node && (
+		node.type === 'FunctionDeclaration' ||
+		node.type === 'FunctionExpression' ||
+		node.type === 'ArrowFunctionExpression' ||
+		node.type === 'ObjectMethod' ||
+		node.type === 'ClassMethod'
 	);
 }
 
@@ -249,10 +356,23 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	function collectHelperListArguments( path ) {
 		path.node.arguments.forEach( ( argument ) => {
 			const sourcePath = getListSourcePath( argument, types, aliasesByBinding, path );
-			if ( sourcePath && sourcePath.includes( '[]' ) ) {
+			if ( ! sourcePath ) {
+				return;
+			}
+
+			if ( sourcePath.includes( '[]' ) ) {
 				addListDeclaration( sourcePath.endsWith( '[]' ) ? sourcePath.slice( 0, -2 ) : sourcePath );
+				return;
+			}
+
+			if ( isDirectMarkedRootArgument( argument, types ) ) {
+				addListDeclaration( sourcePath );
 			}
 		} );
+	}
+
+	function isDirectMarkedRootArgument( argument, types ) {
+		return types.isIdentifier( argument ) && isDollarMarkerName( argument.name );
 	}
 
 	function registerMapCallbackAliases( callPath, itemPath ) {
@@ -314,6 +434,7 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	componentPath.traverse( {
 		Function( path ) {
 			if ( ! isAllowedNestedFunction( path ) ) {
+				assertNoMarkersInSkippedFunction( path );
 				path.skip();
 				return;
 			}
@@ -331,6 +452,14 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 			if ( hasMarkerName( path.node.name ) ) {
 				diagnostics.error( path, `Invalid dollar marker "${ path.node.name }". Markers cannot be used as JSX component or attribute names.` );
 			}
+		},
+		ObjectProperty( path ) {
+			if ( path.parentPath?.node?.type !== 'ObjectPattern' ) {
+				return;
+			}
+
+			validatePatternPropertyMarker( path.get( 'key' ), types );
+			validatePatternPropertyMarker( path.get( 'value' ), types );
 		},
 		VariableDeclarator( path ) {
 			const { id, init } = path.node;
@@ -373,6 +502,9 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 	}
 
 	const normalizedDeclarations = removeListRootScalarDeclarations( Array.from( declarations ) );
+	if ( normalizedDeclarations.length === 0 ) {
+		diagnostics.error( errorPath, 'Dollar markers were found, but no supported template var declarations could be inferred. Markers are only supported in rendered values, controls, map/list expressions, and supported aliases.' );
+	}
 
 	return {
 		hasMarkers: true,
@@ -395,6 +527,27 @@ function collectDollarMarkerTemplateVars( componentPath, functionPath, babel, er
 			} );
 		},
 	};
+}
+
+function assertNoMarkersInSkippedFunction( path ) {
+	path.traverse( {
+		Identifier( markerPath ) {
+			if ( isDollarMarkerName( markerPath.node.name ) ) {
+				diagnostics.error( markerPath, `Unsupported dollar marker "${ markerPath.node.name }". Markers inside nested local functions are not supported by experimentalDollarMarkers; use markers in the component body or supported map callbacks.` );
+			}
+		},
+		JSXIdentifier( markerPath ) {
+			if ( isDollarMarkerName( markerPath.node.name ) ) {
+				diagnostics.error( markerPath, `Unsupported dollar marker "${ markerPath.node.name }". Markers inside nested local functions are not supported by experimentalDollarMarkers; use markers in the component body or supported map callbacks.` );
+			}
+		},
+	} );
+}
+
+function validatePatternPropertyMarker( path, types ) {
+	if ( path && path.isIdentifier?.() && isDollarMarkerName( path.node.name ) ) {
+		assertValidMarkerIdentifierPath( path, types );
+	}
 }
 
 function removeListRootScalarDeclarations( declarations ) {
@@ -482,7 +635,12 @@ function pathContainsJSX( path ) {
 }
 
 function filenameIncludesNodeModules( filename = '' ) {
-	return String( filename ).replace( /\\/g, '/' ).includes( '/node_modules/' );
+	const normalizedFilename = String( filename ).replace( /\\/g, '/' );
+	return (
+		normalizedFilename === 'node_modules' ||
+		normalizedFilename.startsWith( 'node_modules/' ) ||
+		normalizedFilename.includes( '/node_modules/' )
+	);
 }
 
 module.exports = {

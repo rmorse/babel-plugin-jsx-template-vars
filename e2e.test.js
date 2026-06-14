@@ -26,8 +26,11 @@ describe('e2e template output fixtures', () => {
 			? { experimentalDollarMarkers: true }
 			: {};
 
-		const { output } = await renderTemplateFixture(language, source, 'App', {}, pluginOptions);
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, pluginOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
+		if (fixtureName.startsWith('dollar-marker-')) {
+			expect(code).not.toMatch(/\$\$/);
+		}
 	});
 });

@@ -24,7 +24,7 @@ export function transformTemplateVars(source, pluginOptions = {}, options = {}) 
 		filename: options.filename || defaultFixtureFilename,
 		babelrc: false,
 		configFile: false,
-		sourceType: 'script',
+		sourceType: options.sourceType || 'script',
 		parserOpts: {
 			plugins: [ 'jsx' ],
 		},
