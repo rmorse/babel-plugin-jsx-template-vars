@@ -32,8 +32,8 @@ export function transformTemplateVars(source, pluginOptions = {}, options = {}) 
 	});
 }
 
-export async function renderTemplateFixture(language, source, exportName, props = {}) {
-	const result = transformTemplateVars(source, { language });
+export async function renderTemplateFixture(language, source, exportName, props = {}, pluginOptions = {}) {
+	const result = transformTemplateVars(source, { language, ...pluginOptions });
 	const runtime = await import('../language/index.js');
 	const module = { exports: {} };
 	const previousWindow = globalThis.window;

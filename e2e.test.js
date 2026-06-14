@@ -22,8 +22,11 @@ describe('e2e template output fixtures', () => {
 	)))('%s renders expected %s output', async (fixtureName, language) => {
 		const source = readFixture(fixtureName, 'input.jsx');
 		const expected = readFixture(fixtureName, `expected.${ language }.html`);
+		const pluginOptions = fixtureName.startsWith('dollar-marker-')
+			? { experimentalDollarMarkers: true }
+			: {};
 
-		const { output } = await renderTemplateFixture(language, source, 'App', {});
+		const { output } = await renderTemplateFixture(language, source, 'App', {}, pluginOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
 	});

@@ -2,9 +2,12 @@
 
 ## Status
 
-Experimental planning only. This workstream is not intended for the next
-release until we can prove it reaches the same output coverage, diagnostics, and
-stability as the flat `templateVars` contract.
+Experimental implementation spike in progress on draft PR #22. This workstream
+is not intended for release until we decide marker mode is stable enough to
+document as public API.
+
+The first implementation slice is behind `experimentalDollarMarkers` and keeps
+the stable flat `templateVars` API unchanged.
 
 Related issue: https://github.com/rmorse/babel-plugin-jsx-template-vars/issues/14
 
@@ -54,6 +57,37 @@ Single-dollar markers remain an open syntax decision. They may be reasonable in
 user-authored component trees if we avoid processing dependencies, but marker
 prefix bikeshedding is not the priority of this spike. Use `$$` for the
 experiment so collision behavior is easy to isolate.
+
+## Implementation Status
+
+Implemented in the first spike:
+
+- marker parsing and stripping for `$$name`, `$$hero.summary`, and
+  `$$hero?.summary`
+- invalid marker diagnostics for bare `$$`, non-root markers, computed marker
+  access, binding-position markers, and JSX marker names
+- opt-in discovery through `experimentalDollarMarkers`
+- `node_modules` filename skip
+- capitalized variable-declared function component discovery
+- expression-bodied arrow components normalized to block bodies before the
+  existing controllers run
+- marker collection -> strip -> synthesized flat declarations -> registry ->
+  existing controllers
+- flat `templateVars` plus marker declaration merging
+- scalar, nested object, optional member, JSX attribute, logical, unary, binary,
+  and ternary control support
+- direct `.map()`, safe-chain `.map()`, map assignment aliases, reassigned map
+  aliases, helper calls with one marked list source, and nested `.map()` paths
+- marker-origin plain aliases and object destructure aliases
+- marker e2e parity clones for all current fixture families:
+  `basic-replace-input`, `flat-template-vars`, `list-object-controls`,
+  `nested-template-vars`, `full-template-surface`, and `deferred-resolution`
+
+Remaining explicit gaps:
+
+- `{ $$tags }` does not infer primitive root list shape
+- shape-only declarations still require flat `templateVars`
+- alias/destructure chains without a marked source origin are not inferred
 
 ## Experiment Goal
 
