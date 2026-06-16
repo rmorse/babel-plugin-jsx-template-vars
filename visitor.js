@@ -49,6 +49,7 @@ const {
 	collectStoreSelectorImports,
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,
+	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
 	removeStoreSelectorImportSpecifiers,
 } = require( './store-selector-template-vars' );
@@ -205,6 +206,7 @@ function templateVarsVisitor( babel, config ) {
 				templateVarsController.init( templateVars, componentName, componentPath, babel, config );
 			} );
 
+			assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel );
 			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
 		}
 	};

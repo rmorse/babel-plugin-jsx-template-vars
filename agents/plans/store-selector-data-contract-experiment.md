@@ -411,12 +411,13 @@ Regression tests:
 - Add a compiled-view debugging note for authors: selectors plus supported usage
   should be explainable as equivalent flat `templateVars` declarations.
 
-## Follow-Up Work
+## Hardening Status And Follow-Up Work
 
-These items are intentionally kept as a concrete backlog for the draft PR. They
-should be picked up before treating selector mode as release-ready.
+These items were kept as the first concrete backlog for the draft PR. The next
+hardening pass has now been implemented in the current selector experiment
+branch.
 
-### Next Hardening Pass
+### Completed Hardening Pass
 
 - Split e2e execution so existing flat fixtures keep a default flag-off pass.
   Selector fixtures should opt into `experimentalStoreSelectors`; a separate
@@ -436,10 +437,10 @@ should be picked up before treating selector mode as release-ready.
   `hero.title` into a separate local binding.
 - Add explicit coverage for opaque helper metadata loss. Prop drilling now warns
   by default and throws in strict mode, but helper boundaries can still hide
-  fields from the collector; this should be documented with a focused test and a
-  clear diagnostic policy.
+  fields from the collector; this is now covered with warning and strict-mode
+  error tests.
 
-### Later Release Gates
+### Remaining Later Release Gates
 
 - Add a byte-for-byte parity fixture against `full-template-surface` once the
   selector implementation can express the same surface without excessive flat

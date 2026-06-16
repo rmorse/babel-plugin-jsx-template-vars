@@ -928,13 +928,14 @@ These patterns can be revisited one by one with tests.
 - Isolation gate: flag off means zero behavior change; `tidyOnly` remains
   unchanged until explicitly designed.
 
-## Follow-Up Backlog
+## Hardening Status And Follow-Up Backlog
 
-These items are not part of the first proof slice, but they should remain visible
-on the draft PR so follow-up sessions can pick them up without reconstructing
-the reviewer context.
+These items were not part of the first proof slice, but they were kept visible
+on the draft PR so follow-up sessions could pick them up without reconstructing
+the reviewer context. The next hardening pass has now been implemented in the
+current selector experiment branch.
 
-### Next Hardening Pass
+### Completed Hardening Pass
 
 - E2e flag isolation:
   run the existing flat fixture suite with default options as the regression
@@ -958,10 +959,10 @@ the reviewer context.
   `hero.title`.
 - Opaque helper metadata loss:
   document and test the current boundary for helper calls whose bodies are not
-  visible to the component collector. Decide whether the slice should warn,
-  strict-error, or require explicit flat shape hints for these cases.
+  visible to the component collector. The current policy warns by default and
+  throws in strict mode.
 
-### Later Release Gates
+### Remaining Later Release Gates
 
 - Parity fixture:
   add a selector fixture that byte-matches the relevant `full-template-surface`

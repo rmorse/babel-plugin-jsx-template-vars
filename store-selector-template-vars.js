@@ -10,6 +10,7 @@ function isStoreSelectorEnabled( config = {} ) {
 function collectStoreSelectorImports( programPath, babel ) {
 	const { types } = babel;
 	const localNames = new Set();
+	const localBindings = [];
 	const importSpecifiers = [];
 
 	programPath.get( 'body' ).forEach( ( childPath ) => {
@@ -26,6 +27,10 @@ function collectStoreSelectorImports( programPath, babel ) {
 				specifier.imported.name === STORE_SELECTOR_EXPORT
 			) {
 				localNames.add( specifier.local.name );
+				const binding = specifierPath.scope.getBinding( specifier.local.name );
+				if ( binding ) {
+					localBindings.push( binding );
+				}
 				importSpecifiers.push( specifierPath );
 			}
 		} );
@@ -33,6 +38,7 @@ function collectStoreSelectorImports( programPath, babel ) {
 
 	return {
 		localNames,
+		localBindings,
 		importSpecifiers,
 	};
 }
@@ -56,6 +62,31 @@ function removeStoreSelectorImportSpecifiers( importSpecifiers ) {
 function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, babel, config = {} ) {
 	const collector = new StoreSelectorCollector( componentPath, selectorLocalNames, babel, config );
 	return collector.collect();
+}
+
+function assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel ) {
+	const importBindings = new Set( selectorImports.localBindings || [] );
+	if ( importBindings.size === 0 ) {
+		return;
+	}
+
+	programPath.traverse( {
+		Identifier( path ) {
+			if ( ! selectorImports.localNames.has( path.node.name ) || ! path.isReferencedIdentifier() ) {
+				return;
+			}
+
+			const binding = path.scope.getBinding( path.node.name );
+			if ( ! binding || ! importBindings.has( binding ) ) {
+				return;
+			}
+
+			diagnostics.error(
+				path,
+				'Store selector reference could not be processed. Store selectors are currently supported only in top-level capitalized variable components declared as const App = () => ... .'
+			);
+		},
+	} );
 }
 
 class StoreSelectorCollector {
@@ -82,6 +113,7 @@ class StoreSelectorCollector {
 		this.collectMapShapes();
 		this.collectAliasUsage();
 		this.collectChildComponentPropUsage();
+		this.collectOpaqueHelperUsage();
 		this.neutralizeSelectorDeclarations();
 
 		return this.createResult();
@@ -131,10 +163,36 @@ class StoreSelectorCollector {
 
 				const selectorSegments = this.parseSelectorCall( init, path );
 				this.registerAlias( id.name, selectorSegments, path );
-				this.declarations.add( stringifySegments( selectorSegments ) );
 				this.selectorDeclarations.push( {
 					path,
 					segments: selectorSegments,
+				} );
+			},
+		} );
+	}
+
+	collectOpaqueHelperUsage() {
+		this.componentPath.traverse( {
+			CallExpression: ( path ) => {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				if ( this.isStoreSelectorCall( path.node ) ) {
+					return;
+				}
+
+				path.get( 'arguments' ).forEach( ( argumentPath ) => {
+					const segments = this.resolveExpressionSegments( argumentPath.node, argumentPath );
+					if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+						return;
+					}
+
+					diagnostics.unsupported(
+						argumentPath,
+						`Store selector value "${ stringifySegments( segments ) }" is passed to helper "${ this.getCalleeName( path.node.callee ) }", but helper-body field inference is not supported in this experiment slice.`,
+						this.config
+					);
 				} );
 			},
 		} );
@@ -424,6 +482,18 @@ class StoreSelectorCollector {
 		return null;
 	}
 
+	getCalleeName( callee ) {
+		if ( this.babel.types.isIdentifier( callee ) ) {
+			return callee.name;
+		}
+
+		if ( this.babel.types.isMemberExpression( callee ) && this.babel.types.isIdentifier( callee.property ) ) {
+			return callee.property.name;
+		}
+
+		return '<unknown>';
+	}
+
 	resolveExpressionSegments( expression, path ) {
 		const { types } = this.babel;
 		if ( types.isIdentifier( expression ) ) {
@@ -628,6 +698,7 @@ function isSelectorDerivedPath( segments ) {
 module.exports = {
 	STORE_SELECTOR_MODULE,
 	STORE_SELECTOR_EXPORT,
+	assertNoUnprocessedStoreSelectorReferences,
 	collectStoreSelectorImports,
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,

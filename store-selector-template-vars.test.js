@@ -107,6 +107,25 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
+	it('synthesizes object selector member declarations from usage only', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <h1>{ hero.title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(code).toContain('value: "hero.title"');
+		expect(code).not.toContain('value: "hero",');
+	});
+
 	it('supports primitive lists discovered from map item identifiers', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -180,6 +199,27 @@ describe('experimental store selectors', () => {
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe("<main>{{#if_equal article.status 'published'}}<aside>{{article.status}}</aside>{{/if_equal}}</main>");
+	});
+
+	it('infers nested member control roles through object selector bindings', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return (
+					<main>
+						{ hero.status === 'featured' && <aside>{ hero.title }</aside> }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<main>{{#if_equal hero.status 'featured'}}<aside>{{hero.title}}</aside>{{/if_equal}}</main>");
 	});
 
 	it('merges flat shape hints with selector-discovered list fields', async () => {
@@ -296,6 +336,51 @@ describe('experimental store selectors', () => {
 		})).toThrow(/prop tracing is not supported/);
 	});
 
+	it('warns when selector values cross opaque helper boundaries', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const renderHero = (hero) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return renderHero(hero);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1></h1>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('helper-body field inference is not supported'));
+	});
+
+	it('throws for selector values crossing opaque helper boundaries in strict mode', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const renderHero = (hero) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return renderHero(hero);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/helper-body field inference is not supported/);
+	});
+
 	it('rejects optional chaining in selector paths for slice 1', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -373,6 +458,34 @@ describe('experimental store selectors', () => {
 		`;
 
 		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/inside nested functions are not supported/);
+	});
+
+	it('rejects selector calls in unsupported function declaration components before import removal', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function App() {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			}
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/could not be processed/);
+	});
+
+	it('rejects selector calls in unsupported default exported components before import removal', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			export default function App() {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			}
+		`;
+
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/could not be processed/);
 	});
 
 	it('leaves selectors untouched when the experiment flag is off', () => {
