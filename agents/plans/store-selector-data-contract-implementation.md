@@ -403,6 +403,50 @@ item.label -> catalog.sections[].items[].label
 The collector should treat path metadata as structured segments internally. It
 can emit flat strings at the registry boundary.
 
+## Binding Map Handoff
+
+The selector collector must hand off two separate artifacts:
+
+- synthesized flat declarations, such as `hero.title` and `products[].title`
+- binding/source aliases that connect local JSX identifiers back to canonical
+  data paths
+
+Example:
+
+```jsx
+const title = useStoreSelector((state) => state.hero.title);
+const items = useStoreSelector((state) => state.products);
+
+return (
+	<section>
+		<h1>{ title }</h1>
+		{ items.map((item) => (
+			<article>{ item.title }</article>
+		)) }
+	</section>
+);
+```
+
+Required handoff:
+
+```txt
+title -> hero.title
+items -> products
+item -> products[]
+item.title -> products[].title
+```
+
+Existing role inference and controller inputs must be able to resolve local
+source keys through that binding map:
+
+- replacement usage of `title` should tag and render `hero.title`
+- `.map()` usage of `items` should be treated as list usage of `products`
+- item usage of `item.title` should synthesize `products[].title`
+
+This bridge belongs in the collector, registry, or generic path-resolution
+layer. Controllers should receive the same kind of derived registry views they
+receive for flat `templateVars`; they should not need to know selectors exist.
+
 ## List Shape Inference
 
 The selector does not declare a list root. List shape comes from usage.
@@ -627,6 +671,8 @@ Phase 4 - registry integration:
 
 - synthesize flat declarations
 - merge with explicit flat declarations
+- seed selector-derived binding/source aliases into the generic path-resolution
+  layer
 - call `createTemplateVarsRegistry`
 - reuse existing controllers
 - preserve flat API behavior

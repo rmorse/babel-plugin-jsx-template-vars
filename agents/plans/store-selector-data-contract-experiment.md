@@ -158,7 +158,7 @@ Required first-slice support:
 (state) => state.hero.title
 ```
 
-- reject or ignore dynamic selectors:
+- reject dynamic selectors:
 
 ```jsx
 (state) => state[group][field]
@@ -378,6 +378,9 @@ Regression tests:
 - Add selector-only component discovery as an explicit pipeline entry.
 - Do not change controllers for slice 1. Selector logic should synthesize flat
   paths before the registry boundary.
+- Seed selector-derived binding/source aliases into the generic path-resolution
+  layer so local names such as `title` and `items` resolve to canonical paths
+  such as `hero.title` and `products`.
 - Add a compiled-view debugging note for authors: selectors plus supported usage
   should be explainable as equivalent flat `templateVars` declarations.
 
