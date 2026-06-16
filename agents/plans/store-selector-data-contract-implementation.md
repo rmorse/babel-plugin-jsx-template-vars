@@ -928,6 +928,55 @@ These patterns can be revisited one by one with tests.
 - Isolation gate: flag off means zero behavior change; `tidyOnly` remains
   unchanged until explicitly designed.
 
+## Follow-Up Backlog
+
+These items are not part of the first proof slice, but they should remain visible
+on the draft PR so follow-up sessions can pick them up without reconstructing
+the reviewer context.
+
+### Next Hardening Pass
+
+- E2e flag isolation:
+  run the existing flat fixture suite with default options as the regression
+  baseline. Selector-specific fixtures should opt into
+  `experimentalStoreSelectors`. If useful, keep a second flag-on coexistence pass
+  for flat fixtures, but do not make it the only e2e coverage.
+- Unsupported component forms:
+  after supported components have been processed, scan for remaining recognized
+  selector calls. If any remain in unsupported forms such as `function App()`,
+  default exports, HOCs, or other undiscovered component shapes, fail with a
+  diagnostic that explains selector component discovery limits. The import should
+  only be removed when all recognized selector calls have been neutralized.
+- Alias-only selector assignments:
+  selector calls should register local-to-canonical path aliases, not template
+  declarations by themselves. Usage should synthesize declarations. This prevents
+  `const hero = useStoreSelector((state) => state.hero); return hero.title;`
+  from creating an unused root `hero` replacement declaration.
+- Nested-member controls:
+  add a test for object selectors used in controls through a member expression,
+  for example `hero.title === 'Featured'`, without a separate scalar selector for
+  `hero.title`.
+- Opaque helper metadata loss:
+  document and test the current boundary for helper calls whose bodies are not
+  visible to the component collector. Decide whether the slice should warn,
+  strict-error, or require explicit flat shape hints for these cases.
+
+### Later Release Gates
+
+- Parity fixture:
+  add a selector fixture that byte-matches the relevant `full-template-surface`
+  output once selector mode can express that surface clearly.
+- Debug output:
+  expose a compiled-view or verbose diagnostics mode that prints synthesized flat
+  declarations, selector aliases, list shapes, and unsupported skipped paths.
+- Runtime packaging:
+  keep the minimal `store.js` helper for the experiment. Revisit a package
+  `exports` map only once the runtime API is stable enough, because adding one
+  now could accidentally restrict current legacy subpath consumers.
+- Marker coexistence:
+  rerun coexistence tests after the marker experiment is merged or this branch is
+  explicitly rebased onto it.
+
 ## Success Criteria
 
 The experiment is worth continuing if:

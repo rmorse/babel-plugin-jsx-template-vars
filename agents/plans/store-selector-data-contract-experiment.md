@@ -411,6 +411,50 @@ Regression tests:
 - Add a compiled-view debugging note for authors: selectors plus supported usage
   should be explainable as equivalent flat `templateVars` declarations.
 
+## Follow-Up Work
+
+These items are intentionally kept as a concrete backlog for the draft PR. They
+should be picked up before treating selector mode as release-ready.
+
+### Next Hardening Pass
+
+- Split e2e execution so existing flat fixtures keep a default flag-off pass.
+  Selector fixtures should opt into `experimentalStoreSelectors`; a separate
+  flag-on coexistence pass can remain useful, but should not replace the default
+  regression baseline.
+- Fail closed when selector calls are present in unsupported component forms.
+  Examples include `function App() { ... }`, default-exported components, and
+  other shapes not returned by selector component discovery. The transform
+  should either process every recognized selector call or leave the import
+  intact; it should not remove the import while live selector calls remain.
+- Treat selector assignments as alias declarations only. A selector call such as
+  `const hero = useStoreSelector((state) => state.hero)` should establish
+  `hero -> hero`; supported usage should decide whether `hero`, `hero.title`, or
+  `hero[]` becomes a synthesized template declaration.
+- Add a nested-member-control test where an object selector is used directly in
+  a condition, such as `hero.title === 'Featured'`, without selecting
+  `hero.title` into a separate local binding.
+- Add explicit coverage for opaque helper metadata loss. Prop drilling now warns
+  by default and throws in strict mode, but helper boundaries can still hide
+  fields from the collector; this should be documented with a focused test and a
+  clear diagnostic policy.
+
+### Later Release Gates
+
+- Add a byte-for-byte parity fixture against `full-template-surface` once the
+  selector implementation can express the same surface without excessive flat
+  shape hints.
+- Add compiled-view or verbose debug output that shows the synthesized flat
+  declarations and alias map for a component. This is important because authors
+  will otherwise have to mentally compile selectors plus usage into equivalent
+  `templateVars`.
+- Revisit a package `exports` map only when the runtime API is no longer
+  experimental. The current package has no `exports` field, so
+  `babel-plugin-jsx-template-vars/store` resolves through legacy subpath
+  resolution; adding an exports map too early could restrict existing consumers.
+- Re-run marker coexistence once the `$$` marker branch is merged or this branch
+  is rebased onto it.
+
 ## Open Questions
 
 - Is the minimal runtime `useStoreSelector(selector, state)` helper enough for
