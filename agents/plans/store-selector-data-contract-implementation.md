@@ -41,9 +41,15 @@ The first proof should support:
 - local aliases assigned from selector results
 - local destructuring from selector results
 - visible `.map()` usage over selected lists
+- `.map()` body field discovery before registry creation, including JSX child
+  output, JSX prop values, and nested map callbacks
+- local selector binding handoff where local names differ from canonical data
+  paths, for example `title -> hero.title`
+- selector declaration stripping or neutralization in template builds after
+  successful collection
 - PHP nested array output through the existing path-aware language machinery
 - Handlebars dotted path output through the existing language machinery
-- coexistence with flat `templateVars` and the `$$` marker experiment
+- coexistence with flat `templateVars`
 
 The first proof should not support:
 
@@ -143,6 +149,12 @@ Potential follow-up:
 
 Do not add configurable hook names in the first proof unless import-based
 recognition blocks realistic testing.
+
+The package-scoped selector hook is template-specific for slice 1, so
+unsupported selector shapes should be hard errors. If a later phase supports
+arbitrary app-owned selector hooks by config, unsupported selector shapes should
+route through `diagnostics.unsupported` instead so non-template application
+state selectors can skip or warn without breaking builds.
 
 ## Selector Grammar
 
@@ -270,11 +282,17 @@ The pipeline should be:
 5. Traverse component bodies for recognized selector calls.
 6. Parse selector paths.
 7. Track local bindings created from selector calls.
-8. Infer additional paths from visible usage.
+8. Discover list fields from visible `.map()` bodies, including JSX attributes
+   and nested maps.
 9. Synthesize flat string declarations.
 10. Merge with any explicit flat `templateVars` declarations.
-11. Pass the combined declarations into `createTemplateVarsRegistry`.
-12. Reuse `templateVarsController.init`.
+11. Pass selector-derived binding/source aliases into controller orchestration
+   or the generic path-resolution layer.
+12. Pass the combined declarations into `createTemplateVarsRegistry`.
+13. Reuse `templateVarsController.init`.
+14. Strip or neutralize recognized selector declarations after successful
+   collection so rendered template fixtures do not require a runtime selector
+   hook.
 
 The output should still flow through the registry and controllers. The store
 selector collector should not generate PHP or Handlebars directly.
@@ -282,6 +300,14 @@ selector collector should not generate PHP or Handlebars directly.
 Selectors plus supported usage should have a debuggable compiled view: the
 collector should be able to report the equivalent flat `templateVars` strings it
 synthesized before registry creation.
+
+The e2e harness executes transformed components. Because `useStoreSelector` is
+runtime code, selector declarations must not be left dangling in template output
+unless the harness and template runtime intentionally provide a stub. The slice
+1 preference is to remove or neutralize recognized selector declarations once
+all selected bindings have been rewritten or proven safe. If any selected
+binding remains live after collection, the transform should fail rather than
+emitting code that requires `useStoreSelector` at template-render time.
 
 ## Component Discovery
 
@@ -447,6 +473,13 @@ This bridge belongs in the collector, registry, or generic path-resolution
 layer. Controllers should receive the same kind of derived registry views they
 receive for flat `templateVars`; they should not need to know selectors exist.
 
+In the current architecture, alias resolution is owned by `ListController` and
+is populated during controller traversal. That means slice 1 should expect some
+controller orchestration or path-resolver wiring to seed selector-derived
+aliases before replace/control/list updates run. The boundary is: controller
+output generation and role logic should stay generic, but alias injection is
+allowed and required.
+
 ## List Shape Inference
 
 The selector does not declare a list root. List shape comes from usage.
@@ -465,6 +498,35 @@ This infers:
 
 ```txt
 products[].title
+```
+
+This inference is new selector-collector work. Flat `templateVars` does not
+discover item fields from `.map()` bodies; it reads `products[].title` from the
+declaration and then uses `.map()` usage for wrapping/tag aliases. Selector mode
+must discover the bracketed paths before calling `createTemplateVarsRegistry`.
+
+Field discovery must inspect all visible item usage that contributes to rendered
+output, including JSX children and JSX prop values:
+
+```jsx
+products.map((product) => (
+	<ProductCard name={ product.name }>
+		{ product.title }
+	</ProductCard>
+));
+```
+
+This should synthesize:
+
+```txt
+products[].name
+products[].title
+```
+
+Nested maps must synthesize nested list paths:
+
+```txt
+catalog.sections[].items[].label
 ```
 
 Direct rendering is role-inferred as replacement unless another supported usage
@@ -529,20 +591,30 @@ needed, it should still emit flat strings at the registry boundary.
 The store selector experiment should be independent from the `$$` marker
 experiment.
 
-Rules:
+The marker experiment currently lives on a separate branch. Do not include
+marker coexistence as a slice-1 release gate unless that work is merged into the
+base branch or this branch is explicitly rebased onto it.
+
+Current slice-1 rules:
 
 - flag off means no behavior change
-- marker mode should not be required for selector mode
+- marker mode is not required for selector mode
 - selector mode should not strip or interpret `$$`
-- both flags may be enabled in a test fixture, but only to prove they do not
-  corrupt each other
+- marker coexistence fixtures are deferred until the marker experiment is
+  available on the branch being tested
 
 If both features infer the same flat path, the registry should de-duplicate it.
 If they infer conflicting paths, the registry should surface the conflict.
+Those are future coexistence checks, not slice-1 gates.
 
 ## Diagnostics
 
 Use clear transform errors for unsupported selector patterns.
+
+For the package-scoped template selector hook, unsupported static-analysis
+patterns should be hard errors. For future app-owned selector-hook recognition,
+unsupported patterns should use `diagnostics.unsupported` so legitimate
+non-template selectors can skip or warn.
 
 Recommended messages:
 
@@ -596,9 +668,13 @@ Add unit tests for binding collection:
 - object selector assignment
 - local alias from selected object
 - destructure from selected object
+- renamed selector binding, for example `title -> hero.title`
 - selected list binding
+- `.map()` body field discovery from JSX children
+- `.map()` body field discovery from JSX prop values
 - list `.map()` item alias
 - nested list `.map()` item alias
+- selector declaration stripping or neutralization
 - sourceKey parity with equivalent flat nested-list declarations
 - selector-only component discovery
 - unsupported opaque helper body does not invent fields
@@ -607,8 +683,10 @@ Add e2e fixtures:
 
 - `store-selector-basic`
 - `store-selector-nested-object`
+- `store-selector-renamed-binding`
 - `store-selector-list`
 - `store-selector-nested-list`
+- `store-selector-map-body-prop-fields`
 - `store-selector-multi-role`
 - `store-selector-map-alias`
 - `store-selector-shape-hint-only-field`
@@ -620,7 +698,6 @@ Add e2e fixtures:
 - `store-selector-with-flat-shape-hints`
 - `store-selector-unsupported-dynamic`
 - `store-selector-flag-off`
-- `store-selector-marker-coexistence`
 
 Each e2e fixture should assert both PHP and Handlebars output. Where practical,
 add parity fixtures that compare selector-derived output to equivalent flat
@@ -666,6 +743,7 @@ Phase 3 - local binding inference:
 - support object destructuring
 - support list map aliases
 - support nested list map aliases
+- support canonical-path aliases where local names differ from selector paths
 
 Phase 4 - registry integration:
 
@@ -676,14 +754,26 @@ Phase 4 - registry integration:
 - call `createTemplateVarsRegistry`
 - reuse existing controllers
 - preserve flat API behavior
-- do not add selector-specific controller behavior
+- allow controller orchestration or path-resolver wiring needed to seed selector
+  aliases before traversal
+- do not add selector-specific controller output or role behavior
+
+Phase 4b - template-runtime neutralization:
+
+- remove or neutralize recognized selector declarations after successful
+  collection
+- fail if a selector-derived binding remains live and would require the runtime
+  selector hook during e2e rendering
+- keep real app runtime behavior out of scope for the template build
 
 Phase 5 - e2e coverage:
 
 - add basic scalar fixture
 - add nested object fixture
+- add renamed-binding fixture
 - add list fixture
 - add nested list fixture
+- add map-body prop-field fixture
 - add multi-role fixture
 - add map-alias fixture
 - add shape-hint-only field fixture
@@ -801,17 +891,26 @@ These patterns can be revisited one by one with tests.
   need a selector-based shape API that still emits flat strings internally?
 - Should same-file prop drilling be included in the first implementation slice,
   or deferred until selector parity is proven?
-- What unsupported selector cases should throw hard errors versus remain runtime
-  values?
+- If app-owned selector hooks are supported later, which unsupported selector
+  cases should skip/warn versus throw?
 - How much helper-body analysis is worth doing before this becomes harder to
   reason about than flat declarations?
 
 ## Slice 1 Gates
 
-- Architecture gate: selector mode must not require controller changes.
+- Architecture gate: selector mode must not add selector-specific controller
+  output or role logic; controller orchestration or path-resolver alias wiring
+  is allowed and expected.
 - Parity gate: every positive fixture should have equivalent flat output or a
   documented intentional difference.
 - Discovery gate: selector-only components work without `Component.templateVars`.
+- Binding gate: `hero.title -> title` works in replace, control, and nested path
+  usage.
+- Shape gate: `.map()` body field discovery works for JSX child output, JSX prop
+  values, and nested maps before registry creation.
+- Execution gate: selector e2e fixtures execute without a runtime
+  `useStoreSelector` stub unless the implementation deliberately documents a
+  stub-based approach.
 - Debug gate: synthesized declarations can be explained as equivalent flat
   `templateVars`.
 - Isolation gate: flag off means zero behavior change; `tidyOnly` remains
@@ -826,9 +925,14 @@ The experiment is worth continuing if:
 - unsupported selectors fail clearly
 - selector-only components process without a flat declaration assignment
 - flat shape hints merge before registry creation
-- controllers stay unaware of selectors
+- selector-derived local aliases resolve to canonical paths during role
+  inference and controller traversal
+- `.map()` field discovery synthesizes bracketed paths before registry creation
+- template output does not require a live `useStoreSelector` runtime call
+- controllers stay unaware of selector-specific output semantics
 - current flat API behavior does not regress
-- marker mode behavior does not regress
+- marker coexistence is explicitly sequenced for a later branch or after the
+  marker experiment is merged
 - reviewers can understand the data contract without reading controller code
 - the follow-up path for prop drilling is concrete enough to implement in small
   tested phases

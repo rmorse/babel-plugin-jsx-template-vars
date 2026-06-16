@@ -169,10 +169,14 @@ Required first-slice support:
 - infer selected data paths from recognized selector calls
 - infer replace/control/list roles from supported usage sites
 - infer list roots from `.map()` and other supported list-shaped usage
-- infer item fields from visible `.map()` callbacks over selected lists
+- infer item fields from visible `.map()` callbacks over selected lists,
+  including JSX child output, JSX prop values, and nested map bodies
 - support local aliases and destructures after selector assignment
 - support selector-only components with no `Component.templateVars` assignment
-- reuse the existing normalized registry and controllers
+- strip or neutralize recognized selector declarations in template output after
+  successful collection so e2e rendering does not require a runtime selector
+  hook
+- reuse the existing normalized registry and controller output/role logic
 - preserve current PHP and Handlebars output behavior
 - keep this behind an experimental flag, for example
   `experimentalStoreSelectors`
@@ -338,12 +342,16 @@ Unit tests:
 - list selected values render list wrappers
 - local alias and destructure propagation
 - selector-only component discovery with no `templateVars` assignment
+- selector binding handoff for local renames such as `title -> hero.title`
+- `.map()` body field discovery, including JSX attributes and nested maps
+- selector declaration stripping or neutralization before e2e execution
 - unsupported selectors do not produce partial transforms
 
 E2e tests:
 
 - basic scalar store selector fixture
 - nested object selector fixture
+- renamed scalar selector fixture for `hero.title -> title`
 - selected-list usage fixture
 - multi-role selector fixture
 - map-alias selector fixture
@@ -359,8 +367,9 @@ E2e tests:
 Regression tests:
 
 - flat `templateVars` remains unchanged with the experiment flag off
-- `$$` marker mode remains independent
 - store selectors do not run in `tidyOnly` unless explicitly designed later
+- `$$` marker coexistence is deferred until the marker experiment is merged or
+  the store selector branch is explicitly rebased onto it
 
 ## Review Decisions Before Implementation
 
@@ -376,11 +385,21 @@ Regression tests:
 - Keep flat `templateVars` strings as the shape-hint escape hatch during the
   experiment.
 - Add selector-only component discovery as an explicit pipeline entry.
-- Do not change controllers for slice 1. Selector logic should synthesize flat
-  paths before the registry boundary.
+- Do not add selector-specific output or role logic to controllers in slice 1.
+  Alias-injection wiring in controller orchestration or the generic path
+  resolver is expected.
 - Seed selector-derived binding/source aliases into the generic path-resolution
   layer so local names such as `title` and `items` resolve to canonical paths
   such as `hero.title` and `products`.
+- Discover list fields from `.map()` bodies before registry creation; flat mode
+  does not currently infer these fields from usage.
+- Strip or neutralize recognized selector declarations in template builds after
+  successful collection.
+- Treat unsupported dynamic selectors as hard errors for the package-scoped
+  template selector hook. If future config supports arbitrary app-owned hooks,
+  unsupported dynamic selectors should skip or warn via diagnostics instead.
+- Drop marker coexistence from slice-1 gates until the marker experiment is
+  merged or this branch is rebased onto it.
 - Add a compiled-view debugging note for authors: selectors plus supported usage
   should be explainable as equivalent flat `templateVars` declarations.
 
