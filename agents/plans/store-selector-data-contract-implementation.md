@@ -1003,6 +1003,29 @@ closed.
   usage-only selector synthesis versus unused flat declarations, and multiple
   selector calls rebinding the same local.
 
+### Review 2 Safe-Chain Follow-Up
+
+Review 2 identified selector-derived safe list chains as a blocker before the
+`full-template-surface` parity gate. The implementation now supports the same
+safe-chain method set used by the list controller: `filter`, `slice`, `sort`,
+`toSorted`, `reverse`, and `toReversed`.
+
+Coverage added:
+
+- direct chains such as `products.filter(...).slice(...).map(...)`
+- aliases such as `const visibleProducts = products.filter(...)` followed by
+  `visibleProducts.map(...)`
+- nested chains such as `section.items.filter(...).map(...)`
+- aliases of nested chain results inside map callbacks
+- fail-closed diagnostics for unsupported selector-derived chains before `.map()`
+  and aliases of unsupported chain results
+
+Filter predicate fields are synthesized into the list shape so generated
+template data stays non-empty during the runtime filter pass. The filter
+semantics themselves are still not translated into template conditionals; this
+matches the current flat fixture behavior, where filter predicates only work when
+their fields are present in the declared list shape.
+
 ## Success Criteria
 
 The experiment is worth continuing if:

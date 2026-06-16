@@ -481,6 +481,27 @@ are handled.
   between unused flat declarations and usage-only selector synthesis, and
   multiple selector calls rebinding the same local.
 
+### Review 2 Safe-Chain Follow-Up
+
+Review 2 found that selector mode broke safe list chains such as
+`products.filter(...).map(...)` by treating method access as a template field.
+That blocker is now resolved:
+
+- selector collection resolves supported safe chains back to the selected list
+  source before `.map()`
+- supported methods match the list controller safe-chain set: `filter`, `slice`,
+  `sort`, `toSorted`, `reverse`, and `toReversed`
+- filter callback fields are included in synthesized list shapes, so predicates
+  such as `product.available` do not empty the generated template list data
+- aliases of safe chain results are supported, including aliases inside map
+  callbacks for nested lists
+- unsupported selector-derived chains fail clearly instead of generating broken
+  runtime code
+
+The recommendation to use `strict: true` for CI/review gates still stands,
+because warning-only unsupported boundaries can intentionally render incomplete
+output while the experiment is draft-only.
+
 ## Open Questions
 
 - Is the minimal runtime `useStoreSelector(selector, state)` helper enough for

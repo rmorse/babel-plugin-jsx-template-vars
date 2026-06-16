@@ -2,6 +2,14 @@ const diagnostics = require( './diagnostics' );
 
 const STORE_SELECTOR_MODULE = 'babel-plugin-jsx-template-vars/store';
 const STORE_SELECTOR_EXPORT = 'useStoreSelector';
+const SAFE_LIST_CHAIN_METHODS = new Set( [
+	'filter',
+	'slice',
+	'sort',
+	'toSorted',
+	'reverse',
+	'toReversed',
+] );
 
 function isStoreSelectorEnabled( config = {} ) {
 	return config.experimentalStoreSelectors === true;
@@ -111,6 +119,8 @@ class StoreSelectorCollector {
 		this.collectSelectorAssignments();
 		this.collectLocalAliases();
 		this.collectMapShapes();
+		this.collectLocalAliases();
+		this.collectMapShapes();
 		this.collectAliasUsage();
 		this.collectChildComponentPropUsage();
 		this.collectOpaqueHelperUsage();
@@ -201,7 +211,7 @@ class StoreSelectorCollector {
 	collectLocalAliases() {
 		this.componentPath.traverse( {
 			VariableDeclarator: ( path ) => {
-				if ( this.isInsideNestedFunction( path ) ) {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideSupportedMapCallback( path ) ) {
 					return;
 				}
 
@@ -212,11 +222,17 @@ class StoreSelectorCollector {
 
 				const sourceSegments = this.resolveExpressionSegments( init, path );
 				if ( ! sourceSegments ) {
+					if ( this.isUnsupportedSelectorChainCall( init, path ) ) {
+						this.throwUnsupportedListChain( path );
+					}
 					return;
 				}
 
 				if ( this.babel.types.isIdentifier( id ) ) {
 					this.registerAlias( id.name, sourceSegments, path );
+					if ( this.isSafeListChainCall( init ) ) {
+						this.registerSafeListChainCallbackAliases( path.get( 'init' ), markLastSegmentAsList( sourceSegments ) );
+					}
 					return;
 				}
 
@@ -225,7 +241,7 @@ class StoreSelectorCollector {
 				}
 			},
 			AssignmentExpression: ( path ) => {
-				if ( this.isInsideNestedFunction( path ) ) {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideSupportedMapCallback( path ) ) {
 					return;
 				}
 
@@ -237,6 +253,11 @@ class StoreSelectorCollector {
 				const sourceSegments = this.resolveExpressionSegments( right, path );
 				if ( sourceSegments ) {
 					this.registerAlias( left.name, sourceSegments, path );
+					return;
+				}
+
+				if ( this.isUnsupportedSelectorChainCall( right, path ) ) {
+					this.throwUnsupportedListChain( path );
 				}
 			},
 		} );
@@ -277,7 +298,12 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				if ( this.isPartialMemberExpression( path ) || this.isMapCalleeObject( path ) || this.isMapCalleeMember( path ) ) {
+				if (
+					this.isPartialMemberExpression( path ) ||
+					this.isMapCalleeObject( path ) ||
+					this.isMapCalleeMember( path ) ||
+					this.isSelectorMethodCallee( path )
+				) {
 					return;
 				}
 
@@ -332,12 +358,16 @@ class StoreSelectorCollector {
 
 		const sourceSegments = this.resolveExpressionSegments( node.callee.object, path );
 		if ( ! sourceSegments || ! isSelectorDerivedPath( sourceSegments ) ) {
+			if ( this.isUnsupportedSelectorChainCall( node.callee.object, path ) ) {
+				this.throwUnsupportedListChain( path );
+			}
 			return;
 		}
 
 		this.mapCallPaths.add( path );
 		const listSegments = markLastSegmentAsList( sourceSegments );
 		this.declarations.add( stringifySegments( listSegments ) );
+		this.registerSafeListChainCallbackAliases( path.get( 'callee.object' ), listSegments );
 
 		const callback = node.arguments[ 0 ];
 		const firstParam = callback?.params?.[ 0 ];
@@ -438,6 +468,11 @@ class StoreSelectorCollector {
 		}
 
 		const normalizedSegments = normalizeCanonicalSegments( segments );
+		const existing = this.aliasesByBinding.get( binding.identifier );
+		if ( existing && stringifySegments( existing.segments ) === stringifySegments( normalizedSegments ) ) {
+			return;
+		}
+
 		const entry = {
 			bindingIdentifier: binding.identifier,
 			localName,
@@ -472,6 +507,34 @@ class StoreSelectorCollector {
 		} );
 	}
 
+	registerSafeListChainCallbackAliases( expressionPath, listSegments ) {
+		if ( ! expressionPath?.node || ! this.isSafeListChainCall( expressionPath.node ) ) {
+			return;
+		}
+
+		this.registerSafeListChainCallbackAliases( expressionPath.get( 'callee.object' ), listSegments );
+
+		if ( expressionPath.node.callee.property.name !== 'filter' ) {
+			return;
+		}
+
+		const callback = expressionPath.node.arguments[ 0 ];
+		const firstParam = callback?.params?.[ 0 ];
+		if ( ! firstParam ) {
+			return;
+		}
+
+		const firstParamPath = expressionPath.get( 'arguments.0.params.0' );
+		if ( this.babel.types.isIdentifier( firstParam ) ) {
+			this.registerAlias( firstParam.name, listSegments, firstParamPath );
+			return;
+		}
+
+		if ( this.babel.types.isObjectPattern( firstParam ) ) {
+			this.registerPatternAliases( firstParam, listSegments, firstParamPath );
+		}
+	}
+
 	getPatternPropertyName( property ) {
 		if ( this.babel.types.isIdentifier( property.key ) ) {
 			return property.key.name;
@@ -503,6 +566,10 @@ class StoreSelectorCollector {
 		if ( types.isMemberExpression( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
 			const objectSegments = this.resolveExpressionSegments( expression.object, path );
 			return objectSegments ? [ ...objectSegments, expression.property.name ] : null;
+		}
+
+		if ( this.isSafeListChainCall( expression ) ) {
+			return this.resolveExpressionSegments( expression.callee.object, path );
 		}
 
 		return null;
@@ -605,9 +672,78 @@ class StoreSelectorCollector {
 		);
 	}
 
+	isSelectorMethodCallee( path ) {
+		const { types } = this.babel;
+		const parent = path.parentPath?.node;
+		if ( ! types.isCallExpression( parent ) || parent.callee !== path.node ) {
+			return false;
+		}
+
+		if ( ! types.isMemberExpression( path.node ) || path.node.computed ) {
+			return false;
+		}
+
+		const objectSegments = this.resolveExpressionSegments( path.node.object, path );
+		return Boolean( objectSegments && isSelectorDerivedPath( objectSegments ) );
+	}
+
+	isSafeListChainCall( expression ) {
+		const { types } = this.babel;
+		return (
+			types.isCallExpression( expression ) &&
+			types.isMemberExpression( expression.callee ) &&
+			! expression.callee.computed &&
+			types.isIdentifier( expression.callee.property ) &&
+			SAFE_LIST_CHAIN_METHODS.has( expression.callee.property.name )
+		);
+	}
+
+	isUnsupportedSelectorChainCall( expression, path ) {
+		const { types } = this.babel;
+		if (
+			! types.isCallExpression( expression ) ||
+			! types.isMemberExpression( expression.callee ) ||
+			expression.callee.computed ||
+			! types.isIdentifier( expression.callee.property )
+		) {
+			return false;
+		}
+
+		if ( expression.callee.property.name === 'map' || SAFE_LIST_CHAIN_METHODS.has( expression.callee.property.name ) ) {
+			return false;
+		}
+
+		const objectSegments = this.resolveExpressionSegments( expression.callee.object, path );
+		return Boolean( objectSegments && isSelectorDerivedPath( objectSegments ) );
+	}
+
+	throwUnsupportedListChain( path ) {
+		diagnostics.error(
+			path,
+			`Store selector list chains only support ${ Array.from( SAFE_LIST_CHAIN_METHODS ).join( ', ' ) } before .map().`
+		);
+	}
+
 	isInsideNestedFunction( path ) {
 		const functionParent = path.getFunctionParent();
 		return Boolean( functionParent && functionParent !== this.componentFunctionPath );
+	}
+
+	isInsideSupportedMapCallback( path ) {
+		const functionParent = path.getFunctionParent();
+		if ( ! functionParent || functionParent === this.componentFunctionPath ) {
+			return false;
+		}
+
+		const parent = functionParent.parentPath?.node;
+		const { types } = this.babel;
+		return (
+			types.isCallExpression( parent ) &&
+			parent.arguments[ 0 ] === functionParent.node &&
+			types.isMemberExpression( parent.callee ) &&
+			types.isIdentifier( parent.callee.property ) &&
+			parent.callee.property.name === 'map'
+		);
 	}
 
 	isInsideMapCallback( path ) {

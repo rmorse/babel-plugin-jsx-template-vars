@@ -55,6 +55,53 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li data-name="{{name}}">{{title}}</li>{{/products}}</ul>');
 	});
 
+	it('supports safe chained list calls before map', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<ul>
+						{ products.filter((product) => product.available).slice(0, 3).map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</ul>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{title}}</li>{{/products}}</ul>');
+	});
+
+	it('supports aliases of safe chained list calls before map', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				const visibleProducts = products.filter((product) => product.available);
+				return (
+					<ul>
+						{ visibleProducts.map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</ul>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{title}}</li>{{/products}}</ul>');
+	});
+
 	it('discovers nested list paths from nested map bodies', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -73,6 +120,69 @@ describe('experimental store selectors', () => {
 								</ul>
 							</section>
 						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main>{{#catalog.sections}}<section><h2>{{heading}}</h2><ul>{{#items}}<li>{{label}}</li>{{/items}}</ul></section>{{/catalog.sections}}</main>');
+	});
+
+	it('supports nested safe chained list calls before map', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const sections = useStoreSelector((state) => state.catalog.sections);
+				return (
+					<main>
+						{ sections.filter((section) => section.visible).map((section) => (
+							<section>
+								<h2>{ section.heading }</h2>
+								<ul>
+									{ section.items.filter((item) => item.visible).map((item) => (
+										<li>{ item.label }</li>
+									)) }
+								</ul>
+							</section>
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main>{{#catalog.sections}}<section><h2>{{heading}}</h2><ul>{{#items}}<li>{{label}}</li>{{/items}}</ul></section>{{/catalog.sections}}</main>');
+	});
+
+	it('supports aliases of nested safe chained list calls inside map callbacks', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const sections = useStoreSelector((state) => state.catalog.sections);
+				return (
+					<main>
+						{ sections.map((section) => {
+							const visibleItems = section.items.filter((item) => item.visible);
+							return (
+								<section>
+									<h2>{ section.heading }</h2>
+									<ul>
+										{ visibleItems.map((item) => (
+											<li>{ item.label }</li>
+										)) }
+									</ul>
+								</section>
+							);
+						}) }
 					</main>
 				);
 			};
@@ -458,6 +568,49 @@ describe('experimental store selectors', () => {
 		`;
 
 		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/inside nested functions are not supported/);
+	});
+
+	it('rejects unsupported selector-derived list chains before map', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<ul>
+						{ products.reduce((rows, product) => rows.concat(product), []).map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</ul>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/list chains only support/);
+	});
+
+	it('rejects aliases of unsupported selector-derived list chains before map', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				const rows = products.reduce((items, product) => items.concat(product), []);
+				return (
+					<ul>
+						{ rows.map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</ul>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/list chains only support/);
 	});
 
 	it('rejects selector calls in unsupported function declaration components before import removal', () => {
