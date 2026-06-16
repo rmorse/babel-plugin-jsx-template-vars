@@ -53,17 +53,18 @@ function removeStoreSelectorImportSpecifiers( importSpecifiers ) {
 	} );
 }
 
-function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, babel ) {
-	const collector = new StoreSelectorCollector( componentPath, selectorLocalNames, babel );
+function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, babel, config = {} ) {
+	const collector = new StoreSelectorCollector( componentPath, selectorLocalNames, babel, config );
 	return collector.collect();
 }
 
 class StoreSelectorCollector {
-	constructor( componentPath, selectorLocalNames, babel ) {
+	constructor( componentPath, selectorLocalNames, babel, config = {} ) {
 		this.componentPath = componentPath;
 		this.componentFunctionPath = componentPath.get( 'declarations.0.init' );
 		this.selectorLocalNames = selectorLocalNames;
 		this.babel = babel;
+		this.config = config;
 		this.declarations = new Set();
 		this.selectorDeclarations = [];
 		this.aliasEntries = [];
@@ -80,6 +81,7 @@ class StoreSelectorCollector {
 		this.collectLocalAliases();
 		this.collectMapShapes();
 		this.collectAliasUsage();
+		this.collectChildComponentPropUsage();
 		this.neutralizeSelectorDeclarations();
 
 		return this.createResult();
@@ -98,6 +100,9 @@ class StoreSelectorCollector {
 		this.componentPath.traverse( {
 			CallExpression: ( path ) => {
 				if ( this.isInsideNestedFunction( path ) ) {
+					if ( this.isStoreSelectorCall( path.node ) ) {
+						diagnostics.error( path, 'Store selector calls inside nested functions are not supported before component tracing lands.' );
+					}
 					return;
 				}
 
@@ -228,6 +233,34 @@ class StoreSelectorCollector {
 		} );
 	}
 
+	collectChildComponentPropUsage() {
+		this.componentPath.traverse( {
+			JSXAttribute: ( path ) => {
+				const openingElement = path.parentPath?.node;
+				const elementName = openingElement?.name?.name;
+				if ( typeof elementName !== 'string' || ! /^[A-Z]/.test( elementName ) ) {
+					return;
+				}
+
+				const value = path.node.value;
+				if ( ! this.babel.types.isJSXExpressionContainer( value ) ) {
+					return;
+				}
+
+				const segments = this.resolveExpressionSegments( value.expression, path );
+				if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+					return;
+				}
+
+				diagnostics.unsupported(
+					path,
+					`Store selector value "${ stringifySegments( segments ) }" is passed to child component "${ elementName }", but prop tracing is not supported in this experiment slice.`,
+					this.config
+				);
+			},
+		} );
+	}
+
 	collectMapCallShape( path ) {
 		const { types } = this.babel;
 		const { node } = path;
@@ -346,7 +379,7 @@ class StoreSelectorCollector {
 			return;
 		}
 
-		const normalizedSegments = normalizeSegments( segments );
+		const normalizedSegments = normalizeCanonicalSegments( segments );
 		const entry = {
 			bindingIdentifier: binding.identifier,
 			localName,
@@ -564,7 +597,7 @@ function getListSourceKeys( declaration ) {
 }
 
 function markLastSegmentAsList( segments ) {
-	const next = normalizeSegments( segments );
+	const next = normalizeCanonicalSegments( segments );
 	if ( next.length === 0 ) {
 		return next;
 	}
@@ -578,6 +611,10 @@ function markLastSegmentAsList( segments ) {
 
 function normalizeSegments( segments ) {
 	return segments.map( segment => String( segment ) );
+}
+
+function normalizeCanonicalSegments( segments ) {
+	return normalizeSegments( segments ).flatMap( segment => String( segment ).split( '.' ).filter( Boolean ) );
 }
 
 function stringifySegments( segments ) {

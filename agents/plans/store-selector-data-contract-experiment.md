@@ -345,6 +345,7 @@ Unit tests:
 - selector binding handoff for local renames such as `title -> hero.title`
 - `.map()` body field discovery, including JSX attributes and nested maps
 - selector declaration stripping or neutralization before e2e execution
+- child component prop drilling warning by default and error in strict mode
 - unsupported selectors do not produce partial transforms
 
 E2e tests:
@@ -360,6 +361,9 @@ E2e tests:
 - selector-only component fixture
 - selector plus flat-hint conflict fixture
 - child-untraced negative fixture
+- PHP nested-list selector fixture
+- multi-component selector fixture
+- tidyOnly selector fixture
 - complex fixture equivalent to `full-template-surface`
 - same-file prop drilling fixture once tracing starts
 - PHP and Handlebars expected output for every fixture
@@ -395,6 +399,10 @@ Regression tests:
   does not currently infer these fields from usage.
 - Strip or neutralize recognized selector declarations in template builds after
   successful collection.
+- Ship a minimal package runtime export for `babel-plugin-jsx-template-vars/store`
+  so the import path exists outside template builds.
+- Warn when selector-derived values are passed to child components before prop
+  tracing exists; strict mode should throw.
 - Treat unsupported dynamic selectors as hard errors for the package-scoped
   template selector hook. If future config supports arbitrary app-owned hooks,
   unsupported dynamic selectors should skip or warn via diagnostics instead.
@@ -405,8 +413,8 @@ Regression tests:
 
 ## Open Questions
 
-- Should the selector API be real runtime code shipped by this package, or only
-  recognized by the Babel plugin and provided by the consuming app?
+- Is the minimal runtime `useStoreSelector(selector, state)` helper enough for
+  experiment consumers, or should a later release provide a richer store API?
 - Should child components select their own data from the store instead of
   relying on parent-to-child tracing?
 - How much tracing is enough before this becomes more complicated than flat

@@ -61,7 +61,7 @@ The first proof should not support:
 - dynamic selector keys
 - optional chaining in selectors
 - calls inside selectors
-- runtime store implementation details
+- full runtime store implementation details beyond the minimal selector helper
 - generating PHP data assembly code
 
 Prop drilling and hierarchy tracing are important to the long-term value of the
@@ -101,10 +101,11 @@ App.templateVars = [
 ];
 ```
 
-The consuming application may provide the runtime hook implementation during the
-experiment. The Babel plugin only needs to recognize the calls at compile time.
-If the API later ships from this package, the runtime helpers can be added in a
-separate release after the transform contract is stable.
+The package should ship a minimal runtime import target at
+`babel-plugin-jsx-template-vars/store` so experiment consumers can import
+`useStoreSelector`. The template build still recognizes and neutralizes those
+calls, but non-template/runtime code should not fail because the import path is
+missing. A richer store implementation remains out of scope for slice 1.
 
 ## API Recognition Rules
 
@@ -675,6 +676,9 @@ Add unit tests for binding collection:
 - list `.map()` item alias
 - nested list `.map()` item alias
 - selector declaration stripping or neutralization
+- child component prop drilling warning and strict-mode error
+- multiple top-level selector components
+- tidyOnly leaves selectors untouched
 - sourceKey parity with equivalent flat nested-list declarations
 - selector-only component discovery
 - unsupported opaque helper body does not invent fields
@@ -686,12 +690,14 @@ Add e2e fixtures:
 - `store-selector-renamed-binding`
 - `store-selector-list`
 - `store-selector-nested-list`
+- `store-selector-nested-lists`
 - `store-selector-map-body-prop-fields`
 - `store-selector-multi-role`
 - `store-selector-map-alias`
 - `store-selector-shape-hint-only-field`
 - `store-selector-nested-member-control`
 - `store-selector-child-untraced`
+- `store-selector-multi-component`
 - `store-selector-selectors-only`
 - `store-selector-conflict`
 - `store-selector-complex-surface`
@@ -765,6 +771,8 @@ Phase 4b - template-runtime neutralization:
 - fail if a selector-derived binding remains live and would require the runtime
   selector hook during e2e rendering
 - keep real app runtime behavior out of scope for the template build
+- ship a minimal runtime helper so the package-scoped store import resolves in
+  non-template builds
 
 Phase 5 - e2e coverage:
 
@@ -911,6 +919,10 @@ These patterns can be revisited one by one with tests.
 - Execution gate: selector e2e fixtures execute without a runtime
   `useStoreSelector` stub unless the implementation deliberately documents a
   stub-based approach.
+- Runtime gate: the package ships a minimal `store` entry point so the import
+  path exists outside template builds.
+- Prop drilling gate: selector-derived child props warn by default and throw in
+  strict mode until tracing lands.
 - Debug gate: synthesized declarations can be explained as equivalent flat
   `templateVars`.
 - Isolation gate: flag off means zero behavior change; `tidyOnly` remains
