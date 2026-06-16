@@ -108,6 +108,13 @@ even when the child component has no selector calls of its own. The collector
 must produce declarations from child usage, not from the object root crossing the
 prop boundary.
 
+Phase B implementation note: the current scalar path can use
+`createStoreSelectorPropAliases()` as a shortcut because the parent trace already
+contains the final scalar declaration. Object and list props cannot use that
+shortcut safely. They need either a bounded child re-collection pass seeded with
+incoming aliases, or an equivalent collector entry point that analyzes the child
+body after incoming metadata is known.
+
 ## Phase B - Same-File Object Prop Tracing
 
 ### Goal
@@ -143,11 +150,14 @@ hero.title
 - Split child prop trace policy by source shape instead of using one broad
   boolean:
   `object-root`, `list-item-root`, `list-item-field`, and `scalar-field`.
-- Do not synthesize the object root unless the child renders the object root
-  directly.
+- Do not synthesize the object root from member usage.
 - Default object-root policy: no root declaration for `hero` unless there is a
-  direct root render or an explicit flat shape hint. Member usage such as
-  `hero.title` should synthesize only the member path.
+  flat shape hint. Member usage such as `hero.title` should synthesize only the
+  member path.
+- Direct child render of an object root, for example `{ hero }`, is unsupported
+  in Phase B by default. It should warn in default mode and throw in strict mode
+  unless a future review identifies a concrete object-root render contract worth
+  supporting.
 - Keep this phase one-hop only. A child that forwards the object to another
   child remains unsupported until the same-file graph phase.
 - Preserve warning/strict behavior for unsupported object flows.
@@ -158,9 +168,8 @@ hero.title
 - `hero -> Header.hero -> hero.status === 'published'` control.
 - child alias: `const heading = hero.title`.
 - child destructure: `const { title } = hero`.
-- object root direct render is explicit: either tested as replacement parity with
-  same-component root rendering, or kept unsupported until a real use case
-  appears.
+- object root direct render is explicitly unsupported in Phase B and covered by a
+  warning/strict negative test.
 - unsupported nested dynamic member: `hero[key]` warns or errors according to the
   existing unsupported policy.
 - no root declaration is generated for `hero` when only `hero.title` is used.
@@ -241,6 +250,10 @@ products[].name
   `product.badges.map(badge => <Badge badge={ badge } />)`.
 - list-context object-field prop:
   `badges={ product.badges }` into `badges.map(...)`.
+- nested list child with parent and nested item data, for example
+  `sections[].items[]` rendering an `ItemCard` that receives both `section` and
+  `item`. This must prove both parent list metadata and nested item metadata
+  reach the child without PHP context-depth regressions.
 - shadowed alias rejection:
   `products.map(product => other.map(product => <Card product={product} />))`.
 - imported or unknown `ProductCard` stays unsupported with diagnostics.
@@ -418,6 +431,9 @@ Default mode:
 - never treat `warnOnUnsupported: false` as a review or release gate; it is only a
   noise-suppression escape hatch for callers that knowingly accept degraded
   output
+- review evidence should come from strict mode or warning-visible default mode.
+  A passing transform with `warnOnUnsupported: false` does not prove the output is
+  complete.
 
 Strict mode:
 
@@ -509,10 +525,9 @@ Ordered by severity against the current implementation:
 
 ## Review Questions
 
-- Direct object root rendering is not a Phase B default. It should only synthesize
-  the root path when the child directly renders the root or a flat hint declares
-  it. Is that enough, or do reviewers see a real object-root render use case that
-  should be promoted into the Phase B gates?
+- Direct object root rendering is not a Phase B default. It remains unsupported
+  unless reviewers identify a concrete object-root render contract that should be
+  promoted into a later gate.
 - In Phase C, should list item props passed to child components preserve flat
   child `templateVars` support, or should selector tracing replace that path?
 - Is same-file multi-hop tracing worth doing before cross-file import tracing, or
@@ -537,9 +552,9 @@ Phase B pass/fail gates:
 - same-file one-hop object prop replacement, control, alias, and simple child
   destructure pass for Handlebars and PHP
 - no synthesized root object declaration unless direct root rendering is
-  explicitly supported and tested
-- object-root direct render policy is covered by an explicit positive or
-  negative test
+  explicitly supported in a later phase
+- object-root direct render policy is covered by an explicit unsupported
+  warning/strict negative test
 - unsupported computed members, child forwarding, unknown/imported child
   components, and spreads warn by default and throw in strict mode
 - selector parent plus flat child `templateVars` does not silently byte-match a
@@ -550,3 +565,5 @@ Phase B pass/fail gates:
 - implementation keeps selector-specific behavior in the collector/visitor alias
   handoff and continues to reuse the existing registry and controllers for
   output generation
+- gate verification must run in strict mode or warning-visible default mode;
+  `warnOnUnsupported: false` cannot be used to claim Phase B completeness
