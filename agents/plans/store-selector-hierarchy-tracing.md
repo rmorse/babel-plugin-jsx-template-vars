@@ -10,7 +10,8 @@ registry/controller boundary:
 - list shapes are discovered from visible `.map()` usage
 - safe list chains are supported before `.map()`
 - `store-selector-complex-surface` byte-matches `full-template-surface` for
-  Handlebars and PHP
+  Handlebars and PHP as a parent-selector parity fixture, while child components
+  still use explicit flat `templateVars`
 - debug metadata is available through `metadata.storeSelectorTemplateVars`
 - Phase A tracing supports same-file direct scalar child props
 
@@ -53,6 +54,13 @@ the already-supported scalar one-hop case. Object and list item tracing must let
 child usage create concrete flat paths, then continue through the existing
 registry/controller handoff.
 
+The central refactor for all later phases is a seedable usage-discovery core.
+Today the collector discovers member paths from usage only after it has been
+seeded by local selector calls. Phase B/C/E need the same discovery machinery to
+run from an incoming prop alias, for example `Header.hero -> hero`, even when the
+child has no selector calls. This refactor should happen before adding more
+user-facing tracing behavior.
+
 ## Phase Alignment With The Implementation Plan
 
 This document uses the hierarchy-tracing phase names below. The earlier
@@ -78,6 +86,73 @@ phases. Treat this table as the source of truth for the tracing stream:
 - generic `React.createContext()` inference
 - implicit tracing through imported helper functions
 - changing PHP or Handlebars output semantics
+
+## Refactor Slice - Seedable Discovery And Boundary Catalog
+
+### Goal
+
+Extract the local usage-discovery logic so it can be seeded from either:
+
+- selector assignments in the component body
+- incoming prop aliases produced by a parent component trace
+
+This slice should not add new user-facing tracing support by itself. It prepares
+Phase B and Phase C to use the same discovery engine.
+
+### Required Behavior
+
+- Extract or isolate the discovery core currently responsible for local aliases,
+  map shapes, and alias usage.
+- Accept seed aliases shaped like `local binding -> canonical segments`.
+- Support a seed mode for object roots and a C-ready seed mode for list-relative
+  roots.
+- Preserve existing selector-call collection behavior.
+- Always record unsupported metadata in transform metadata, even when warnings
+  are suppressed with `warnOnUnsupported: false`.
+- Add a boundary catalog for unsupported JSX prop/expression shapes before they
+  can be mis-synthesized.
+- Decide traced-field versus explicit child `templateVars` collision behavior
+  before Phase C. Default policy: explicit child `templateVars` wins; tracing for
+  that local path is suppressed; debug metadata records the shadowed trace.
+
+### Boundary Catalog
+
+Unsupported selector-derived prop boundaries should warn by default and throw in
+strict mode unless a phase explicitly supports them:
+
+- spread props
+- computed member reads
+- logical expressions: `x={ a && b }`
+- conditional expressions: `x={ condition ? a : b }`
+- template literals
+- call expressions / opaque helper results
+- multiple selector-derived sources for one prop
+- the same child rendered inside and outside a list context with the same traced
+  prop
+- dynamic component names
+- imported/unknown child components before cross-file tracing
+- prop mutation or rebinding that obscures provenance
+
+### Tests
+
+- seedable discovery from an object prop alias produces the same member
+  declarations as same-component selector usage.
+- seedable discovery from a list-relative alias does not synthesize a nested list
+  wrapper inside the child.
+- every boundary catalog item fails closed instead of synthesizing a guessed
+  declaration.
+- `warnOnUnsupported: false` suppresses user-facing warnings but still records
+  machine-readable unsupported metadata.
+- explicit child `templateVars` shadow a traced path and appear in debug metadata
+  as an explicit override.
+
+### Pass/Fail Gate
+
+- all existing selector and flat tests remain green
+- no new user-facing tracing behavior is exposed before Phase B
+- child-body discovery can run with incoming aliases and no selector imports
+- unsupported metadata is always available to debug/review tooling
+- registry/controller output behavior is unchanged
 
 ## Phase A Versus Phase B Tracing Models
 
@@ -161,6 +236,8 @@ hero.title
 - Keep this phase one-hop only. A child that forwards the object to another
   child remains unsupported until the same-file graph phase.
 - Preserve warning/strict behavior for unsupported object flows.
+- Build on the seedable discovery refactor. Phase B should not implement a
+  second object-only discovery path.
 
 ### Tests
 
@@ -237,6 +314,15 @@ products[].name
   `products[].badges[].label`.
 - Reject or warn on shadowed callback params, computed members, ambiguous
   aliases, and unsupported chains before the child boundary.
+- Use relative child synthesis for list-item children. A child receiving
+  `product` from a parent-owned `products.map(...)` should render item-relative
+  paths such as `name` with inherited context metadata, not create a second
+  canonical `products[].name` list wrapper inside the child.
+- Carry enough context metadata to prevent double `{{#products}}` /
+  `foreach ($data['products']...)` wrapping.
+- Apply the explicit-child-`templateVars` collision policy: explicit child
+  declarations win and suppress tracing for the same child-local path, with a
+  debug note.
 
 ### Tests
 
@@ -260,6 +346,12 @@ products[].name
 - safe list chain before child map source:
   `products.filter(...).map(product => <ProductCard product={product} />)`.
 - PHP e2e context depth with `$data_1` and `$data_2`.
+- no-explicit-child-`templateVars` parity fixture that byte-matches
+  `full-template-surface` once Phase C is expected to replace the child
+  declarations.
+- double-wrap regression: traced list-item children must not emit their own
+  duplicate `products` list wrapper.
+- collision with explicit child `templateVars` follows the documented policy.
 
 ### Risks
 
@@ -275,6 +367,9 @@ products[].name
   parity gate because child components still use flat declarations. It does not
   prove Phase C until list-item child declarations are removed incrementally and
   byte-matched again.
+- Phase C is not just Phase B with list depth added. It needs relative path
+  synthesis plus inherited context metadata, whereas Phase B emits canonical
+  object paths such as `hero.title`.
 
 ## Phase D - Prop Rename And Destructure Variants
 
@@ -434,6 +529,11 @@ Default mode:
 - review evidence should come from strict mode or warning-visible default mode.
   A passing transform with `warnOnUnsupported: false` does not prove the output is
   complete.
+- distinguish broken output from lossy output:
+  broken output leaves dangling references or live selector imports; lossy output
+  is syntactically valid but has silently empty template content after
+  neutralization. Both need metadata, and lossy output must not count as a green
+  tracing gate.
 
 Strict mode:
 
@@ -447,6 +547,8 @@ Never:
 - emit dangling replacement identifiers
 - silently drop selector-derived data when debug mode is enabled; the metadata
   must record what was skipped and why
+- omit machine-readable unsupported metadata because user-facing warnings were
+  suppressed
 - mark a phase complete without strict-mode negative tests for every unsupported
   selector-derived boundary added by that phase
 
@@ -465,6 +567,8 @@ Extend `metadata.storeSelectorTemplateVars` as tracing grows:
 - unsupported boundary kind
 - reason a trace was skipped
 - synthesized declarations caused by child usage
+- per-path provenance keyed by synthesized declaration, including the
+  prop-to-param-to-component chain that produced it
 - context depth for list-derived traced paths
 - enough source location data to identify the JSX prop and child usage when Babel
   provides locations
@@ -522,14 +626,25 @@ Ordered by severity against the current implementation:
 - P2: Same-file multi-hop tracing should remain a later graph phase, but the
   Phase B implementation should be shaped so Phase E can become a bounded
   fixed-point traversal instead of a second, incompatible tracing system.
+- P0: Every phase after Phase A depends on seedable child-body usage discovery.
+  The current collector is hard-seeded from selector calls, so adding Phase B
+  directly risks either synthesizing object roots or duplicating discovery logic.
+  Implement the seedable discovery refactor first.
+- P0: Phase C list-item tracing must not synthesize canonical list paths inside
+  the child in a way that creates a second list wrapper. It needs relative child
+  paths plus inherited context metadata.
+- P1: The current complex-surface parity fixture is a parent-selector parity
+  baseline, not a hierarchy-tracing proof. Phase C needs a no-explicit-child
+  `templateVars` parity fixture before it is treated as proven.
 
 ## Review Questions
 
 - Direct object root rendering is not a Phase B default. It remains unsupported
   unless reviewers identify a concrete object-root render contract that should be
   promoted into a later gate.
-- In Phase C, should list item props passed to child components preserve flat
-  child `templateVars` support, or should selector tracing replace that path?
+- In Phase C, explicit child `templateVars` should win over traced fields for the
+  same child-local path, with debug metadata recording that tracing was
+  shadowed. Do reviewers see a reason to prefer merge-or-error instead?
 - Is same-file multi-hop tracing worth doing before cross-file import tracing, or
   does real usage require cross-file support sooner?
 - Should cross-file tracing be part of this Babel plugin, or a separate prepass
@@ -539,11 +654,28 @@ Ordered by severity against the current implementation:
 
 ## Recommended Next Step
 
-Implement Phase B only. Do not start with list item tracing.
+Implement the seedable discovery refactor first. Do not start Phase B or Phase C
+until this shared primitive and the boundary catalog are in place.
+
+Refactor pass/fail gates:
+
+- local usage discovery can be seeded by incoming prop aliases without selector
+  imports in the child
+- selector-call behavior remains unchanged
+- list-relative seed tests prove the engine can support Phase C without double
+  wrapping
+- boundary catalog negative tests fail closed for every unsupported prop shape
+- unsupported metadata is always recorded, even when warnings are suppressed
+- explicit child `templateVars` collision policy is tested and represented in
+  debug metadata
+
+Then implement Phase B only. Do not start list item tracing until Phase B proves
+the seedable engine can discover object member usage safely.
 
 Phase B will prove whether object-root metadata can be transferred safely without
 creating partial transforms. Once Phase B is green and reviewed, Phase C can
-reuse the same graph transfer model with list context depth added.
+reuse the same discovery engine with list-relative synthesis and inherited
+context metadata.
 
 Phase B pass/fail gates:
 
