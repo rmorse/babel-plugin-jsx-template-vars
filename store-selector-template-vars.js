@@ -12,7 +12,18 @@ const SAFE_LIST_CHAIN_METHODS = new Set( [
 ] );
 
 function isStoreSelectorEnabled( config = {} ) {
-	return config.experimentalStoreSelectors === true;
+	return config.experimentalStoreSelectors === true || (
+		typeof config.experimentalStoreSelectors === 'object' &&
+		config.experimentalStoreSelectors !== null
+	);
+}
+
+function isStoreSelectorDebugEnabled( config = {} ) {
+	return config.experimentalStoreSelectorsDebug === true || (
+		typeof config.experimentalStoreSelectors === 'object' &&
+		config.experimentalStoreSelectors !== null &&
+		config.experimentalStoreSelectors.debug === true
+	);
 }
 
 function collectStoreSelectorImports( programPath, babel ) {
@@ -72,6 +83,74 @@ function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, ba
 	return collector.collect();
 }
 
+function createStoreSelectorPropAliases( componentPath, traces = [], babel ) {
+	if ( traces.length === 0 ) {
+		return {
+			aliases: [],
+			declarations: [],
+		};
+	}
+
+	const functionPath = componentPath.get( 'declarations.0.init' );
+	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParam = firstParamPath?.node;
+	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
+		return {
+			aliases: [],
+			declarations: [],
+		};
+	}
+
+	const aliases = [];
+	const declarations = [];
+	traces.forEach( ( trace ) => {
+		const bindingPath = findObjectPatternBindingPath( firstParamPath, trace.propName, babel );
+		if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
+			return;
+		}
+
+		const binding = bindingPath.scope.getBinding( bindingPath.node.name );
+		if ( ! binding ) {
+			return;
+		}
+
+		const segments = normalizeCanonicalSegments( trace.segments );
+		aliases.push( {
+			bindingIdentifier: binding.identifier,
+			localName: bindingPath.node.name,
+			segments,
+		} );
+		declarations.push( stringifySegments( segments ) );
+	} );
+
+	return {
+		aliases,
+		declarations: Array.from( new Set( declarations ) ).sort(),
+	};
+}
+
+function findObjectPatternBindingPath( patternPath, propName, babel ) {
+	const properties = patternPath.get( 'properties' );
+	for ( const propertyPath of properties ) {
+		const property = propertyPath.node;
+		if ( property.type === 'RestElement' ) {
+			continue;
+		}
+
+		const key = property.key;
+		const keyName = babel.types.isIdentifier( key ) ? key.name : key?.value;
+		if ( keyName !== propName ) {
+			continue;
+		}
+
+		const valuePath = propertyPath.get( 'value' );
+		if ( babel.types.isIdentifier( valuePath.node ) ) {
+			return valuePath;
+		}
+	}
+	return null;
+}
+
 function assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel ) {
 	const importBindings = new Set( selectorImports.localBindings || [] );
 	if ( importBindings.size === 0 ) {
@@ -110,6 +189,8 @@ class StoreSelectorCollector {
 		this.aliasesByBinding = new WeakMap();
 		this.mapCallPaths = new Set();
 		this.unsupportedChildPropExpressions = new WeakSet();
+		this.unsupportedPaths = [];
+		this.childPropTraces = [];
 	}
 
 	collect() {
@@ -131,10 +212,25 @@ class StoreSelectorCollector {
 	}
 
 	createResult() {
+		const rawDeclarations = Array.from( this.declarations ).sort();
+		const declarations = this.getFilteredDeclarations();
 		return {
-			declarations: this.getFilteredDeclarations(),
+			declarations,
 			aliases: this.aliasEntries,
 			hasSelectors: this.selectorDeclarations.length > 0,
+			debug: {
+				rawDeclarations,
+				declarations,
+				aliases: this.aliasEntries.map( ( alias ) => ( {
+					localName: alias.localName,
+					path: stringifySegments( alias.segments ),
+					segments: alias.segments,
+				} ) ),
+				listShapes: declarations.filter( declaration => declaration.includes( '[]' ) ),
+				unsupported: this.unsupportedPaths,
+				childPropTraces: this.childPropTraces,
+			},
+			childPropTraces: this.childPropTraces,
 		};
 	}
 
@@ -194,17 +290,19 @@ class StoreSelectorCollector {
 				}
 
 				path.get( 'arguments' ).forEach( ( argumentPath ) => {
-					const segments = this.resolveExpressionSegments( argumentPath.node, argumentPath );
-					if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
-						return;
-					}
+				const segments = this.resolveExpressionSegments( argumentPath.node, argumentPath );
+				if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+					return;
+				}
 
-					diagnostics.unsupported(
-						argumentPath,
-						`Store selector value "${ stringifySegments( segments ) }" is passed to helper "${ this.getCalleeName( path.node.callee ) }", but helper-body field inference is not supported in this experiment slice.`,
-						this.config
-					);
-				} );
+				const message = `Store selector value "${ stringifySegments( segments ) }" is passed to helper "${ this.getCalleeName( path.node.callee ) }", but helper-body field inference is not supported in this experiment slice.`;
+				this.recordUnsupported( 'helper', segments, message );
+				diagnostics.unsupported(
+					argumentPath,
+					message,
+					this.config
+				);
+			} );
 			},
 		} );
 	}
@@ -342,10 +440,22 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				if ( this.canTraceChildProp( elementName, segments ) ) {
+					this.childPropTraces.push( {
+						componentName: elementName,
+						propName: path.node.name.name,
+						path: stringifySegments( segments ),
+						segments: normalizeSegments( segments ),
+					} );
+					return;
+				}
+
+				const message = `Store selector value "${ stringifySegments( segments ) }" is passed to child component "${ elementName }", but prop tracing is not supported in this experiment slice.`;
 				this.unsupportedChildPropExpressions.add( value.expression );
+				this.recordUnsupported( 'child-prop', segments, message );
 				diagnostics.unsupported(
 					path,
-					`Store selector value "${ stringifySegments( segments ) }" is passed to child component "${ elementName }", but prop tracing is not supported in this experiment slice.`,
+					message,
 					this.config
 				);
 			},
@@ -540,6 +650,25 @@ class StoreSelectorCollector {
 		if ( this.babel.types.isObjectPattern( firstParam ) ) {
 			this.registerPatternAliases( firstParam, listSegments, firstParamPath );
 		}
+	}
+
+	recordUnsupported( kind, segments, message ) {
+		this.unsupportedPaths.push( {
+			kind,
+			path: stringifySegments( segments ),
+			segments: normalizeSegments( segments ),
+			message,
+		} );
+	}
+
+	canTraceChildProp( componentName, segments ) {
+		const componentNames = this.config.storeSelectorComponentNames;
+		if ( ! componentNames || ! componentNames.has( componentName ) ) {
+			return false;
+		}
+
+		const normalizedSegments = normalizeSegments( segments );
+		return normalizedSegments.length > 1 && ! normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) );
 	}
 
 	getPatternPropertyName( property ) {
@@ -855,7 +984,9 @@ module.exports = {
 	assertNoUnprocessedStoreSelectorReferences,
 	collectStoreSelectorImports,
 	collectStoreSelectorTemplateVars,
+	createStoreSelectorPropAliases,
 	createAliasResolver,
 	isStoreSelectorEnabled,
+	isStoreSelectorDebugEnabled,
 	removeStoreSelectorImportSpecifiers,
 };

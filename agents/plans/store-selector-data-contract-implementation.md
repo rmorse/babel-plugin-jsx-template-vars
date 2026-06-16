@@ -1054,6 +1054,43 @@ The recognized package-scoped hook should be documented as template-scoped for
 this experiment. It is not yet a general app store hook; non-template use cases
 remain fail-closed until app-owned selector hooks are designed.
 
+### Parity, Debug, And Phase A Follow-Up
+
+The review-backed release-gate slice is now implemented.
+
+Parity:
+
+- `store-selector-complex-surface` is a byte-match e2e fixture against
+  `full-template-surface` for Handlebars and PHP
+- parent `App` uses selectors for top-level values
+- child components continue to use flat `templateVars`, matching the current
+  no-cross-file/no-broad-tracing boundary
+
+Debug output:
+
+- enabled with `experimentalStoreSelectorsDebug: true` or
+  `experimentalStoreSelectors: { debug: true }`
+- emitted on Babel result metadata as `metadata.storeSelectorTemplateVars`
+- includes raw declarations, filtered declarations, alias maps, list shapes,
+  unsupported paths, child prop traces, incoming prop traces, explicit
+  `templateVars`, and combined declarations
+
+Minor follow-ups:
+
+- `warnOnUnsupported: false` is covered
+- selector rebinding through assignment is covered as unsupported
+- selector declarations remain usage-only; this differs intentionally from flat
+  `templateVars`, where unused declarations are allowed
+
+Prop drilling Phase A:
+
+- supports same-file child components declared as top-level variable components
+- supports direct JSX props whose values resolve to selector-derived scalar paths
+- supports destructured child props
+- supports replacement and control usage in the child component
+- intentionally excludes object-root props, list item props, spreads, dynamic
+  components, HOCs, and cross-file graphs
+
 ## Success Criteria
 
 The experiment is worth continuing if:

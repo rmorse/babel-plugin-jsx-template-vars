@@ -49,8 +49,10 @@ const {
 	collectStoreSelectorImports,
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,
+	createStoreSelectorPropAliases,
 	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
+	isStoreSelectorDebugEnabled,
 	removeStoreSelectorImportSpecifiers,
 } = require( './store-selector-template-vars' );
 const defaultLanguage = 'handlebars';
@@ -105,6 +107,7 @@ function templateVarsVisitor( babel, config ) {
 	const { types } = babel;
 	const tidyOnly = config.tidyOnly ?? false;
 	const experimentalStoreSelectors = isStoreSelectorEnabled( config );
+	const debugStoreSelectors = isStoreSelectorDebugEnabled( config );
 	const pendingTemplateVars = new Map();
 
 	const visitor = {
@@ -155,7 +158,7 @@ function templateVarsVisitor( babel, config ) {
 
 	return {
 		visitor,
-		processProgram( programPath ) {
+		processProgram( programPath, state ) {
 			if ( ! experimentalStoreSelectors || tidyOnly ) {
 				return;
 			}
@@ -163,20 +166,72 @@ function templateVarsVisitor( babel, config ) {
 			const selectorImports = collectStoreSelectorImports( programPath, babel );
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
+			const debugEntries = [];
+			const componentNames = new Set( componentPaths.keys() );
+			const selectorResults = new Map();
+			const childPropTracesByComponent = new Map();
+
+			componentPaths.forEach( ( componentPath, componentName ) => {
+				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
+					...config,
+					storeSelectorComponentNames: componentNames,
+				} );
+				selectorResults.set( componentName, selectorResult );
+
+				( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
+					if ( ! childPropTracesByComponent.has( trace.componentName ) ) {
+						childPropTracesByComponent.set( trace.componentName, [] );
+					}
+					childPropTracesByComponent.get( trace.componentName ).push( trace );
+				} );
+			} );
 
 			componentPaths.forEach( ( componentPath, componentName ) => {
 				const pending = pendingTemplateVars.get( componentName );
-				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, config );
-				const combinedTemplateVars = [
+				const selectorResult = selectorResults.get( componentName );
+				const propTraceResult = createStoreSelectorPropAliases(
+					componentPath,
+					childPropTracesByComponent.get( componentName ) || [],
+					babel
+				);
+				const aliases = [
+					...selectorResult.aliases,
+					...propTraceResult.aliases,
+				];
+				const combinedTemplateVars = Array.from( new Set( [
 					...( pending?.templateVars || [] ),
 					...selectorResult.declarations,
-				];
+					...propTraceResult.declarations,
+				] ) );
+
+				if (
+					debugStoreSelectors &&
+					(
+						selectorResult.hasSelectors ||
+						selectorResult.debug.rawDeclarations.length > 0 ||
+						selectorResult.debug.aliases.length > 0 ||
+						selectorResult.debug.unsupported.length > 0
+					)
+				) {
+					debugEntries.push( {
+						componentName,
+						rawDeclarations: selectorResult.debug.rawDeclarations,
+						declarations: selectorResult.debug.declarations,
+						aliases: selectorResult.debug.aliases,
+						listShapes: selectorResult.debug.listShapes,
+						unsupported: selectorResult.debug.unsupported,
+						childPropTraces: selectorResult.debug.childPropTraces,
+						incomingPropTraces: childPropTracesByComponent.get( componentName ) || [],
+						explicitTemplateVars: pending?.templateVars || [],
+						combinedTemplateVars,
+					} );
+				}
 
 				if ( combinedTemplateVars.length === 0 ) {
 					return;
 				}
 
-				const aliasResolver = createAliasResolver( selectorResult.aliases );
+				const aliasResolver = createAliasResolver( aliases );
 				const templateVars = createTemplateVarsRegistry(
 					combinedTemplateVars,
 					componentPath,
@@ -187,7 +242,7 @@ function templateVarsVisitor( babel, config ) {
 
 				templateVarsController.init( templateVars, componentName, componentPath, babel, {
 					...config,
-					storeSelectorAliases: selectorResult.aliases,
+					storeSelectorAliases: aliases,
 				} );
 				processedComponents.add( componentName );
 			} );
@@ -208,6 +263,13 @@ function templateVarsVisitor( babel, config ) {
 
 			assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel );
 			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
+
+			if ( debugStoreSelectors ) {
+				state.file.metadata.storeSelectorTemplateVars = [
+					...( state.file.metadata.storeSelectorTemplateVars || [] ),
+					...debugEntries,
+				];
+			}
 		}
 	};
 };

@@ -522,6 +522,35 @@ selector against explicit state. The experiment should continue to frame the
 recognized hook as template-scoped and fail-closed until app-owned selector hooks
 are explicitly designed.
 
+### Parity, Debug, And Phase A Follow-Up
+
+The next release-gate slice is now implemented:
+
+- `store-selector-complex-surface` byte-matches `full-template-surface` for
+  Handlebars and PHP. Parent `App` uses selectors for top-level data while child
+  components keep flat `templateVars` until broader tracing exists.
+- selector debug metadata is available on Babel results through
+  `metadata.storeSelectorTemplateVars` when `experimentalStoreSelectorsDebug:
+  true` or `experimentalStoreSelectors: { debug: true }` is set
+- debug metadata includes synthesized declarations, raw declarations, alias maps,
+  list shapes, unsupported paths, outgoing child prop traces, incoming child prop
+  traces, explicit template hints, and combined declarations
+- `warnOnUnsupported: false` is covered for warning suppression
+- selector calls rebound through assignment are covered as unsupported
+- selector mode remains usage-only: unlike flat `templateVars`, selector calls do
+  not create declarations unless supported usage requires them
+
+Prop drilling Phase A is intentionally narrow:
+
+- supports same-file child components declared as top-level variable components
+- supports direct JSX props whose values resolve to selector-derived scalar paths,
+  such as `<Header title={ title } />`
+- supports destructured child props such as `const Header = ({ title }) => ...`
+- supports replacement and control usage inside the child component
+- object-root props such as `<Header hero={ hero } />`, list item props,
+  spreads, dynamic components, HOCs, and cross-file graphs remain outside Phase A
+  and continue to warn by default or throw in strict mode
+
 ## Open Questions
 
 - Is the minimal runtime `useStoreSelector(selector, state)` helper enough for

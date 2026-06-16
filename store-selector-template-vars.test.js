@@ -376,6 +376,58 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<p>{{products}}</p>');
 	});
 
+	it('exposes selector synthesis debug metadata when requested', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			Card.templateVars = [ 'name' ];
+
+			const App = () => {
+				const title = useStoreSelector((state) => state.title);
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						<h1>{ title }</h1>
+						{ products.map((product) => (
+							<Card name={ product.name } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+		});
+		const [ debug ] = result.metadata.storeSelectorTemplateVars;
+
+		expect(debug.componentName).toBe('App');
+		expect(debug.declarations).toEqual([ 'products[]', 'title' ]);
+		expect(debug.listShapes).toEqual([ 'products[]' ]);
+		expect(debug.aliases).toEqual(expect.arrayContaining([
+			expect.objectContaining({ localName: 'title', path: 'title' }),
+			expect.objectContaining({ localName: 'products', path: 'products' }),
+			expect.objectContaining({ localName: 'product', path: 'products[]' }),
+		]));
+		expect(debug.unsupported).toEqual([
+			expect.objectContaining({
+				kind: 'child-prop',
+				path: 'products[].name',
+			}),
+		]);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('prop tracing is not supported'));
+	});
+
 	it('preserves registry validation for selector and flat hint conflicts', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -424,6 +476,56 @@ describe('experimental store selectors', () => {
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('prop tracing is not supported'));
 	});
 
+	it('traces same-file selector props into child component replacements', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ title }) => {
+				return <h1>{ title }</h1>;
+			};
+
+			const App = () => {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <Header title={ title } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('traces same-file selector props into child component controls', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Status = ({ status }) => {
+				return (
+					<section>
+						{ status === 'published' && <aside>Published</aside> }
+					</section>
+				);
+			};
+
+			const App = () => {
+				const status = useStoreSelector((state) => state.article.status);
+				return <Status status={ status } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<section>{{#if_equal article.status 'published'}}<aside>Published</aside>{{/if_equal}}</section>");
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('throws for selector values passed to child components in strict mode', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -444,6 +546,32 @@ describe('experimental store selectors', () => {
 			...selectorOptions,
 			strict: true,
 		})).toThrow(/prop tracing is not supported/);
+	});
+
+	it('suppresses unsupported selector warnings when configured', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1></h1>');
+		expect(warn).not.toHaveBeenCalled();
 	});
 
 	it('does not partially synthesize selector list item props passed to child components', async () => {
@@ -606,6 +734,22 @@ describe('experimental store selectors', () => {
 			const App = () => {
 				useStoreSelector((state) => state.hero.title);
 				return <h1>Title</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/assigned to a local identifier/);
+	});
+
+	it('rejects selector calls rebound through assignment', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				let title = useStoreSelector((state) => state.hero.title);
+				title = useStoreSelector((state) => state.footer.title);
+				return <h1>{ title }</h1>;
 			};
 
 			module.exports = { App };
