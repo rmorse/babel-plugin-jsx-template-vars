@@ -456,6 +456,31 @@ branch.
 - Re-run marker coexistence once the `$$` marker branch is merged or this branch
   is rebased onto it.
 
+### Latest Review Follow-Ups
+
+The latest review agrees that slice 1 plus the hardening pass are complete and
+that selector mode should remain a draft experiment until the release gates below
+are handled.
+
+- Treat the `full-template-surface` parity fixture as the next P0 gate. The
+  fixture should byte-match the flat fixture output where possible, with child
+  components still using flat `templateVars` until prop tracing lands.
+- Keep compiled-view or verbose diagnostics as the P1 gate. The debug output
+  should show synthesized paths, alias maps, filtered versus raw declarations,
+  list shapes, and skipped or unsupported paths.
+- Recommend `strict: true` for CI while selector mode remains experimental,
+  because default warnings can still produce empty template output for known
+  unsupported boundaries.
+- Keep opaque helper warnings broad for now, but revisit the policy after real
+  usage. Possible future refinements include safe built-in allowlists, helper
+  annotations, or helper-body analysis.
+- Defer prop drilling Phase A until parity and debug output are in place. The
+  first tracing slice should be same-file direct child props only, with spreads,
+  dynamic components, and cross-file graphs excluded.
+- Add minor follow-up tests/docs for `warnOnUnsupported: false`, the difference
+  between unused flat declarations and usage-only selector synthesis, and
+  multiple selector calls rebinding the same local.
+
 ## Open Questions
 
 - Is the minimal runtime `useStoreSelector(selector, state)` helper enough for

@@ -978,6 +978,31 @@ current selector experiment branch.
   rerun coexistence tests after the marker experiment is merged or this branch is
   explicitly rebased onto it.
 
+### Latest Review Follow-Ups
+
+The latest review marks slice 1 plus the hardening pass as complete. The branch
+should stay in draft experiment status until the remaining release gates are
+closed.
+
+- P0: add `store-selector-complex-surface` as a byte-match parity fixture against
+  `full-template-surface`. Parent `App` should use selectors for top-level data;
+  child components can continue using flat `templateVars` until tracing exists.
+- P1: add compiled-view or verbose diagnostics for synthesized declarations,
+  alias maps, filtered/raw declarations, list shapes, and unsupported/skipped
+  paths. This should be author-facing rather than only visible internally.
+- P2: begin prop drilling Phase A only after parity and debug output land. Scope
+  Phase A to same-file direct child props with identifier/literal JSX attributes;
+  keep spreads, dynamic components, HOCs, and cross-file graphs excluded.
+- Keep `strict: true` as the recommended CI mode for the experiment, because
+  default warnings still allow known unsupported boundaries to render empty
+  template output.
+- Keep opaque-helper diagnostics broad until real usage shows where the noise is.
+  Later refinements can consider safe built-in allowlists, helper annotations, or
+  helper-body analysis.
+- Add minor follow-up coverage or docs for `warnOnUnsupported: false`,
+  usage-only selector synthesis versus unused flat declarations, and multiple
+  selector calls rebinding the same local.
+
 ## Success Criteria
 
 The experiment is worth continuing if:
