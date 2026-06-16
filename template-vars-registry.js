@@ -51,7 +51,7 @@ function parseTemplateVarPath( value, errorPath ) {
 	};
 }
 
-function createTemplateVarsRegistry( templatePropsValue, componentPath, babel, errorPath ) {
+function createTemplateVarsRegistry( templatePropsValue, componentPath, babel, errorPath, options = {} ) {
 	const declarations = templatePropsValue.map( ( prop ) => {
 		if ( typeof prop !== 'string' ) {
 			diagnostics.error( errorPath, 'templateVars only supports flat string paths. Legacy array/object configuration is not supported.' );
@@ -82,7 +82,7 @@ function createTemplateVarsRegistry( templatePropsValue, componentPath, babel, e
 		addScalarPath( registry, declaration.segments );
 	} );
 
-	inferUsageRoles( registry, componentPath, babel );
+	inferUsageRoles( registry, componentPath, babel, options );
 
 	return deriveControllerInputs( registry );
 }
@@ -235,7 +235,7 @@ function registerListNode( registry, listNode ) {
 	registry.listsBySourceKey.set( listNode.sourceKey, listNode );
 }
 
-function inferUsageRoles( registry, componentPath, babel ) {
+function inferUsageRoles( registry, componentPath, babel, options = {} ) {
 	if ( ! componentPath ) {
 		return;
 	}
@@ -245,36 +245,38 @@ function inferUsageRoles( registry, componentPath, babel ) {
 	componentPath.traverse( {
 		LogicalExpression( subPath ) {
 			if ( subPath.node.operator === '&&' ) {
-				tagControlArgs( registry, subPath.node.left, types );
+				tagControlArgs( registry, subPath.node.left, types, subPath, options );
 			}
 		},
 		ConditionalExpression( subPath ) {
-			tagControlArgs( registry, subPath.node.test, types );
+			tagControlArgs( registry, subPath.node.test, types, subPath, options );
 		},
 		CallExpression( subPath ) {
-			tagListMapUsage( registry, subPath, types );
+			tagListMapUsage( registry, subPath, types, options );
 		},
 	} );
 }
 
-function tagControlArgs( registry, expression, types ) {
+function tagControlArgs( registry, expression, types, path, options = {} ) {
 	const args = getExpressionArgs( expression, types );
 	args.forEach( ( arg ) => {
 		if ( arg.type !== 'identifier' && arg.type !== 'path' ) {
 			return;
 		}
 
-		if ( registry.paths.has( arg.value ) ) {
-			registry.paths.get( arg.value ).roles.add( 'control' );
+		const resolvedValue = getResolvedArgValue( arg, path, options );
+
+		if ( registry.paths.has( resolvedValue ) ) {
+			registry.paths.get( resolvedValue ).roles.add( 'control' );
 		}
 
-		if ( registry.rootShapes.has( arg.value ) ) {
-			registry.rootShapes.get( arg.value ).roles.add( 'control' );
+		if ( registry.rootShapes.has( resolvedValue ) ) {
+			registry.rootShapes.get( resolvedValue ).roles.add( 'control' );
 		}
 	} );
 }
 
-function tagListMapUsage( registry, callPath, types ) {
+function tagListMapUsage( registry, callPath, types, options = {} ) {
 	const { node } = callPath;
 	if ( ! types.isMemberExpression( node.callee ) ) {
 		return;
@@ -284,7 +286,7 @@ function tagListMapUsage( registry, callPath, types ) {
 		return;
 	}
 
-	const sourceKey = getExpressionSourceKey( node.callee.object, types );
+	const sourceKey = getExpressionSourceKey( node.callee.object, types, callPath, options );
 	if ( ! sourceKey ) {
 		return;
 	}
@@ -398,8 +400,19 @@ function serializeScalarMetadata( node ) {
 	};
 }
 
-function getExpressionSourceKey( expression, types ) {
+function getResolvedArgValue( arg, path, options = {} ) {
+	const segments = arg.segments || String( arg.value ).split( '.' );
+	if ( typeof options.resolveSegments === 'function' ) {
+		return options.resolveSegments( segments, path ).join( '.' );
+	}
+	return segments.join( '.' );
+}
+
+function getExpressionSourceKey( expression, types, path = null, options = {} ) {
 	if ( types.isIdentifier( expression ) ) {
+		if ( typeof options.resolveSegments === 'function' ) {
+			return options.resolveSegments( [ expression.name ], path ).join( '.' );
+		}
 		return expression.name;
 	}
 	if ( ! types.isMemberExpression( expression ) ) {
@@ -418,6 +431,9 @@ function getExpressionSourceKey( expression, types ) {
 		return null;
 	}
 	segments.unshift( current.name );
+	if ( typeof options.resolveSegments === 'function' ) {
+		return options.resolveSegments( segments, path ).join( '.' );
+	}
 	return segments.join( '.' );
 }
 

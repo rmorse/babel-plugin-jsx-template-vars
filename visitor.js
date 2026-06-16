@@ -45,6 +45,13 @@ const {
 
 const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
+const {
+	collectStoreSelectorImports,
+	collectStoreSelectorTemplateVars,
+	createAliasResolver,
+	isStoreSelectorEnabled,
+	removeStoreSelectorImportSpecifiers,
+} = require( './store-selector-template-vars' );
 const defaultLanguage = 'handlebars';
 
 /**
@@ -96,8 +103,10 @@ function getTemplateVarsFromExpression( expression, types ) {
 function templateVarsVisitor( babel, config ) {
 	const { types } = babel;
 	const tidyOnly = config.tidyOnly ?? false;
+	const experimentalStoreSelectors = isStoreSelectorEnabled( config );
+	const pendingTemplateVars = new Map();
 
-	return {
+	const visitor = {
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
@@ -113,6 +122,15 @@ function templateVarsVisitor( babel, config ) {
 
 			// We know this exists because it was checked in getTemplateVarsFromExpression
 			const componentName = path.node.expression.left.object.name;
+			if ( experimentalStoreSelectors ) {
+				pendingTemplateVars.set( componentName, {
+					templateVars: templatePropsValue,
+					errorPath: path,
+				} );
+				path.remove();
+				return;
+			}
+
 			// Find the component path by name
 			const componentPath = getComponentPath( path.parentPath, componentName );
 			
@@ -132,7 +150,64 @@ function templateVarsVisitor( babel, config ) {
 			const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, path );
 			templateVarsController.init( templateVars, componentName, componentPath, babel, config );
 		}
-	}
+	};
+
+	return {
+		visitor,
+		processProgram( programPath ) {
+			if ( ! experimentalStoreSelectors || tidyOnly ) {
+				return;
+			}
+
+			const selectorImports = collectStoreSelectorImports( programPath, babel );
+			const componentPaths = getTopLevelComponentPaths( programPath, types );
+			const processedComponents = new Set();
+
+			componentPaths.forEach( ( componentPath, componentName ) => {
+				const pending = pendingTemplateVars.get( componentName );
+				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, config );
+				const combinedTemplateVars = [
+					...( pending?.templateVars || [] ),
+					...selectorResult.declarations,
+				];
+
+				if ( combinedTemplateVars.length === 0 ) {
+					return;
+				}
+
+				const aliasResolver = createAliasResolver( selectorResult.aliases );
+				const templateVars = createTemplateVarsRegistry(
+					combinedTemplateVars,
+					componentPath,
+					babel,
+					pending?.errorPath || componentPath,
+					{ resolveSegments: aliasResolver }
+				);
+
+				templateVarsController.init( templateVars, componentName, componentPath, babel, {
+					...config,
+					storeSelectorAliases: selectorResult.aliases,
+				} );
+				processedComponents.add( componentName );
+			} );
+
+			pendingTemplateVars.forEach( ( pending, componentName ) => {
+				if ( processedComponents.has( componentName ) ) {
+					return;
+				}
+
+				const componentPath = getComponentPath( programPath, componentName );
+				if ( ! componentPath ) {
+					return;
+				}
+
+				const templateVars = createTemplateVarsRegistry( pending.templateVars, componentPath, babel, pending.errorPath );
+				templateVarsController.init( templateVars, componentName, componentPath, babel, config );
+			} );
+
+			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
+		}
+	};
 };
 
 // Find and return a component (variable declaration) path via traversal by its name.
@@ -148,6 +223,34 @@ function getComponentPath( path, componentName ) {
 		}
 	} );
 	return componentPath;
+}
+
+function getTopLevelComponentPaths( programPath, types ) {
+	const components = new Map();
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		if ( ! types.isVariableDeclaration( childPath.node ) || childPath.node.declarations.length !== 1 ) {
+			return;
+		}
+
+		const declaration = childPath.node.declarations[ 0 ];
+		if ( ! types.isIdentifier( declaration.id ) || ! isComponentName( declaration.id.name ) ) {
+			return;
+		}
+
+		if (
+			! types.isArrowFunctionExpression( declaration.init ) &&
+			! types.isFunctionExpression( declaration.init )
+		) {
+			return;
+		}
+
+		components.set( declaration.id.name, childPath );
+	} );
+	return components;
+}
+
+function isComponentName( name ) {
+	return typeof name === 'string' && /^[A-Z]/.test( name );
 }
 
 module.exports = templateVarsVisitor;

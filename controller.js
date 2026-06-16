@@ -113,6 +113,7 @@ const templateVarsController = {
 		let blockStatementDepth = 0; // make sure we only update the correct block statement.
 
 		const listController = new ListController(this.vars.list, this.contextIdentifier.name, babel, config);
+		listController.registerExternalPathAliases( config.storeSelectorAliases || [] );
 		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
 		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
 		if (types.isObjectPattern(componentParam)) {

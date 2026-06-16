@@ -23,7 +23,9 @@ describe('e2e template output fixtures', () => {
 		const source = readFixture(fixtureName, 'input.jsx');
 		const expected = readFixture(fixtureName, `expected.${ language }.html`);
 
-		const { output } = await renderTemplateFixture(language, source, 'App', {});
+		const { output } = await renderTemplateFixture(language, source, 'App', {}, {
+			experimentalStoreSelectors: true,
+		});
 
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
 	});

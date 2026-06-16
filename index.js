@@ -54,7 +54,11 @@ module.exports = ( babel, config ) => {
 			Program(path, state) {
 				const root = path;
 				// The main plugin visitor.
-				path.traverse( templateVarsVisitor( babel, config ) );
+				const visitorResult = templateVarsVisitor( babel, config );
+				path.traverse( visitorResult.visitor || visitorResult );
+				if ( typeof visitorResult.processProgram === 'function' ) {
+					visitorResult.processProgram( path, state );
+				}
 				
 				if ( tidyOnly ) {
 					return;

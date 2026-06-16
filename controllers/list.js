@@ -40,6 +40,7 @@ class ListController {
 		this.getContainingListContextOffset = this.getContainingListContextOffset.bind( this );
 		this.resolveTemplateArg = this.resolveTemplateArg.bind( this );
 		this.resolveRenderedListMeta = this.resolveRenderedListMeta.bind( this );
+		this.registerExternalPathAliases = this.registerExternalPathAliases.bind( this );
 	}
 
 	initVars( path ) {
@@ -135,6 +136,18 @@ class ListController {
 
 		this.pathAliasesByBinding.set( binding.identifier, {
 			segments: this.normalizeCanonicalSegments( segments ),
+		} );
+	}
+
+	registerExternalPathAliases( aliases = [] ) {
+		aliases.forEach( ( alias ) => {
+			if ( ! alias.bindingIdentifier || ! Array.isArray( alias.segments ) ) {
+				return;
+			}
+
+			this.pathAliasesByBinding.set( alias.bindingIdentifier, {
+				segments: this.normalizeCanonicalSegments( alias.segments ),
+			} );
 		} );
 	}
 
@@ -324,22 +337,35 @@ class ListController {
 	updateIdentifierNames( path ) {
 		const { types } = this.babel;
 		const sourceVarName = path.node.name;
-
-		if ( ! this.vars.names.includes( sourceVarName ) ) {
+		if ( this.vars.mapInv?.[ sourceVarName ] ) {
 			return;
 		}
 
-		if ( ! this.shouldReplaceIdentifier( path ) ) {
+		const aliasListMetadata = this.resolveListMetaFromExpression( path.node, path );
+		const replacementExpression = aliasListMetadata
+			? this.createReplacementExpressionForListMetadata( aliasListMetadata )
+			: null;
+
+		if ( ! this.vars.names.includes( sourceVarName ) && ! replacementExpression ) {
+			return;
+		}
+
+		if ( ! this.shouldReplaceIdentifier( path, aliasListMetadata ) ) {
+			return;
+		}
+
+		if ( replacementExpression ) {
+			path.replaceWith( replacementExpression );
 			return;
 		}
 
 		path.node.name = this.vars.mapped[ sourceVarName ];
 	}
 
-	shouldReplaceIdentifier( path ) {
+	shouldReplaceIdentifier( path, aliasListMetadata = null ) {
 		const { types } = this.babel;
 		const parentNode = path.parentPath?.node;
-		const rootConfig = this.rootConfigByName.get( path.node.name );
+		const rootConfig = this.rootConfigByName.get( path.node.name ) || aliasListMetadata;
 
 		if ( ! rootConfig || ! parentNode ) {
 			return false;
@@ -366,6 +392,21 @@ class ListController {
 		}
 
 		return false;
+	}
+
+	createReplacementExpressionForListMetadata( metadata ) {
+		const { types } = this.babel;
+		const sourceSegments = metadata.sourceSegments || [];
+		const rootName = sourceSegments[ 0 ];
+		const mappedRoot = this.vars.mapped?.[ rootName ];
+
+		if ( ! mappedRoot ) {
+			return null;
+		}
+
+		return sourceSegments.slice( 1 ).reduce( ( expression, segment ) => (
+			types.memberExpression( expression, types.identifier( segment.replace( /\[\]$/, '' ) ) )
+		), types.identifier( mappedRoot ) );
 	}
 
 	shouldReplaceRootObjectIdentifier( path ) {
