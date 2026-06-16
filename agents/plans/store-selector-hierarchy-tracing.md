@@ -46,6 +46,30 @@ Each phase should:
 - avoid partial transforms when metadata is known to be lost
 - add debug metadata for traced paths so authors can inspect the compiled view
 
+The implementation constraint from Phase A is important: incoming prop traces
+must become selector-derived aliases in the child collector before declaration
+synthesis. They should not be converted directly into declarations except for
+the already-supported scalar one-hop case. Object and list item tracing must let
+child usage create concrete flat paths, then continue through the existing
+registry/controller handoff.
+
+## Phase Alignment With The Implementation Plan
+
+This document uses the hierarchy-tracing phase names below. The earlier
+`store-selector-data-contract-implementation.md` file has a shorter deferred
+outline where destructured props and child aliases appear as separate early
+phases. Treat this table as the source of truth for the tracing stream:
+
+| Hierarchy phase | Earlier outline topic | Scope in this document |
+| --- | --- | --- |
+| Phase A | direct child props | already implemented for same-file scalar paths |
+| Phase B | destructured child props / child aliases | object-root child tracing plus child-side usage discovery |
+| Phase C | list item propagation | list item roots, scalar item props, and list-context object-field props |
+| Phase D | rename/destructure variants | child-side rename, nested destructure, defaults, and rest rejection |
+| Phase E | same-file component graph | multi-hop relay through same-file components |
+| Phase F | cross-file graph | opt-in import graph tracing |
+| Phase G | opt-in context tracing | template-specific context API exploration |
+
 ## Non-Goals For This Stream
 
 - arbitrary React runtime analysis
@@ -54,6 +78,35 @@ Each phase should:
 - generic `React.createContext()` inference
 - implicit tracing through imported helper functions
 - changing PHP or Handlebars output semantics
+
+## Phase A Versus Phase B Tracing Models
+
+Phase A traces fully resolved scalar paths at the parent prop boundary:
+
+```txt
+title -> hero.title -> <Header title={title}> -> Header.title
+```
+
+The parent already knows the final flat path (`hero.title`), so the child can be
+seeded with a concrete alias and declaration.
+
+Phase B is different. The parent only knows an object root:
+
+```txt
+hero -> hero -> <Header hero={hero}> -> Header.hero
+```
+
+The final paths are discovered by reading child usage:
+
+```txt
+Header.hero.title -> hero.title
+Header.hero.status -> hero.status
+```
+
+That requires a child-side usage collector that can run with incoming aliases,
+even when the child component has no selector calls of its own. The collector
+must produce declarations from child usage, not from the object root crossing the
+prop boundary.
 
 ## Phase B - Same-File Object Prop Tracing
 
@@ -82,8 +135,21 @@ hero.title
 - Trace direct object props into same-file child components.
 - Allow child usage to decide which nested paths are synthesized.
 - Support replacement usage, control usage, and local child aliases.
+- Add a child usage collector that can run with incoming prop aliases and does
+  not require selector imports or selector calls inside the child component.
+- Seed incoming object props as alias-only metadata in the child collector; do
+  not widen the current scalar `createStoreSelectorPropAliases()` path and
+  accidentally synthesize the object root.
+- Split child prop trace policy by source shape instead of using one broad
+  boolean:
+  `object-root`, `list-item-root`, `list-item-field`, and `scalar-field`.
 - Do not synthesize the object root unless the child renders the object root
   directly.
+- Default object-root policy: no root declaration for `hero` unless there is a
+  direct root render or an explicit flat shape hint. Member usage such as
+  `hero.title` should synthesize only the member path.
+- Keep this phase one-hop only. A child that forwards the object to another
+  child remains unsupported until the same-file graph phase.
 - Preserve warning/strict behavior for unsupported object flows.
 
 ### Tests
@@ -92,9 +158,16 @@ hero.title
 - `hero -> Header.hero -> hero.status === 'published'` control.
 - child alias: `const heading = hero.title`.
 - child destructure: `const { title } = hero`.
-- object root direct render remains replacement usage.
+- object root direct render is explicit: either tested as replacement parity with
+  same-component root rendering, or kept unsupported until a real use case
+  appears.
 - unsupported nested dynamic member: `hero[key]` warns or errors according to the
   existing unsupported policy.
+- no root declaration is generated for `hero` when only `hero.title` is used.
+- negative: object prop passed to a child with no traceable usage warns or
+  errors, and does not synthesize a root path.
+- debug metadata shows the incoming prop trace, child usage that caused the
+  synthesized declaration, and any skipped usage.
 
 ### Risks
 
@@ -103,6 +176,12 @@ hero.title
   selector-derived.
 - This phase can create many paths from a single prop. Debug output must make
   those paths inspectable.
+- The current Phase A implementation collects child declarations before incoming
+  prop aliases are known. Phase B needs a bounded second collection pass or an
+  equivalent pre-seeded alias path for child components.
+- The collector must avoid a partial flat fallback where the child has local
+  `templateVars` that make the output look valid while selector provenance was
+  actually lost.
 
 ## Phase C - Same-File List Item Prop Tracing
 
@@ -136,6 +215,19 @@ products[].name
 - Support child replacement, control, and nested list usage.
 - Support child aliases and child destructuring from the list item prop.
 - Avoid partial transforms if the child prop cannot be traced.
+- Limit support to direct same-file component references whose child definition
+  is known. Imported children, dynamic component variables, spreads, render
+  props, and HOCs stay unsupported.
+- Distinguish whole-item props (`product={ product }`) from scalar item props
+  (`name={ product.name }`). Both may be useful, but they need separate tests
+  because scalar item props do not carry the same child object shape.
+- Support list-context object-field props, for example
+  `badges={ product.badges }`, as a separate bridge case from whole-item and
+  scalar props. This is required for child maps such as
+  `badges.map(badge => badge.label)`, which should synthesize
+  `products[].badges[].label`.
+- Reject or warn on shadowed callback params, computed members, ambiguous
+  aliases, and unsupported chains before the child boundary.
 
 ### Tests
 
@@ -144,6 +236,14 @@ products[].name
 - `product.badges.map(...)` nested list inside child.
 - child destructure: `const { name, badges } = product`.
 - child alias: `const item = product`.
+- scalar item prop: `name={ product.name }` into `{ name }`.
+- nested map child boundary:
+  `product.badges.map(badge => <Badge badge={ badge } />)`.
+- list-context object-field prop:
+  `badges={ product.badges }` into `badges.map(...)`.
+- shadowed alias rejection:
+  `products.map(product => other.map(product => <Card product={product} />))`.
+- imported or unknown `ProductCard` stays unsupported with diagnostics.
 - safe list chain before child map source:
   `products.filter(...).map(product => <ProductCard product={product} />)`.
 - PHP e2e context depth with `$data_1` and `$data_2`.
@@ -155,6 +255,13 @@ products[].name
   item objects.
 - The transform must distinguish passing the whole list item object from passing
   a single scalar field. Phase A already supports the scalar field case.
+- Nested maps can cross two context depths before the child component renders.
+  The pass/fail gate must verify both Handlebars relative paths and PHP
+  `$data_N` depth, not just synthesized flat strings.
+- The current `store-selector-complex-surface` fixture is a parent-selector
+  parity gate because child components still use flat declarations. It does not
+  prove Phase C until list-item child declarations are removed incrementally and
+  byte-matched again.
 
 ## Phase D - Prop Rename And Destructure Variants
 
@@ -173,7 +280,9 @@ const ProductCard = ({ item: product }) => (
 
 ### Required Behavior
 
-- Support JSX prop rename: `item={ product }`.
+- Treat JSX prop naming (`item={ product }`) as part of the Phase B/C trace
+  record. Do not defer it if the child receives the value through a simple
+  destructured prop.
 - Support child destructure rename: `{ item: product }`.
 - Support nested object destructure where static:
   `{ hero: { title } }`.
@@ -183,7 +292,7 @@ const ProductCard = ({ item: product }) => (
 
 ### Tests
 
-- prop rename from parent to child.
+- prop rename from parent to child if not already covered in Phase B/C.
 - child destructure rename.
 - nested destructure.
 - assignment aliases after destructure.
@@ -217,6 +326,9 @@ hero.title
 
 - Build a same-file component definition map.
 - Trace direct JSX component references through multiple hops.
+- Allow relay components without selector calls to run the child usage collector
+  when they receive incoming prop aliases. This is the prerequisite that lets
+  `App -> Shell -> Header` work when `Shell` only forwards `hero`.
 - Detect cycles and stop with a diagnostic.
 - Keep dynamic component references unsupported.
 - Include trace paths in debug metadata.
@@ -225,6 +337,9 @@ hero.title
 
 - two-hop trace.
 - three-hop trace.
+- non-selector relay:
+  `App` selects `hero`, `Shell` forwards `hero`, and `Header` reads
+  `hero.title`.
 - sibling components receiving the same selector path.
 - cycle detection.
 - dynamic component variable rejected or warned.
@@ -296,6 +411,13 @@ Default mode:
 - warn for unsupported boundaries that can still produce valid output
 - fail closed when output would be broken or import removal would leave live
   selector references
+- emit a non-suppressible safety diagnostic when selector-derived data crosses
+  an unsupported boundary and a child component's flat `templateVars` appear to
+  provide a local fallback for the same prop name. This "partial flat fallback"
+  can look correct while losing canonical selector provenance.
+- never treat `warnOnUnsupported: false` as a review or release gate; it is only a
+  noise-suppression escape hatch for callers that knowingly accept degraded
+  output
 
 Strict mode:
 
@@ -307,7 +429,10 @@ Never:
 - knowingly synthesize a declaration for a value that has crossed an unsupported
   metadata boundary
 - emit dangling replacement identifiers
-- silently drop selector-derived data without debug metadata
+- silently drop selector-derived data when debug mode is enabled; the metadata
+  must record what was skipped and why
+- mark a phase complete without strict-mode negative tests for every unsupported
+  selector-derived boundary added by that phase
 
 ## Debug Metadata Additions
 
@@ -317,14 +442,77 @@ Extend `metadata.storeSelectorTemplateVars` as tracing grows:
 - incoming prop traces
 - graph hop count
 - source component and target component
+- source prop name, child local binding name, and canonical path
+- trace status:
+  `supported`, `unsupported`, `partial-flat-fallback`, or `skipped`
+- usage kind that caused synthesis: replacement, control, list, or direct root
 - unsupported boundary kind
 - reason a trace was skipped
 - synthesized declarations caused by child usage
+- context depth for list-derived traced paths
+- enough source location data to identify the JSX prop and child usage when Babel
+  provides locations
+
+Warnings for unsupported traced props should also include a compact trace
+summary, even when full debug metadata is disabled. Example:
+
+```txt
+hero -> Header.hero (unsupported: object-root tracing is not enabled)
+```
+
+## Implementation Review Findings
+
+Ordered by severity against the current implementation:
+
+- P0: Phase B cannot be implemented by only relaxing
+  `canTraceChildProp()`. The visitor currently collects all component selector
+  usage first, then converts incoming traces into aliases and declarations in a
+  later pass (`visitor.js:174`, `visitor.js:189`,
+  `store-selector-template-vars.js:86`). That is enough for scalar Phase A, but
+  object roots need incoming aliases before child usage is scanned. Otherwise
+  `hero={ hero }` either remains unsupported or incorrectly generates a root
+  `hero` declaration instead of `hero.title`.
+- P0: The plan should make "metadata transfer, not React simulation" more
+  operational. The safe model is still selector path -> binding -> JSX prop ->
+  child binding -> registry/controller alias wiring. The unsafe model is walking
+  arbitrary render behavior. Phase B/C should stay inside the existing
+  registry/controller reuse path: `createTemplateVarsRegistry()` plus
+  `templateVarsController.init()` and `ListController.registerExternalPathAliases()`
+  (`template-vars-registry.js:54`, `controller.js:115`,
+  `controllers/list.js:142`).
+- P1: Phase B before Phase C is correct. Object roots prove usage-driven child
+  declaration synthesis without list context depth. List item tracing adds
+  context offsets, nested list metadata, and PHP `$data_N` concerns, so it should
+  come after the object pass is stable.
+- P1: Phase C needs stronger safeguards around aliases and nested maps. It must
+  reject shadowed map params, imported children, unknown component definitions,
+  computed item reads, spreads, and ambiguous aliases. Nested map tests must
+  assert generated PHP and Handlebars, not only the debug declarations.
+- P1: The diagnostics policy is close, but default warning mode can still render
+  valid-looking empty output when an author ignores a warning. Each phase needs
+  strict-mode negative tests and debug assertions for every skipped
+  selector-derived boundary (`diagnostics.js:19`,
+  `store-selector-template-vars.test.js:456`).
+- P1: Debug metadata is currently useful for synthesized declarations, aliases,
+  unsupported paths, and incoming/outgoing traces, but it is not yet sufficient
+  to explain why a child usage created a specific path. Add child usage origin,
+  usage kind, and context depth before calling a phase complete
+  (`visitor.js:216`, `store-selector-template-vars.js:214`,
+  `store-selector-template-vars.test.js:379`).
+- P2: Phase D currently mixes already-supported/required JSX prop naming with
+  harder child binding variants. Simple JSX prop renames should be accepted in
+  Phase B/C because traces already carry `propName`; Phase D should focus on
+  child-side destructure rename, nested destructure, defaults, and rest rejection.
+- P2: Same-file multi-hop tracing should remain a later graph phase, but the
+  Phase B implementation should be shaped so Phase E can become a bounded
+  fixed-point traversal instead of a second, incompatible tracing system.
 
 ## Review Questions
 
-- Should Phase B object props support direct object root rendering, or should root
-  object rendering remain a warning until a real use case appears?
+- Direct object root rendering is not a Phase B default. It should only synthesize
+  the root path when the child directly renders the root or a flat hint declares
+  it. Is that enough, or do reviewers see a real object-root render use case that
+  should be promoted into the Phase B gates?
 - In Phase C, should list item props passed to child components preserve flat
   child `templateVars` support, or should selector tracing replace that path?
 - Is same-file multi-hop tracing worth doing before cross-file import tracing, or
@@ -341,3 +529,24 @@ Implement Phase B only. Do not start with list item tracing.
 Phase B will prove whether object-root metadata can be transferred safely without
 creating partial transforms. Once Phase B is green and reviewed, Phase C can
 reuse the same graph transfer model with list context depth added.
+
+Phase B pass/fail gates:
+
+- child usage collector can run on a child component with incoming aliases and no
+  local selector calls
+- same-file one-hop object prop replacement, control, alias, and simple child
+  destructure pass for Handlebars and PHP
+- no synthesized root object declaration unless direct root rendering is
+  explicitly supported and tested
+- object-root direct render policy is covered by an explicit positive or
+  negative test
+- unsupported computed members, child forwarding, unknown/imported child
+  components, and spreads warn by default and throw in strict mode
+- selector parent plus flat child `templateVars` does not silently byte-match a
+  fully traced target when provenance was lost; it emits the partial-flat-fallback
+  diagnostic
+- debug metadata identifies outgoing trace, incoming trace, child usage kind,
+  synthesized declaration, trace status, and skipped boundaries
+- implementation keeps selector-specific behavior in the collector/visitor alias
+  handoff and continues to reuse the existing registry and controllers for
+  output generation
