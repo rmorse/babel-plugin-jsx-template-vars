@@ -141,8 +141,8 @@ context.
 - Store selectors are explicit enough for reliable AST extraction.
 - The same API can work at runtime as real app state and at build time as a
   template contract.
-- Shape-only hints can eventually live in selector APIs instead of detached
-  component config.
+- During the experiment, shape-only hints stay on flat `templateVars` so we can
+  reuse the existing registry merge and validation behavior.
 
 ## First Proof Slice
 
@@ -163,6 +163,7 @@ Required first-slice support:
 ```jsx
 (state) => state[group][field]
 (state) => getValue(state)
+(state) => state.hero?.title
 ```
 
 - infer selected data paths from recognized selector calls
@@ -170,10 +171,18 @@ Required first-slice support:
 - infer list roots from `.map()` and other supported list-shaped usage
 - infer item fields from visible `.map()` callbacks over selected lists
 - support local aliases and destructures after selector assignment
+- support selector-only components with no `Component.templateVars` assignment
 - reuse the existing normalized registry and controllers
 - preserve current PHP and Handlebars output behavior
 - keep this behind an experimental flag, for example
   `experimentalStoreSelectors`
+
+Slice 1 should reject optional chaining instead of normalizing it. It can be
+added later once the static selector parser has a stable baseline.
+
+Direct rendering of a selected array-like value should be treated as replacement
+usage, not list inference. List shape should require `.map()` or another
+explicitly supported list-shaped usage, or a flat `templateVars` shape hint.
 
 Example:
 
@@ -209,6 +218,11 @@ hierarchy as far as static analysis remains reliable.
 
 This should be included in the experiment direction, but deferred until the
 selector contract itself is proven.
+
+Until tracing exists, authors must duplicate selectors in children, keep flat
+shape hints on child components, or accept untransformed child output. That is
+acceptable for the first proof slice, but it must be documented and tested as an
+intentional gap.
 
 ### Target Follow-Up Support
 
@@ -319,9 +333,11 @@ Unit tests:
 
 - selector parser accepts static paths
 - selector parser rejects computed/dynamic paths
+- selector parser rejects optional chaining in slice 1
 - scalar selected values render replacement tags
 - list selected values render list wrappers
 - local alias and destructure propagation
+- selector-only component discovery with no `templateVars` assignment
 - unsupported selectors do not produce partial transforms
 
 E2e tests:
@@ -329,6 +345,13 @@ E2e tests:
 - basic scalar store selector fixture
 - nested object selector fixture
 - selected-list usage fixture
+- multi-role selector fixture
+- map-alias selector fixture
+- shape-hint-only field fixture
+- nested-member control fixture
+- selector-only component fixture
+- selector plus flat-hint conflict fixture
+- child-untraced negative fixture
 - complex fixture equivalent to `full-template-surface`
 - same-file prop drilling fixture once tracing starts
 - PHP and Handlebars expected output for every fixture
@@ -339,12 +362,27 @@ Regression tests:
 - `$$` marker mode remains independent
 - store selectors do not run in `tidyOnly` unless explicitly designed later
 
+## Review Decisions Before Implementation
+
+- Keep one role-neutral selector API. Do not split selectors into template value,
+  template list, or template control hooks.
+- Treat selector calls as data-path declarations only. Existing role inference
+  decides replace/control/list usage.
+- Support import aliases such as `import { useStoreSelector as useSel }` by
+  tracking the local import binding.
+- Reject optional chaining in slice 1.
+- Treat direct rendering of selected arrays as replacement usage unless list
+  shape is proven elsewhere.
+- Keep flat `templateVars` strings as the shape-hint escape hatch during the
+  experiment.
+- Add selector-only component discovery as an explicit pipeline entry.
+- Do not change controllers for slice 1. Selector logic should synthesize flat
+  paths before the registry boundary.
+- Add a compiled-view debugging note for authors: selectors plus supported usage
+  should be explainable as equivalent flat `templateVars` declarations.
+
 ## Open Questions
 
-- Should direct rendering of a selected array-like value infer list output, or
-  should list output require `.map()` or another supported list-shaped usage?
-- Should shape-only list hints use a selector-based shape API, or stay on flat
-  `templateVars` during the experiment?
 - Should the selector API be real runtime code shipped by this package, or only
   recognized by the Babel plugin and provided by the consuming app?
 - Should child components select their own data from the store instead of

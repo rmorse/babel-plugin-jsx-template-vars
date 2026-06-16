@@ -53,6 +53,7 @@ The first proof should not support:
 - spread props
 - HOCs or wrapper component discovery
 - dynamic selector keys
+- optional chaining in selectors
 - calls inside selectors
 - runtime store implementation details
 - generating PHP data assembly code
@@ -120,6 +121,16 @@ const title = useStoreSelector((state) => state.hero.title);
 This keeps the blast radius small and avoids transforming unrelated functions
 named `useStoreSelector`.
 
+Renamed imports should be supported by tracking the local binding:
+
+```jsx
+import {
+	useStoreSelector as useSel,
+} from 'babel-plugin-jsx-template-vars/store';
+
+const title = useSel((state) => state.hero.title);
+```
+
 Potential follow-up:
 
 ```js
@@ -148,23 +159,12 @@ function (state) {
 }
 ```
 
-Potentially supported if straightforward:
-
-```jsx
-(state) => state.hero?.title
-```
-
-Optional chaining should normalize to the same path as static member access:
-
-```txt
-hero.title
-```
-
 Unsupported selector forms should throw clear transform errors:
 
 ```jsx
 (state) => state[group]
 (state) => state.hero[field]
+(state) => state.hero?.title
 (state) => getHero(state)
 (state) => state.hero.title || fallback
 (state) => condition ? state.a : state.b
@@ -174,6 +174,10 @@ Unsupported selector forms should throw clear transform errors:
 
 The error should identify the selector call and explain that store selectors
 only support static member paths for now.
+
+Optional chaining should be rejected in slice 1. It may be normalized to a
+static path later, but the first parser should keep optional runtime semantics
+out of the template contract.
 
 ## Path Mapping
 
@@ -261,17 +265,23 @@ The pipeline should be:
 1. When `experimentalStoreSelectors` is disabled, do nothing.
 2. When `tidyOnly` is enabled, do nothing in the first proof.
 3. Find recognized selector imports.
-4. Traverse component bodies for recognized selector calls.
-5. Parse selector paths.
-6. Track local bindings created from selector calls.
-7. Infer additional paths from visible usage.
-8. Synthesize flat string declarations.
-9. Merge with any explicit flat `templateVars` declarations.
-10. Pass the combined declarations into `createTemplateVarsRegistry`.
-11. Reuse `templateVarsController.init`.
+4. Discover selector-only components with recognized calls even when they have
+   no `Component.templateVars` assignment.
+5. Traverse component bodies for recognized selector calls.
+6. Parse selector paths.
+7. Track local bindings created from selector calls.
+8. Infer additional paths from visible usage.
+9. Synthesize flat string declarations.
+10. Merge with any explicit flat `templateVars` declarations.
+11. Pass the combined declarations into `createTemplateVarsRegistry`.
+12. Reuse `templateVarsController.init`.
 
 The output should still flow through the registry and controllers. The store
 selector collector should not generate PHP or Handlebars directly.
+
+Selectors plus supported usage should have a debuggable compiled view: the
+collector should be able to report the equivalent flat `templateVars` strings it
+synthesized before registry creation.
 
 ## Component Discovery
 
@@ -422,6 +432,10 @@ const products = useStoreSelector((state) => state.products);
 return <>{ products }</>;
 ```
 
+This direct render must not upgrade `products` into list output by itself. The
+conservative rule is: list output requires `.map()`, another explicitly
+supported list-shaped usage, or a flat shape hint.
+
 It is not enough to infer object fields hidden inside opaque helpers:
 
 ```jsx
@@ -463,6 +477,9 @@ Conflicts should use existing registry validation where possible. For example,
 if two sources imply incompatible shapes for the same path, the transform should
 throw rather than silently choosing one.
 
+Do not introduce a selector-based shape API in slice 1. If a future API is
+needed, it should still emit flat strings at the registry boundary.
+
 ## Relation To The Dollar Marker Experiment
 
 The store selector experiment should be independent from the `$$` marker
@@ -502,6 +519,15 @@ Store selector does not support computed properties yet.
 Store selector call must be assigned to a local binding before use.
 ```
 
+```txt
+Store selector optional chaining is not supported yet; use a static member path.
+```
+
+```txt
+Selected path metadata was lost before template output. Use visible supported
+usage or an explicit templateVars shape hint.
+```
+
 Unsupported tracing should be explicit. Do not partially transform a value when
 the collector knows it lost the source path.
 
@@ -514,6 +540,7 @@ Add unit tests for the selector parser:
 - accepts deep static paths
 - accepts function selectors with a direct return
 - rejects computed keys
+- rejects optional chaining in slice 1
 - rejects call expressions
 - rejects conditional expressions
 - rejects multiple params
@@ -528,6 +555,8 @@ Add unit tests for binding collection:
 - selected list binding
 - list `.map()` item alias
 - nested list `.map()` item alias
+- sourceKey parity with equivalent flat nested-list declarations
+- selector-only component discovery
 - unsupported opaque helper body does not invent fields
 
 Add e2e fixtures:
@@ -536,6 +565,13 @@ Add e2e fixtures:
 - `store-selector-nested-object`
 - `store-selector-list`
 - `store-selector-nested-list`
+- `store-selector-multi-role`
+- `store-selector-map-alias`
+- `store-selector-shape-hint-only-field`
+- `store-selector-nested-member-control`
+- `store-selector-child-untraced`
+- `store-selector-selectors-only`
+- `store-selector-conflict`
 - `store-selector-complex-surface`
 - `store-selector-with-flat-shape-hints`
 - `store-selector-unsupported-dynamic`
@@ -545,6 +581,11 @@ Add e2e fixtures:
 Each e2e fixture should assert both PHP and Handlebars output. Where practical,
 add parity fixtures that compare selector-derived output to equivalent flat
 `templateVars` output.
+
+The `store-selector-complex-surface` fixture should have a parity pair against
+`full-template-surface`. Until prop tracing exists, child components can keep
+flat declarations so the fixture tests selector synthesis without implying
+hierarchy tracing.
 
 Expected verification commands:
 
@@ -560,6 +601,7 @@ Phase 1 - parser:
 
 - add selector path parser
 - add parser unit tests
+- reject optional chaining
 - produce structured path metadata
 - convert structured paths to flat strings at the boundary
 
@@ -567,7 +609,9 @@ Phase 2 - import and call discovery:
 
 - detect recognized selector imports
 - collect local imported names
+- support renamed import bindings
 - find calls to those local names
+- discover selector-only components with no `templateVars` assignment
 - skip all work when the flag is disabled
 - skip `node_modules`
 
@@ -586,6 +630,7 @@ Phase 4 - registry integration:
 - call `createTemplateVarsRegistry`
 - reuse existing controllers
 - preserve flat API behavior
+- do not add selector-specific controller behavior
 
 Phase 5 - e2e coverage:
 
@@ -593,6 +638,13 @@ Phase 5 - e2e coverage:
 - add nested object fixture
 - add list fixture
 - add nested list fixture
+- add multi-role fixture
+- add map-alias fixture
+- add shape-hint-only field fixture
+- add nested-member control fixture
+- add selector-only component fixture
+- add conflict fixture
+- add child-untraced negative fixture
 - add complex surface fixture
 - add unsupported selector fixture
 
@@ -601,6 +653,8 @@ Phase 6 - PR documentation:
 - update README only if the experiment becomes worth exposing
 - keep detailed notes in `agents/plans` while still draft-only
 - document unsupported component and tracing cases
+- document the compiled-view debugging model: selectors plus supported usage are
+  equivalent to generated flat `templateVars`
 
 ## Deferred Prop Drilling And Hierarchy Tracing
 
@@ -697,14 +751,25 @@ These patterns can be revisited one by one with tests.
   store?
 - Should import-based recognition be mandatory, or should config allowlists be
   supported from the start?
-- Should shape-only hints remain flat `templateVars` during the experiment, or
-  should we introduce a selector-based shape API early?
+- After slice 1, do flat `templateVars` hints remain ergonomic enough, or do we
+  need a selector-based shape API that still emits flat strings internally?
 - Should same-file prop drilling be included in the first implementation slice,
   or deferred until selector parity is proven?
 - What unsupported selector cases should throw hard errors versus remain runtime
   values?
 - How much helper-body analysis is worth doing before this becomes harder to
   reason about than flat declarations?
+
+## Slice 1 Gates
+
+- Architecture gate: selector mode must not require controller changes.
+- Parity gate: every positive fixture should have equivalent flat output or a
+  documented intentional difference.
+- Discovery gate: selector-only components work without `Component.templateVars`.
+- Debug gate: synthesized declarations can be explained as equivalent flat
+  `templateVars`.
+- Isolation gate: flag off means zero behavior change; `tidyOnly` remains
+  unchanged until explicitly designed.
 
 ## Success Criteria
 
@@ -713,6 +778,9 @@ The experiment is worth continuing if:
 - selector fixtures can match equivalent flat `templateVars` output
 - nested objects and nested lists work through visible usage
 - unsupported selectors fail clearly
+- selector-only components process without a flat declaration assignment
+- flat shape hints merge before registry creation
+- controllers stay unaware of selectors
 - current flat API behavior does not regress
 - marker mode behavior does not regress
 - reviewers can understand the data contract without reading controller code
