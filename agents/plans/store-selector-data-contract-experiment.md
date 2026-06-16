@@ -502,6 +502,26 @@ The recommendation to use `strict: true` for CI/review gates still stands,
 because warning-only unsupported boundaries can intentionally render incomplete
 output while the experiment is draft-only.
 
+### Review 3 Child Boundary And Runtime Follow-Up
+
+Review 3 found that selector-derived list item props passed to child components
+could be both warned as unsupported and synthesized as declarations, leaving
+dangling replacement variables in warning mode. That is now fixed:
+
+- child-component prop expressions that cross the unsupported tracing boundary
+  are excluded from selector declaration synthesis
+- warning mode no longer emits broken runtime code for list item child props
+- strict mode still throws at transform time for the same unsupported boundary
+- child components with their own flat `templateVars` can still render against
+  the surrounding list context when the output is otherwise valid
+
+The package runtime helper should be described as a minimal template-selector
+import target, not a complete app store. One-argument calls now return
+`undefined` instead of throwing, while two-argument calls still evaluate the
+selector against explicit state. The experiment should continue to frame the
+recognized hook as template-scoped and fail-closed until app-owned selector hooks
+are explicitly designed.
+
 ## Open Questions
 
 - Is the minimal runtime `useStoreSelector(selector, state)` helper enough for

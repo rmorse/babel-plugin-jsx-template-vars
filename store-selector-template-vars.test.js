@@ -446,6 +446,68 @@ describe('experimental store selectors', () => {
 		})).toThrow(/prop tracing is not supported/);
 	});
 
+	it('does not partially synthesize selector list item props passed to child components', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			Card.templateVars = [ 'name' ];
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.catalog.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<Card name={ product.name } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main>{{#catalog.products}}<article>{{name}}</article>{{/catalog.products}}</main>');
+		expect(code).not.toContain('name: getLanguageString');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('prop tracing is not supported'));
+	});
+
+	it('throws for selector list item props passed to child components in strict mode', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			Card.templateVars = [ 'name' ];
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.catalog.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<Card name={ product.name } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/prop tracing is not supported/);
+	});
+
 	it('warns when selector values cross opaque helper boundaries', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `

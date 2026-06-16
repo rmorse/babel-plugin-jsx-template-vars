@@ -7,6 +7,10 @@ const {
 } = require('./store');
 
 describe('store selector runtime helper', () => {
+	it('returns undefined for one-argument calls without runtime state', () => {
+		expect(useStoreSelector((state) => state.hero.title)).toBeUndefined();
+	});
+
 	it('runs a selector against provided state', () => {
 		expect(useStoreSelector((state) => state.hero.title, {
 			hero: {

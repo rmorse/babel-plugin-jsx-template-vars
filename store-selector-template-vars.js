@@ -109,6 +109,7 @@ class StoreSelectorCollector {
 		this.aliasEntries = [];
 		this.aliasesByBinding = new WeakMap();
 		this.mapCallPaths = new Set();
+		this.unsupportedChildPropExpressions = new WeakSet();
 	}
 
 	collect() {
@@ -121,8 +122,8 @@ class StoreSelectorCollector {
 		this.collectMapShapes();
 		this.collectLocalAliases();
 		this.collectMapShapes();
-		this.collectAliasUsage();
 		this.collectChildComponentPropUsage();
+		this.collectAliasUsage();
 		this.collectOpaqueHelperUsage();
 		this.neutralizeSelectorDeclarations();
 
@@ -286,6 +287,10 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				if ( this.isUnsupportedChildPropExpression( path ) ) {
+					return;
+				}
+
 				const segments = this.resolveIdentifierSegments( path.node.name, path );
 				if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
 					return;
@@ -302,7 +307,8 @@ class StoreSelectorCollector {
 					this.isPartialMemberExpression( path ) ||
 					this.isMapCalleeObject( path ) ||
 					this.isMapCalleeMember( path ) ||
-					this.isSelectorMethodCallee( path )
+					this.isSelectorMethodCallee( path ) ||
+					this.isUnsupportedChildPropExpression( path )
 				) {
 					return;
 				}
@@ -336,6 +342,7 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				this.unsupportedChildPropExpressions.add( value.expression );
 				diagnostics.unsupported(
 					path,
 					`Store selector value "${ stringifySegments( segments ) }" is passed to child component "${ elementName }", but prop tracing is not supported in this experiment slice.`,
@@ -685,6 +692,17 @@ class StoreSelectorCollector {
 
 		const objectSegments = this.resolveExpressionSegments( path.node.object, path );
 		return Boolean( objectSegments && isSelectorDerivedPath( objectSegments ) );
+	}
+
+	isUnsupportedChildPropExpression( path ) {
+		let currentPath = path;
+		while ( currentPath && currentPath !== this.componentPath ) {
+			if ( this.unsupportedChildPropExpressions.has( currentPath.node ) ) {
+				return true;
+			}
+			currentPath = currentPath.parentPath;
+		}
+		return false;
 	}
 
 	isSafeListChainCall( expression ) {

@@ -1026,6 +1026,34 @@ semantics themselves are still not translated into template conditionals; this
 matches the current flat fixture behavior, where filter predicates only work when
 their fields are present in the declared list shape.
 
+### Review 3 Child Boundary And Runtime Follow-Up
+
+Review 3 identified two follow-up fixes before the `full-template-surface` parity
+gate:
+
+- selector-derived list item props passed to child components were warned as an
+  unsupported tracing boundary but still synthesized into declarations
+- the minimal runtime helper threw for one-argument calls that matched the
+  documented selector examples
+
+Current behavior:
+
+- unsupported child-component prop expressions are recorded before alias-usage
+  synthesis and excluded from generated declarations
+- warning mode degrades to valid output instead of dangling replacement
+  variables
+- strict mode still throws for the unsupported child tracing boundary
+- child components that keep flat `templateVars` can render inside the surrounding
+  list context when their own template contract is valid
+- `useStoreSelector(selector)` returns `undefined` as a safe placeholder when no
+  runtime state is provided
+- `useStoreSelector(selector, state)` evaluates the selector against explicit
+  state
+
+The recognized package-scoped hook should be documented as template-scoped for
+this experiment. It is not yet a general app store hook; non-template use cases
+remain fail-closed until app-owned selector hooks are designed.
+
 ## Success Criteria
 
 The experiment is worth continuing if:
