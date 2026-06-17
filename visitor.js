@@ -50,6 +50,7 @@ const {
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,
 	createStoreSelectorPropAliases,
+	createStoreSelectorSeedAliases,
 	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
@@ -174,43 +175,60 @@ function templateVarsVisitor( babel, config ) {
 			const componentNames = new Set( componentPaths.keys() );
 			const selectorResults = new Map();
 			const childPropTracesByComponent = new Map();
+			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions );
 
+			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
+				selectorResults.clear();
+				childPropTracesByComponent.clear();
+				const childSeedTracesByComponent = new Map();
+
+				componentPaths.forEach( ( componentPath, componentName ) => {
+					const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
+						...config,
+						storeSelectorComponentNames: componentNames,
+						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
+						storeSelectorNeutralizeSelectors: false,
+					} );
+					selectorResults.set( componentName, selectorResult );
+
+					collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent );
+				} );
+
+				let addedSeed = false;
+				childSeedTracesByComponent.forEach( ( seedTraces, componentName ) => {
+					const componentPath = componentPaths.get( componentName );
+					if ( ! componentPath ) {
+						return;
+					}
+
+					const validSeedTraces = seedTraces.filter( seedTrace => isValidStoreSelectorSeedTrace(
+						seedTrace,
+						childPropTracesByComponent.get( componentName ) || []
+					) );
+					const seedAliases = createStoreSelectorSeedAliases( componentPath, validSeedTraces, babel, config );
+					seedAliases.forEach( ( seedAlias ) => {
+						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
+							addedSeed = true;
+						}
+					} );
+				} );
+
+				if ( ! addedSeed ) {
+					break;
+				}
+			}
+
+			selectorResults.clear();
+			childPropTracesByComponent.clear();
 			componentPaths.forEach( ( componentPath, componentName ) => {
 				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
 					...config,
 					storeSelectorComponentNames: componentNames,
-					storeSelectorSeedAliases: storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [],
+					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 				} );
 				selectorResults.set( componentName, selectorResult );
 
-				( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
-					if ( ! childPropTracesByComponent.has( trace.componentName ) ) {
-						childPropTracesByComponent.set( trace.componentName, [] );
-					}
-					childPropTracesByComponent.get( trace.componentName ).push( trace );
-				} );
-
-				( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
-					if (
-						! unsupported.componentName ||
-						! unsupported.propName ||
-						! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
-					) {
-						return;
-					}
-
-					if ( ! childPropTracesByComponent.has( unsupported.componentName ) ) {
-						childPropTracesByComponent.set( unsupported.componentName, [] );
-					}
-					childPropTracesByComponent.get( unsupported.componentName ).push( {
-						componentName: unsupported.componentName,
-						propName: unsupported.propName,
-						path: unsupported.path,
-						segments: unsupported.segments,
-						unsupported: true,
-						message: unsupported.message,
-					} );
-				} );
+				collectChildPropFlows( selectorResult, childPropTracesByComponent, new Map() );
 			} );
 
 			componentPaths.forEach( ( componentPath, componentName ) => {
@@ -332,6 +350,95 @@ function getComponentPath( path, componentName ) {
 		}
 	} );
 	return componentPath;
+}
+
+function createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions ) {
+	const seedAliasesByComponent = new Map();
+	componentPaths.forEach( ( _componentPath, componentName ) => {
+		const seedAliases = storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [];
+		if ( seedAliases.length > 0 ) {
+			seedAliasesByComponent.set( componentName, [ ...seedAliases ] );
+		}
+	} );
+	return seedAliasesByComponent;
+}
+
+function collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent ) {
+	( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
+		pushChildPropFlow( childPropTracesByComponent, trace.componentName, trace );
+	} );
+
+	( selectorResult.childPropSeedTraces || [] ).forEach( ( trace ) => {
+		const seedTrace = {
+			...trace,
+			seedOnly: true,
+		};
+		pushChildPropFlow( childPropTracesByComponent, trace.componentName, seedTrace );
+		pushChildPropFlow( childSeedTracesByComponent, trace.componentName, seedTrace );
+	} );
+
+	( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
+		if (
+			! unsupported.componentName ||
+			! unsupported.propName ||
+			! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
+		) {
+			return;
+		}
+
+		pushChildPropFlow( childPropTracesByComponent, unsupported.componentName, {
+			componentName: unsupported.componentName,
+			propName: unsupported.propName,
+			path: unsupported.path,
+			segments: unsupported.segments,
+			unsupported: true,
+			message: unsupported.message,
+		} );
+	} );
+}
+
+function pushChildPropFlow( flowsByComponent, componentName, flow ) {
+	if ( ! componentName ) {
+		return;
+	}
+
+	if ( ! flowsByComponent.has( componentName ) ) {
+		flowsByComponent.set( componentName, [] );
+	}
+	flowsByComponent.get( componentName ).push( flow );
+}
+
+function isValidStoreSelectorSeedTrace( seedTrace, flows = [] ) {
+	const relatedFlows = flows.filter( flow => flow.propName === seedTrace.propName );
+	const sourcePaths = new Set( relatedFlows.map( flow => flow.path || ( flow.segments || [] ).join( '.' ) ).filter( Boolean ) );
+	return (
+		relatedFlows.length > 0 &&
+		relatedFlows.every( flow => flow.seedOnly ) &&
+		sourcePaths.size === 1
+	);
+}
+
+function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) {
+	if ( ! seedAliasesByComponent.has( componentName ) ) {
+		seedAliasesByComponent.set( componentName, [] );
+	}
+
+	const seedAliases = seedAliasesByComponent.get( componentName );
+	const seedKey = createStoreSelectorSeedAliasKey( seedAlias );
+	if ( seedAliases.some( existing => createStoreSelectorSeedAliasKey( existing ) === seedKey ) ) {
+		return false;
+	}
+
+	seedAliases.push( seedAlias );
+	return true;
+}
+
+function createStoreSelectorSeedAliasKey( seedAlias ) {
+	return [
+		seedAlias.localName,
+		( seedAlias.segments || [] ).join( '.' ),
+		( seedAlias.declarationSegments || [] ).join( '.' ),
+	].join( '|' );
 }
 
 function getTopLevelComponentPaths( programPath, types ) {

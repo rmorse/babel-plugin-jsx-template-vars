@@ -105,7 +105,11 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 	const declarations = [];
 	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
 		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
-		if ( propTraces.some( trace => trace.unsupported ) || sourcePaths.size > 1 ) {
+		if ( propTraces.every( trace => trace.seedOnly ) ) {
+			return;
+		}
+
+		if ( propTraces.some( trace => trace.unsupported || trace.seedOnly ) || sourcePaths.size > 1 ) {
 			const componentName = propTraces[ 0 ]?.componentName || 'child component';
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
@@ -137,6 +141,44 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 		aliases,
 		declarations: Array.from( new Set( declarations ) ).sort(),
 	};
+}
+
+function createStoreSelectorSeedAliases( componentPath, traces = [], babel, config = {} ) {
+	if ( traces.length === 0 ) {
+		return [];
+	}
+
+	const functionPath = componentPath.get( 'declarations.0.init' );
+	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParam = firstParamPath?.node;
+	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
+		return [];
+	}
+
+	const seedAliases = [];
+	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
+		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		if ( propTraces.some( trace => trace.unsupported ) || sourcePaths.size > 1 ) {
+			const componentName = propTraces[ 0 ]?.componentName || 'child component';
+			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+			const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
+			diagnostics.unsupported( componentPath, message, config );
+			return;
+		}
+
+		const bindingPath = findObjectPatternBindingPath( firstParamPath, propName, babel );
+		if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
+			return;
+		}
+
+		seedAliases.push( {
+			localName: bindingPath.node.name,
+			segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
+			declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
+		} );
+	} );
+
+	return seedAliases;
 }
 
 function groupChildPropTraces( traces ) {
@@ -217,6 +259,7 @@ class StoreSelectorCollector {
 		this.unsupportedChildPropExpressions = new WeakSet();
 		this.unsupportedPaths = [];
 		this.childPropTraces = [];
+		this.childPropSeedTraces = [];
 	}
 
 	collect() {
@@ -235,7 +278,9 @@ class StoreSelectorCollector {
 		this.collectChildComponentPropUsage();
 		this.collectAliasUsage();
 		this.collectOpaqueHelperUsage();
-		this.neutralizeSelectorDeclarations();
+		if ( this.config.storeSelectorNeutralizeSelectors !== false ) {
+			this.neutralizeSelectorDeclarations();
+		}
 
 		return this.createResult();
 	}
@@ -263,6 +308,7 @@ class StoreSelectorCollector {
 				childPropTraces: this.childPropTraces,
 			},
 			childPropTraces: this.childPropTraces,
+			childPropSeedTraces: this.childPropSeedTraces,
 		};
 	}
 
@@ -547,8 +593,8 @@ class StoreSelectorCollector {
 				}
 
 				const expressionPath = path.get( 'value.expression' );
-				const segments = this.resolveExpressionSegments( value.expression, path );
-				if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+				const expressionInfo = this.resolveExpressionInfo( value.expression, path );
+				if ( ! expressionInfo || ! isSelectorDerivedPath( expressionInfo.segments ) ) {
 					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
 					if ( selectorSources.length === 0 ) {
 						return;
@@ -573,6 +619,7 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				const segments = expressionInfo.segments;
 				if ( this.canTraceChildProp( elementName, segments ) ) {
 					this.childPropTraces.push( {
 						componentName: elementName,
@@ -580,6 +627,19 @@ class StoreSelectorCollector {
 						path: stringifySegments( segments ),
 						segments: normalizeSegments( segments ),
 					} );
+					return;
+				}
+
+				if ( this.canSeedChildProp( elementName, segments ) ) {
+					this.addParentListDeclarationForSeed( segments );
+					this.childPropSeedTraces.push( {
+						componentName: elementName,
+						propName: path.node.name.name,
+						path: stringifySegments( segments ),
+						segments: normalizeSegments( segments ),
+						declarationSegments: this.getChildSeedDeclarationSegments( expressionInfo ),
+					} );
+					this.unsupportedChildPropExpressions.add( value.expression );
 					return;
 				}
 
@@ -599,6 +659,19 @@ class StoreSelectorCollector {
 				);
 			},
 		} );
+	}
+
+	addParentListDeclarationForSeed( segments ) {
+		const normalizedSegments = normalizeCanonicalSegments( segments );
+		const lastListIndex = normalizedSegments.reduce( ( match, segment, index ) => (
+			String( segment ).endsWith( '[]' ) ? index : match
+		), -1 );
+
+		if ( lastListIndex < 0 ) {
+			return;
+		}
+
+		this.declarations.add( stringifySegments( normalizedSegments.slice( 0, lastListIndex + 1 ) ) );
 	}
 
 	collectMapCallShape( path ) {
@@ -879,6 +952,29 @@ class StoreSelectorCollector {
 
 		const normalizedSegments = normalizeSegments( segments );
 		return normalizedSegments.length > 1 && ! normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) );
+	}
+
+	canSeedChildProp( componentName, segments ) {
+		const componentNames = this.config.storeSelectorComponentNames;
+		if ( ! componentNames || ! componentNames.has( componentName ) ) {
+			return false;
+		}
+
+		const normalizedSegments = normalizeSegments( segments );
+		if ( normalizedSegments.length === 0 ) {
+			return false;
+		}
+
+		return normalizedSegments.length === 1 || normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) );
+	}
+
+	getChildSeedDeclarationSegments( expressionInfo ) {
+		const declarationSegments = normalizeCanonicalSegments( expressionInfo.declarationSegments || expressionInfo.segments );
+		const lastListIndex = declarationSegments.reduce( ( match, segment, index ) => (
+			String( segment ).endsWith( '[]' ) ? index : match
+		), -1 );
+
+		return lastListIndex >= 0 ? declarationSegments.slice( lastListIndex + 1 ) : declarationSegments;
 	}
 
 	getPatternPropertyName( property ) {
@@ -1277,6 +1373,7 @@ module.exports = {
 	collectStoreSelectorImports,
 	collectStoreSelectorTemplateVars,
 	createStoreSelectorPropAliases,
+	createStoreSelectorSeedAliases,
 	createAliasResolver,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
