@@ -428,6 +428,248 @@ describe('experimental store selectors', () => {
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('prop tracing is not supported'));
 	});
 
+	it('can seed child-body discovery from an incoming object alias without selector calls', async () => {
+		const source = `
+			const Header = ({ hero }) => {
+				const heading = hero.title;
+				return <h1>{ heading }</h1>;
+			};
+
+			module.exports = { Header };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'Header', {}, {
+			...selectorOptions,
+			storeSelectorSeedAliasesByComponent: {
+				Header: [
+					{
+						localName: 'hero',
+						segments: [ 'hero' ],
+					},
+				],
+			},
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('can seed list-relative discovery without creating a duplicate list wrapper', () => {
+		const source = `
+			const ProductCard = ({ product }) => {
+				return <article>{ product.name }</article>;
+			};
+
+			module.exports = { ProductCard };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+			storeSelectorSeedAliasesByComponent: {
+				ProductCard: [
+					{
+						localName: 'product',
+						segments: [ 'products[]' ],
+						declarationSegments: [],
+					},
+				],
+			},
+		});
+		const [ debug ] = result.metadata.storeSelectorTemplateVars;
+
+		expect(debug.declarations).toEqual([ 'name' ]);
+		expect(debug.listShapes).toEqual([]);
+		expect(result.code).not.toContain('{{#products}}');
+	});
+
+	it('records unsupported selector metadata even when warnings are suppressed', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
+
+		expect(warn).not.toHaveBeenCalled();
+		expect(result.metadata.storeSelectorTemplateVarsUnsupported).toEqual([
+			expect.objectContaining({
+				componentName: 'App',
+				unsupported: [
+					expect.objectContaining({
+						kind: 'child-prop',
+						path: 'hero',
+					}),
+				],
+			}),
+		]);
+	});
+
+	it('records explicit templateVars that shadow seeded discovery declarations', () => {
+		const source = `
+			const ProductCard = ({ product }) => {
+				return <article>{ product.name }</article>;
+			};
+
+			ProductCard.templateVars = [ 'name' ];
+
+			module.exports = { ProductCard };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+			storeSelectorSeedAliasesByComponent: {
+				ProductCard: [
+					{
+						localName: 'product',
+						segments: [ 'products[]' ],
+						declarationSegments: [],
+					},
+				],
+			},
+		});
+		const [ debug ] = result.metadata.storeSelectorTemplateVars;
+
+		expect(debug.declarations).toEqual([ 'name' ]);
+		expect(debug.explicitTemplateVars).toEqual([ 'name' ]);
+		expect(debug.shadowedTemplateVars).toEqual([ 'name' ]);
+		expect(debug.combinedTemplateVars).toEqual([ 'name' ]);
+	});
+
+	it('records unsupported selector-derived child prop boundary expressions', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const cases = [
+			{
+				name: 'logical',
+				render: 'return <Header hero={ hero && hero.title } />;',
+				boundary: 'LogicalExpression',
+			},
+			{
+				name: 'conditional',
+				render: 'return <Header hero={ hero.featured ? hero.title : hero.summary } />;',
+				boundary: 'ConditionalExpression',
+			},
+			{
+				name: 'computed member',
+				extraSetup: 'const key = "title";',
+				render: 'return <Header hero={ hero[key] } />;',
+				boundary: 'MemberExpression',
+			},
+			{
+				name: 'template literal',
+				render: 'return <Header hero={ `${ hero.title }` } />;',
+				boundary: 'TemplateLiteral',
+			},
+			{
+				name: 'call expression',
+				render: 'return <Header hero={ formatHero(hero) } />;',
+				boundary: 'CallExpression',
+			},
+			{
+				name: 'spread',
+				render: 'return <Header {...hero} />;',
+				boundary: 'JSXSpreadAttribute',
+			},
+			{
+				name: 'multiple selector sources',
+				extraSetup: 'const fallbackHero = useStoreSelector((state) => state.fallbackHero);',
+				render: 'return <Header hero={ hero || fallbackHero } />;',
+				boundary: 'LogicalExpression',
+			},
+		];
+
+		cases.forEach( ( testCase ) => {
+			const source = `
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const formatHero = (hero) => hero.title;
+				const Header = ({ hero }) => {
+					return <h1>{ hero }</h1>;
+				};
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					${ testCase.extraSetup || '' }
+					${ testCase.render }
+				};
+
+				module.exports = { App };
+			`;
+
+			const result = transformTemplateVars(source, {
+				...selectorOptions,
+				warnOnUnsupported: false,
+			});
+			const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
+
+			expect(entry.unsupported).toEqual(expect.arrayContaining([
+				expect.objectContaining({
+					kind: 'child-prop-boundary',
+					boundary: testCase.boundary,
+				}),
+			]));
+		});
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('records unsupported metadata when one child receives selector props inside and outside list context', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			const App = () => {
+				const featured = useStoreSelector((state) => state.featured);
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						<Card name={ featured.name } />
+						{ products.map((product) => (
+							<Card name={ product.name } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
+		const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
+
+		expect(entry.unsupported).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				kind: 'child-prop',
+				path: 'products[].name',
+			}),
+		]));
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('preserves registry validation for selector and flat hint conflicts', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';

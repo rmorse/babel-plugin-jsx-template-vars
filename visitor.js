@@ -167,6 +167,7 @@ function templateVarsVisitor( babel, config ) {
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
 			const debugEntries = [];
+			const unsupportedEntries = [];
 			const componentNames = new Set( componentPaths.keys() );
 			const selectorResults = new Map();
 			const childPropTracesByComponent = new Map();
@@ -175,6 +176,7 @@ function templateVarsVisitor( babel, config ) {
 				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
 					...config,
 					storeSelectorComponentNames: componentNames,
+					storeSelectorSeedAliases: config.storeSelectorSeedAliasesByComponent?.[ componentName ] || [],
 				} );
 				selectorResults.set( componentName, selectorResult );
 
@@ -198,11 +200,21 @@ function templateVarsVisitor( babel, config ) {
 					...selectorResult.aliases,
 					...propTraceResult.aliases,
 				];
+				const explicitTemplateVars = pending?.templateVars || [];
+				const explicitTemplateVarsSet = new Set( explicitTemplateVars );
+				const shadowedTemplateVars = selectorResult.declarations.filter( declaration => explicitTemplateVarsSet.has( declaration ) );
+				const selectorDeclarations = selectorResult.declarations.filter( declaration => ! explicitTemplateVarsSet.has( declaration ) );
 				const combinedTemplateVars = Array.from( new Set( [
-					...( pending?.templateVars || [] ),
-					...selectorResult.declarations,
+					...explicitTemplateVars,
+					...selectorDeclarations,
 					...propTraceResult.declarations,
 				] ) );
+				if ( selectorResult.debug.unsupported.length > 0 ) {
+					unsupportedEntries.push( {
+						componentName,
+						unsupported: selectorResult.debug.unsupported,
+					} );
+				}
 
 				if (
 					debugStoreSelectors &&
@@ -222,7 +234,8 @@ function templateVarsVisitor( babel, config ) {
 						unsupported: selectorResult.debug.unsupported,
 						childPropTraces: selectorResult.debug.childPropTraces,
 						incomingPropTraces: childPropTracesByComponent.get( componentName ) || [],
-						explicitTemplateVars: pending?.templateVars || [],
+						explicitTemplateVars,
+						shadowedTemplateVars,
 						combinedTemplateVars,
 					} );
 				}
@@ -268,6 +281,12 @@ function templateVarsVisitor( babel, config ) {
 				state.file.metadata.storeSelectorTemplateVars = [
 					...( state.file.metadata.storeSelectorTemplateVars || [] ),
 					...debugEntries,
+				];
+			}
+			if ( unsupportedEntries.length > 0 ) {
+				state.file.metadata.storeSelectorTemplateVarsUnsupported = [
+					...( state.file.metadata.storeSelectorTemplateVarsUnsupported || [] ),
+					...unsupportedEntries,
 				];
 			}
 		}
