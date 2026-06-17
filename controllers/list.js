@@ -343,6 +343,12 @@ class ListController {
 			return;
 		}
 
+		const receiverReplacement = this.getListMapReceiverReplacement( path );
+		if ( receiverReplacement ) {
+			receiverReplacement.targetPath.replaceWith( receiverReplacement.replacementExpression );
+			return;
+		}
+
 		const aliasListMetadata = this.resolveListMetaFromExpression( path.node, path );
 		const replacementExpression = aliasListMetadata
 			? this.createReplacementExpressionForListMetadata( aliasListMetadata )
@@ -411,6 +417,25 @@ class ListController {
 		), types.identifier( mappedRoot ) );
 	}
 
+	getListMapReceiverReplacement( path ) {
+		const mapCalleePath = this.getContainingMapCalleePath( path );
+		if ( ! mapCalleePath ) {
+			return null;
+		}
+
+		const targetPath = mapCalleePath.get( 'object' );
+		if ( ! targetPath || targetPath === path ) {
+			return null;
+		}
+
+		const metadata = this.resolveListMetaFromExpression( targetPath.node, targetPath );
+		const replacementExpression = metadata ? this.createReplacementExpressionForListMetadata( metadata ) : null;
+		return replacementExpression ? {
+			targetPath,
+			replacementExpression,
+		} : null;
+	}
+
 	shouldReplaceRootObjectIdentifier( path ) {
 		const { types } = this.babel;
 		const memberPath = this.getContainingMemberPath( path );
@@ -429,6 +454,35 @@ class ListController {
 		}
 
 		return false;
+	}
+
+	getContainingMapCalleePath( path ) {
+		const { types } = this.babel;
+		let currentPath = path;
+
+		while ( currentPath.parentPath ) {
+			const parentPath = currentPath.parentPath;
+			if (
+				types.isMemberExpression( parentPath.node ) &&
+				parentPath.node.object === currentPath.node
+			) {
+				currentPath = parentPath;
+				continue;
+			}
+
+			if (
+				types.isCallExpression( parentPath.node ) &&
+				parentPath.node.callee === currentPath.node &&
+				this.isSafeListChainCall( parentPath.node )
+			) {
+				currentPath = parentPath;
+				continue;
+			}
+
+			break;
+		}
+
+		return this.isMapCalleePath( currentPath ) ? currentPath : null;
 	}
 
 	getContainingMemberPath( path ) {

@@ -189,6 +189,28 @@ function templateVarsVisitor( babel, config ) {
 					}
 					childPropTracesByComponent.get( trace.componentName ).push( trace );
 				} );
+
+				( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
+					if (
+						! unsupported.componentName ||
+						! unsupported.propName ||
+						! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
+					) {
+						return;
+					}
+
+					if ( ! childPropTracesByComponent.has( unsupported.componentName ) ) {
+						childPropTracesByComponent.set( unsupported.componentName, [] );
+					}
+					childPropTracesByComponent.get( unsupported.componentName ).push( {
+						componentName: unsupported.componentName,
+						propName: unsupported.propName,
+						path: unsupported.path,
+						segments: unsupported.segments,
+						unsupported: true,
+						message: unsupported.message,
+					} );
+				} );
 			} );
 
 			componentPaths.forEach( ( componentPath, componentName ) => {
@@ -197,7 +219,8 @@ function templateVarsVisitor( babel, config ) {
 				const propTraceResult = createStoreSelectorPropAliases(
 					componentPath,
 					childPropTracesByComponent.get( componentName ) || [],
-					babel
+					babel,
+					config
 				);
 				const aliases = [
 					...selectorResult.aliases,

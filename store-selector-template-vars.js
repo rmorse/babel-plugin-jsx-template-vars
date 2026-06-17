@@ -83,7 +83,7 @@ function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, ba
 	return collector.collect();
 }
 
-function createStoreSelectorPropAliases( componentPath, traces = [], babel ) {
+function createStoreSelectorPropAliases( componentPath, traces = [], babel, config = {} ) {
 	if ( traces.length === 0 ) {
 		return {
 			aliases: [],
@@ -103,7 +103,17 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel ) {
 
 	const aliases = [];
 	const declarations = [];
-	traces.forEach( ( trace ) => {
+	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
+		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		if ( propTraces.some( trace => trace.unsupported ) || sourcePaths.size > 1 ) {
+			const componentName = propTraces[ 0 ]?.componentName || 'child component';
+			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+			const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
+			diagnostics.unsupported( componentPath, message, config );
+			return;
+		}
+
+		const trace = propTraces[ 0 ];
 		const bindingPath = findObjectPatternBindingPath( firstParamPath, trace.propName, babel );
 		if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
 			return;
@@ -127,6 +137,21 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel ) {
 		aliases,
 		declarations: Array.from( new Set( declarations ) ).sort(),
 	};
+}
+
+function groupChildPropTraces( traces ) {
+	const tracesByProp = new Map();
+	traces.forEach( ( trace ) => {
+		if ( ! trace || ! trace.propName ) {
+			return;
+		}
+
+		if ( ! tracesByProp.has( trace.propName ) ) {
+			tracesByProp.set( trace.propName, [] );
+		}
+		tracesByProp.get( trace.propName ).push( trace );
+	} );
+	return tracesByProp;
 }
 
 function findObjectPatternBindingPath( patternPath, propName, babel ) {

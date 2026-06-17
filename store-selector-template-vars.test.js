@@ -18,7 +18,7 @@ function expectNoOrphanedTemplateReplacements(code, rawAccesses = []) {
 		expect(code).not.toContain(rawAccess);
 	});
 
-	const declarations = Array.from(code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*getLanguageReplace/g));
+	const declarations = Array.from(code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*getLanguage(?:Replace|List)/g));
 	expect(declarations.length).toBeGreaterThan(0);
 
 	declarations.forEach((match) => {
@@ -564,6 +564,64 @@ describe('experimental store selectors', () => {
 
 	it.each([
 		[
+			'handlebars',
+			'<main>{{#products}}<article><ul>{{#badges}}<li>{{label}}</li>{{/badges}}</ul></article>{{/products}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><ul><?php foreach ( $data_1['badges'] as $data_2 ) { ?><li><?php echo $data_2['label']; ?></li><?php } ?></ul></article><?php } ?></main>",
+		],
+	])('renders seeded nested list-relative children through parent list context for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ProductCard = ({ product }) => {
+				return (
+					<article>
+						<ul>
+							{ product.badges.map((badge) => (
+								<li>{ badge.label }</li>
+							)) }
+						</ul>
+					</article>
+				);
+			};
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard product={ product } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const options = {
+			experimentalStoreSelectors: {
+				__seedAliasesByComponent: {
+					ProductCard: [
+						{
+							localName: 'product',
+							segments: [ 'products[]' ],
+							declarationSegments: [],
+						},
+					],
+				},
+			},
+			warnOnUnsupported: false,
+		};
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, options);
+
+		expectNoOrphanedTemplateReplacements(code, [ 'product.badges' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
 			{ localName: 'hero' },
 			/seed aliases must include a localName string and segments array/,
 		],
@@ -779,6 +837,35 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('does not globally alias child props with multiple selector sources', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			const App = () => {
+				const featured = useStoreSelector((state) => state.featured);
+				const secondary = useStoreSelector((state) => state.secondary);
+				return (
+					<main>
+						<Card name={ featured.name } />
+						<Card name={ secondary.name } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article><article>{{secondary.name}}</article></main>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('has ambiguous or unsupported sources'));
+	});
+
 	it('records unsupported metadata when one child receives selector props inside and outside list context', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -820,7 +907,7 @@ describe('experimental store selectors', () => {
 				path: 'products[].name',
 			}),
 		]));
-		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article>{{#products}}<article>{{featured.name}}</article>{{/products}}</main>');
+		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article>{{#products}}<article></article>{{/products}}</main>');
 		expect(warn).not.toHaveBeenCalled();
 	});
 
