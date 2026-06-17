@@ -9,6 +9,25 @@ const selectorOptions = {
 	experimentalStoreSelectors: true,
 };
 
+function escapeRegExp(value) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function expectNoOrphanedTemplateReplacements(code, rawAccesses = []) {
+	rawAccesses.forEach((rawAccess) => {
+		expect(code).not.toContain(rawAccess);
+	});
+
+	const declarations = Array.from(code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*getLanguageReplace/g));
+	expect(declarations.length).toBeGreaterThan(0);
+
+	declarations.forEach((match) => {
+		const variableName = match[1];
+		const usages = code.match(new RegExp(`\\b${ escapeRegExp(variableName) }\\b`, 'g')) || [];
+		expect(usages.length).toBeGreaterThan(1);
+	});
+}
+
 describe('experimental store selectors', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -489,7 +508,90 @@ describe('experimental store selectors', () => {
 		expect(debug.declarations).toEqual([ 'name' ]);
 		expect(debug.listShapes).toEqual([]);
 		expect(result.code).not.toContain('{{#products}}');
+		expectNoOrphanedTemplateReplacements(result.code, [ 'product.name' ]);
 		expect(normalizeTemplateOutput(output)).toBe('<article>{{name}}</article>');
+	});
+
+	it.each([
+		[
+			'handlebars',
+			'<main>{{#products}}<article>{{name}}</article>{{/products}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><?php echo $data_1['name']; ?></article><?php } ?></main>",
+		],
+	])('renders seeded list-relative children through parent list context for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ProductCard = ({ product }) => {
+				return <article>{ product.name }</article>;
+			};
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard product={ product } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const options = {
+			experimentalStoreSelectors: {
+				__seedAliasesByComponent: {
+					ProductCard: [
+						{
+							localName: 'product',
+							segments: [ 'products[]' ],
+							declarationSegments: [],
+						},
+					],
+				},
+			},
+			warnOnUnsupported: false,
+		};
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, options);
+
+		expectNoOrphanedTemplateReplacements(code, [ 'product.name' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
+			{ localName: 'hero' },
+			/seed aliases must include a localName string and segments array/,
+		],
+		[
+			{ localName: 'hero', segments: [ 'hero' ], declarationSegments: 'hero' },
+			/declarationSegments must be an array/,
+		],
+		[
+			{ localName: 'missing', segments: [ 'hero' ] },
+			/could not be resolved in the component scope/,
+		],
+	])('throws for malformed internal seed aliases %#', (seedAlias, message) => {
+		const source = `
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			module.exports = { Header };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				__seedAliasesByComponent: {
+					Header: [ seedAlias ],
+				},
+			},
+		})).toThrow(message);
 	});
 
 	it('records unsupported selector metadata even when warnings are suppressed', () => {
@@ -570,6 +672,7 @@ describe('experimental store selectors', () => {
 		expect(debug.explicitTemplateVars).toEqual([ 'name' ]);
 		expect(debug.shadowedTemplateVars).toEqual([ 'name' ]);
 		expect(debug.combinedTemplateVars).toEqual([ 'name' ]);
+		expectNoOrphanedTemplateReplacements(result.code, [ 'product.name' ]);
 		expect(normalizeTemplateOutput(output)).toBe('<article>{{name}}</article>');
 	});
 
@@ -623,6 +726,13 @@ describe('experimental store selectors', () => {
 				boundary: 'ArrowFunctionExpression',
 			},
 			{
+				name: 'children',
+				render: 'return <Header>{ hero.title }</Header>;',
+				boundary: 'JSXChildren',
+				propName: 'children',
+				target: 'Header.children',
+			},
+			{
 				name: 'multiple selector sources',
 				extraSetup: 'const fallbackHero = useStoreSelector((state) => state.fallbackHero);',
 				render: 'return <Header hero={ hero || fallbackHero } />;',
@@ -660,6 +770,8 @@ describe('experimental store selectors', () => {
 					kind: 'child-prop-boundary',
 					boundary: testCase.boundary,
 					componentName: 'Header',
+					propName: testCase.propName || expect.any(String),
+					target: testCase.target || expect.any(String),
 					sourcePaths: testCase.sourcePaths ? expect.arrayContaining(testCase.sourcePaths) : expect.any(Array),
 				}),
 			]));
@@ -667,7 +779,7 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it('records unsupported metadata when one child receives selector props inside and outside list context', () => {
+	it('records unsupported metadata when one child receives selector props inside and outside list context', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -696,6 +808,10 @@ describe('experimental store selectors', () => {
 			...selectorOptions,
 			warnOnUnsupported: false,
 		});
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
 		const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
 
 		expect(entry.unsupported).toEqual(expect.arrayContaining([
@@ -704,6 +820,7 @@ describe('experimental store selectors', () => {
 				path: 'products[].name',
 			}),
 		]));
+		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article>{{#products}}<article>{{featured.name}}</article>{{/products}}</main>');
 		expect(warn).not.toHaveBeenCalled();
 	});
 

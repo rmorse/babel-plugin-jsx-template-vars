@@ -440,6 +440,42 @@ class StoreSelectorCollector {
 
 	collectChildComponentPropUsage() {
 		this.componentPath.traverse( {
+			JSXElement: ( path ) => {
+				const openingElement = path.node.openingElement;
+				const elementName = openingElement?.name?.name;
+				if ( typeof elementName !== 'string' || ! /^[A-Z]/.test( elementName ) ) {
+					return;
+				}
+
+				path.get( 'children' ).forEach( ( childPath ) => {
+					if ( ! this.babel.types.isJSXExpressionContainer( childPath.node ) ) {
+						return;
+					}
+
+					const expressionPath = childPath.get( 'expression' );
+					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
+					if ( selectorSources.length === 0 ) {
+						return;
+					}
+
+					const sourceSegments = selectorSources[ 0 ];
+					const message = `Store selector value "${ stringifySegments( sourceSegments ) }" is used in unsupported children for child component "${ elementName }".`;
+					this.unsupportedChildPropExpressions.add( childPath.node.expression );
+					this.recordUnsupported( 'child-prop-boundary', sourceSegments, message, {
+						boundary: 'JSXChildren',
+						componentName: elementName,
+						propName: 'children',
+						target: `${ elementName }.children`,
+						sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+						sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+					} );
+					diagnostics.unsupported(
+						childPath,
+						message,
+						this.config
+					);
+				} );
+			},
 			JSXSpreadAttribute: ( path ) => {
 				const openingElement = path.parentPath?.node;
 				const elementName = openingElement?.name?.name;
@@ -662,13 +698,34 @@ class StoreSelectorCollector {
 
 	registerSeedAliases() {
 		this.seedAliases.forEach( ( seedAlias ) => {
-			if ( ! seedAlias || ! seedAlias.localName || ! Array.isArray( seedAlias.segments ) ) {
-				return;
+			if (
+				! seedAlias ||
+				typeof seedAlias.localName !== 'string' ||
+				seedAlias.localName.length === 0 ||
+				! Array.isArray( seedAlias.segments )
+			) {
+				diagnostics.error(
+					this.componentPath,
+					'Store selector seed aliases must include a localName string and segments array.'
+				);
+			}
+
+			if (
+				typeof seedAlias.declarationSegments !== 'undefined' &&
+				! Array.isArray( seedAlias.declarationSegments )
+			) {
+				diagnostics.error(
+					this.componentPath,
+					'Store selector seed alias declarationSegments must be an array when provided.'
+				);
 			}
 
 			const binding = this.componentFunctionPath.scope.getBinding( seedAlias.localName );
 			if ( ! binding ) {
-				return;
+				diagnostics.error(
+					this.componentPath,
+					`Store selector seed alias "${ seedAlias.localName }" could not be resolved in the component scope.`
+				);
 			}
 
 			this.registerBindingAlias( binding, seedAlias.localName, seedAlias.segments, {
