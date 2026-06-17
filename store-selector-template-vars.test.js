@@ -837,6 +837,35 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('allows supported list maps as child component children', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Wrapper = ({ children }) => {
+				return <div className="wrap">{ children }</div>;
+			};
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<Wrapper>
+						{ products.map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</Wrapper>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<div className="wrap">{{#products}}<li>{{title}}</li>{{/products}}</div>');
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported children'));
+	});
+
 	it('does not globally alias child props with multiple selector sources', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `

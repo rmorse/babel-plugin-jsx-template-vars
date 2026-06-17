@@ -478,6 +478,10 @@ class StoreSelectorCollector {
 					}
 
 					const expressionPath = childPath.get( 'expression' );
+					if ( this.isSupportedListRenderExpression( expressionPath.node, expressionPath ) ) {
+						return;
+					}
+
 					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
 					if ( selectorSources.length === 0 ) {
 						return;
@@ -1135,6 +1139,21 @@ class StoreSelectorCollector {
 
 		const objectSegments = this.resolveExpressionSegments( expression.callee.object, path );
 		return Boolean( objectSegments && isSelectorDerivedPath( objectSegments ) );
+	}
+
+	isSupportedListRenderExpression( expression, path ) {
+		const { types } = this.babel;
+		if (
+			! types.isCallExpression( expression ) ||
+			! types.isMemberExpression( expression.callee ) ||
+			! types.isIdentifier( expression.callee.property ) ||
+			expression.callee.property.name !== 'map'
+		) {
+			return false;
+		}
+
+		const sourceInfo = this.resolveExpressionInfo( expression.callee.object, path );
+		return Boolean( sourceInfo && isSelectorDerivedPath( sourceInfo.segments ) );
 	}
 
 	throwUnsupportedListChain( path ) {
