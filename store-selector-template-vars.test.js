@@ -525,9 +525,7 @@ describe('experimental store selectors', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-			const ProductCard = ({ product }) => {
-				return <article>{ product.name }</article>;
-			};
+			const ProductCard = ({ product }) => <article>{ product.name }</article>;
 
 			const App = () => {
 				const products = useStoreSelector((state) => state.products);
@@ -575,17 +573,15 @@ describe('experimental store selectors', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-			const ProductCard = ({ product }) => {
-				return (
-					<article>
-						<ul>
-							{ product.badges.map((badge) => (
-								<li>{ badge.label }</li>
-							)) }
-						</ul>
-					</article>
-				);
-			};
+			const ProductCard = ({ product }) => (
+				<article>
+					<ul>
+						{ product.badges.map((badge) => (
+							<li>{ badge.label }</li>
+						)) }
+					</ul>
+				</article>
+			);
 
 			const App = () => {
 				const products = useStoreSelector((state) => state.products);

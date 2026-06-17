@@ -34,6 +34,17 @@ const isHookCall = (callee, types) => {
 	return types.isIdentifier(callee) && hookPattern.test(callee.name);
 };
 
+function normalizeExpressionBodiedArrowComponent( componentPath, types ) {
+	const component = componentPath.node.declarations?.[ 0 ]?.init;
+	if ( ! types.isArrowFunctionExpression( component ) || types.isBlockStatement( component.body ) ) {
+		return;
+	}
+
+	component.body = types.blockStatement([
+		types.returnStatement( component.body ),
+	]);
+}
+
 const templateVarsController = {
 	babel: {},
 	vars: {
@@ -46,6 +57,7 @@ const templateVarsController = {
 	init: function (templateVars, componentName, componentPath, babel, config = {}) {
 		this.babel = babel;
 		const { types, parse } = babel;
+		normalizeExpressionBodiedArrowComponent( componentPath, types );
 		// Get the three types of template vars.
 		const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 		const sharedVarMap = {};
