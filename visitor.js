@@ -108,6 +108,9 @@ function templateVarsVisitor( babel, config ) {
 	const tidyOnly = config.tidyOnly ?? false;
 	const experimentalStoreSelectors = isStoreSelectorEnabled( config );
 	const debugStoreSelectors = isStoreSelectorDebugEnabled( config );
+	const storeSelectorOptions = typeof config.experimentalStoreSelectors === 'object' && config.experimentalStoreSelectors !== null ?
+		config.experimentalStoreSelectors :
+		{};
 	const pendingTemplateVars = new Map();
 
 	const visitor = {
@@ -176,7 +179,7 @@ function templateVarsVisitor( babel, config ) {
 				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
 					...config,
 					storeSelectorComponentNames: componentNames,
-					storeSelectorSeedAliases: config.storeSelectorSeedAliasesByComponent?.[ componentName ] || [],
+					storeSelectorSeedAliases: storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [],
 				} );
 				selectorResults.set( componentName, selectorResult );
 

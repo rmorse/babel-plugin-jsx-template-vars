@@ -459,6 +459,9 @@ class StoreSelectorCollector {
 					boundary: 'JSXSpreadAttribute',
 					componentName: elementName,
 					propName: '<spread>',
+					target: `${ elementName }.<spread>`,
+					sourcePaths: selectorSources.map( segments => stringifySegments( segments ) ),
+					sourceSegments: selectorSources.map( segments => normalizeSegments( segments ) ),
 				} );
 				diagnostics.unsupported(
 					path,
@@ -493,6 +496,9 @@ class StoreSelectorCollector {
 						boundary: value.expression.type,
 						componentName: elementName,
 						propName: path.node.name.name,
+						target: `${ elementName }.${ path.node.name.name }`,
+						sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+						sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
 					} );
 					diagnostics.unsupported(
 						path,
@@ -514,7 +520,13 @@ class StoreSelectorCollector {
 
 				const message = `Store selector value "${ stringifySegments( segments ) }" is passed to child component "${ elementName }", but prop tracing is not supported in this experiment slice.`;
 				this.unsupportedChildPropExpressions.add( value.expression );
-				this.recordUnsupported( 'child-prop', segments, message );
+				this.recordUnsupported( 'child-prop', segments, message, {
+					componentName: elementName,
+					propName: path.node.name.name,
+					target: `${ elementName }.${ path.node.name.name }`,
+					sourcePaths: [ stringifySegments( segments ) ],
+					sourceSegments: [ normalizeSegments( segments ) ],
+				} );
 				diagnostics.unsupported(
 					path,
 					message,
@@ -1100,7 +1112,7 @@ function createAliasResolver( aliases = [] ) {
 		const binding = path?.scope?.getBinding( segments[ 0 ] );
 		if ( binding && aliasesByBinding.has( binding.identifier ) ) {
 			return [
-				...aliasesByBinding.get( binding.identifier ).segments,
+				...( aliasesByBinding.get( binding.identifier ).declarationSegments || aliasesByBinding.get( binding.identifier ).segments ),
 				...segments.slice( 1 ),
 			];
 		}

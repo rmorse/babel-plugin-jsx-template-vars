@@ -434,3 +434,23 @@ overlaps (`hero` vs `hero.title`) are not reconciled and both reach the registry
    parent-context integration test (T1); (c) harden the seed bridge (D2). Defer
    D1's full controller wiring to the Phase C gate, but track it now.
 
+## Testing-infrastructure gaps (T-series)
+
+B1 survived CI because the seed/selector tests assert **synthesis metadata and
+code substrings**, not **rendered output**. The throwaway render/codegen probes
+used during this review found B1 in minutes; their *assertions* (not the scripts)
+should become permanent. Root cause to fix at the infra level, not case by case.
+
+| ID | Gap | Notes / current weak tests |
+| --- | --- | --- |
+| T1 | No parent-context integration test for seeded children | Render `App` (selector + `<ProductCard product={ product } />` in a `.map`) with a `ProductCard` seed, assert byte output incl. `$data_1` depth. Uses existing `renderTemplateFixture` — no new helper needed. Member-access variant is **red until B1**; a destructured variant is **green now** and proves the happy path. |
+| T2 | Metadata-only assertions where output is the real contract | Convert to render assertions: line **456** (list-relative — red until B1), **523** (shadow — only checks `debug.*`), **633** (mixed context — only checks the unsupported record, not the misleading `{{featured.name}}` output, D3). |
+| T3 | No invariant guard for orphaned synthesis | Add a reusable assertion: transformed selector/seed output must contain **no un-rewritten selector-derived member access** (`product.`/`hero.` surviving in returned JSX) and **no dead `getLanguageReplace` declaration** (a `_uid` that is declared but never referenced). This is the generalized catch for the B1 class (declaration created, usage not rewritten). |
+| T4 | Policy: selector/seed tests default to output assertions | `code.toContain(...)` / `metadata` checks are fine as *supplements*, not as the sole assertion for a case that produces rendered HTML. Boundary-catalog tests (557-631) are exempt — they assert warn/skip, which has no meaningful render. |
+
+Note on landing these under the repo's "fix failing tests first" rule: T1
+(member-access) and T2/456 are faithful tests that are **red today**. Land them
+**paired with the B1 fix** (so they act as the regression gate), or as a green
+happy-path now (T1 destructured + T3 invariant, both pass) with the red variants
+deferred to the fix slice. Do not commit them as silently skipped.
+

@@ -439,21 +439,22 @@ describe('experimental store selectors', () => {
 		`;
 
 		const { output } = await renderTemplateFixture('handlebars', source, 'Header', {}, {
-			...selectorOptions,
-			storeSelectorSeedAliasesByComponent: {
-				Header: [
-					{
-						localName: 'hero',
-						segments: [ 'hero' ],
-					},
-				],
+			experimentalStoreSelectors: {
+				__seedAliasesByComponent: {
+					Header: [
+						{
+							localName: 'hero',
+							segments: [ 'hero' ],
+						},
+					],
+				},
 			},
 		});
 
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
-	it('can seed list-relative discovery without creating a duplicate list wrapper', () => {
+	it('can seed list-relative discovery without creating a duplicate list wrapper', async () => {
 		const source = `
 			const ProductCard = ({ product }) => {
 				return <article>{ product.name }</article>;
@@ -462,26 +463,33 @@ describe('experimental store selectors', () => {
 			module.exports = { ProductCard };
 		`;
 
-		const result = transformTemplateVars(source, {
+		const options = {
 			language: 'handlebars',
 			experimentalStoreSelectors: {
 				debug: true,
+				__seedAliasesByComponent: {
+					ProductCard: [
+						{
+							localName: 'product',
+							segments: [ 'products[]' ],
+							declarationSegments: [],
+						},
+					],
+				},
 			},
-			storeSelectorSeedAliasesByComponent: {
-				ProductCard: [
-					{
-						localName: 'product',
-						segments: [ 'products[]' ],
-						declarationSegments: [],
-					},
-				],
+		};
+		const result = transformTemplateVars(source, options);
+		const { output } = await renderTemplateFixture('handlebars', source, 'ProductCard', {
+			product: {
+				name: 'Runtime name',
 			},
-		});
+		}, options);
 		const [ debug ] = result.metadata.storeSelectorTemplateVars;
 
 		expect(debug.declarations).toEqual([ 'name' ]);
 		expect(debug.listShapes).toEqual([]);
 		expect(result.code).not.toContain('{{#products}}');
+		expect(normalizeTemplateOutput(output)).toBe('<article>{{name}}</article>');
 	});
 
 	it('records unsupported selector metadata even when warnings are suppressed', () => {
@@ -514,13 +522,17 @@ describe('experimental store selectors', () => {
 					expect.objectContaining({
 						kind: 'child-prop',
 						path: 'hero',
+						componentName: 'Header',
+						propName: 'hero',
+						target: 'Header.hero',
+						sourcePaths: [ 'hero' ],
 					}),
 				],
 			}),
 		]);
 	});
 
-	it('records explicit templateVars that shadow seeded discovery declarations', () => {
+	it('records explicit templateVars that shadow seeded discovery declarations', async () => {
 		const source = `
 			const ProductCard = ({ product }) => {
 				return <article>{ product.name }</article>;
@@ -531,27 +543,34 @@ describe('experimental store selectors', () => {
 			module.exports = { ProductCard };
 		`;
 
-		const result = transformTemplateVars(source, {
+		const options = {
 			language: 'handlebars',
 			experimentalStoreSelectors: {
 				debug: true,
+				__seedAliasesByComponent: {
+					ProductCard: [
+						{
+							localName: 'product',
+							segments: [ 'products[]' ],
+							declarationSegments: [],
+						},
+					],
+				},
 			},
-			storeSelectorSeedAliasesByComponent: {
-				ProductCard: [
-					{
-						localName: 'product',
-						segments: [ 'products[]' ],
-						declarationSegments: [],
-					},
-				],
+		};
+		const result = transformTemplateVars(source, options);
+		const { output } = await renderTemplateFixture('handlebars', source, 'ProductCard', {
+			product: {
+				name: 'Runtime name',
 			},
-		});
+		}, options);
 		const [ debug ] = result.metadata.storeSelectorTemplateVars;
 
 		expect(debug.declarations).toEqual([ 'name' ]);
 		expect(debug.explicitTemplateVars).toEqual([ 'name' ]);
 		expect(debug.shadowedTemplateVars).toEqual([ 'name' ]);
 		expect(debug.combinedTemplateVars).toEqual([ 'name' ]);
+		expect(normalizeTemplateOutput(output)).toBe('<article>{{name}}</article>');
 	});
 
 	it('records unsupported selector-derived child prop boundary expressions', () => {
@@ -574,6 +593,16 @@ describe('experimental store selectors', () => {
 				boundary: 'MemberExpression',
 			},
 			{
+				name: 'object literal',
+				render: 'return <Header hero={{ title: hero.title }} />;',
+				boundary: 'ObjectExpression',
+			},
+			{
+				name: 'array literal',
+				render: 'return <Header hero={[ hero.title ]} />;',
+				boundary: 'ArrayExpression',
+			},
+			{
 				name: 'template literal',
 				render: 'return <Header hero={ `${ hero.title }` } />;',
 				boundary: 'TemplateLiteral',
@@ -589,10 +618,16 @@ describe('experimental store selectors', () => {
 				boundary: 'JSXSpreadAttribute',
 			},
 			{
+				name: 'render prop',
+				render: 'return <Header render={() => hero.title} />;',
+				boundary: 'ArrowFunctionExpression',
+			},
+			{
 				name: 'multiple selector sources',
 				extraSetup: 'const fallbackHero = useStoreSelector((state) => state.fallbackHero);',
 				render: 'return <Header hero={ hero || fallbackHero } />;',
 				boundary: 'LogicalExpression',
+				sourcePaths: [ 'hero', 'fallbackHero' ],
 			},
 		];
 
@@ -624,6 +659,8 @@ describe('experimental store selectors', () => {
 				expect.objectContaining({
 					kind: 'child-prop-boundary',
 					boundary: testCase.boundary,
+					componentName: 'Header',
+					sourcePaths: testCase.sourcePaths ? expect.arrayContaining(testCase.sourcePaths) : expect.any(Array),
 				}),
 			]));
 		});

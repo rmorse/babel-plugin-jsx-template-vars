@@ -136,6 +136,7 @@ class ListController {
 
 		this.pathAliasesByBinding.set( binding.identifier, {
 			segments: this.normalizeCanonicalSegments( segments ),
+			declarationSegments: this.normalizeCanonicalSegments( segments ),
 		} );
 	}
 
@@ -147,6 +148,7 @@ class ListController {
 
 			this.pathAliasesByBinding.set( alias.bindingIdentifier, {
 				segments: this.normalizeCanonicalSegments( alias.segments ),
+				declarationSegments: this.normalizeCanonicalSegments( alias.declarationSegments || alias.segments ),
 			} );
 		} );
 	}
@@ -643,27 +645,29 @@ class ListController {
 			return arg;
 		}
 
-		const segments = this.resolvePathSegments( arg.segments || [ arg.value ], path );
-		const scalarMetadata = this.resolveScalarMetaFromSegments( segments, path );
-		if ( scalarMetadata ) {
-			return {
-				type: scalarMetadata.segments.length > 1 ? 'path' : 'identifier',
-				value: scalarMetadata.segments.join( '.' ),
-				segments: scalarMetadata.segments,
-				contextOffset: scalarMetadata.contextDepth,
-				matchedTemplatePath: scalarMetadata.path,
-			};
-		}
+		const segmentCandidates = this.resolvePathSegmentCandidates( arg.segments || [ arg.value ], path );
+		for ( const segments of segmentCandidates ) {
+			const scalarMetadata = this.resolveScalarMetaFromSegments( segments, path );
+			if ( scalarMetadata ) {
+				return {
+					type: scalarMetadata.segments.length > 1 ? 'path' : 'identifier',
+					value: scalarMetadata.segments.join( '.' ),
+					segments: scalarMetadata.segments,
+					contextOffset: scalarMetadata.contextDepth,
+					matchedTemplatePath: scalarMetadata.path,
+				};
+			}
 
-		const listMetadata = this.resolveListMetaFromSegments( segments, path );
-		if ( listMetadata ) {
-			return {
-				type: listMetadata.sourceSegments.length > 1 ? 'path' : 'identifier',
-				value: listMetadata.sourceSegments.join( '.' ),
-				segments: listMetadata.sourceSegments,
-				contextOffset: listMetadata.parentContextDepth,
-				matchedTemplatePath: listMetadata.path,
-			};
+			const listMetadata = this.resolveListMetaFromSegments( segments, path );
+			if ( listMetadata ) {
+				return {
+					type: listMetadata.sourceSegments.length > 1 ? 'path' : 'identifier',
+					value: listMetadata.sourceSegments.join( '.' ),
+					segments: listMetadata.sourceSegments,
+					contextOffset: listMetadata.parentContextDepth,
+					matchedTemplatePath: listMetadata.path,
+				};
+			}
 		}
 
 		return arg;
@@ -776,21 +780,35 @@ class ListController {
 	}
 
 	resolvePathSegments( segments, path ) {
+		return this.resolvePathSegmentCandidates( segments, path )[ 0 ];
+	}
+
+	resolvePathSegmentCandidates( segments, path ) {
 		if ( ! segments || segments.length === 0 ) {
-			return segments;
+			return [ segments ];
 		}
 
-		const rootSegments = this.resolveIdentifierSegments( segments[ 0 ], path );
-		return [ ...rootSegments, ...segments.slice( 1 ) ];
+		const tail = segments.slice( 1 );
+		const candidates = this.resolveIdentifierSegmentCandidates( segments[ 0 ], path )
+			.map( rootSegments => [ ...rootSegments, ...tail ] );
+		return dedupeSegmentCandidates( candidates );
 	}
 
 	resolveIdentifierSegments( name, path ) {
+		return this.resolveIdentifierSegmentCandidates( name, path )[ 0 ];
+	}
+
+	resolveIdentifierSegmentCandidates( name, path ) {
 		const binding = path?.scope?.getBinding( name );
 		if ( binding && this.pathAliasesByBinding.has( binding.identifier ) ) {
-			return this.pathAliasesByBinding.get( binding.identifier ).segments;
+			const alias = this.pathAliasesByBinding.get( binding.identifier );
+			return dedupeSegmentCandidates( [
+				alias.declarationSegments || alias.segments,
+				alias.segments,
+			] );
 		}
 
-		return [ this.normalizeRootSegment( name ) ];
+		return [ [ this.normalizeRootSegment( name ) ] ];
 	}
 
 	isStaticMemberExpression( expression ) {
@@ -913,5 +931,22 @@ class ListController {
 		return String( path ).split( '.' ).filter( Boolean );
 	}
 };
+
+function dedupeSegmentCandidates( candidates ) {
+	const seen = new Set();
+	const result = [];
+	candidates.forEach( ( candidate ) => {
+		if ( ! Array.isArray( candidate ) ) {
+			return;
+		}
+		const key = candidate.join( '.' );
+		if ( seen.has( key ) ) {
+			return;
+		}
+		seen.add( key );
+		result.push( candidate );
+	} );
+	return result;
+}
 
 module.exports = { ListController };
