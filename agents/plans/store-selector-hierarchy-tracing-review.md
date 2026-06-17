@@ -229,3 +229,208 @@ mis-synthesis, not a clean warning.
      cross-component creep the plan means to avoid.
 3. Only then **Phase C**, gated on the no-explicit-child-`templateVars` parity
    fixture byte-matching `full-template-surface` and the double-wrap regression.
+
+---
+
+# Addendum: seedable discovery refactor review (commit `e36a3c8`)
+
+Review of the implemented refactor slice against the five agreed goals. Findings
+verified by transforming/rendering seeded cases directly (not just reading code).
+
+**Recommendation: revise the refactor before Phase B.** The object-seed half is
+sound and Phase B (object-root) can build on it. But the list-relative half emits
+**broken code for member-access children**, and the test that "proves" it asserts
+only metadata — so it certifies a path that throws at runtime. Fix that (and the
+seed bridge) first; the fix is small and Phase B follows quickly.
+
+## Three lenses
+
+- **Neutral:** The dual `segments`/`declarationSegments` model is the right idea
+  and the collector half is clean. But the controller was never taught
+  `declarationSegments`, so relative declarations are only half-wired, and the new
+  tests validate metadata rather than emitted output — hiding the gap.
+- **Devil's advocate:** "Seeded list-relative discovery is tested" overstates it.
+  The tested case (`{ product.name }`, line 456) compiles to a dead replace var
+  and raw `product.name`; it only passes because the test never renders. The one
+  thing the refactor was meant to de-risk for Phase C — relative paths that
+  actually render — is the thing still broken.
+- **Encouraging:** Scope discipline held: no auto-seeding, `canTraceChildProp`
+  unchanged (`:776`), 124 tests green, boundary catalog genuinely broadened, and
+  always-on unsupported metadata (goal #4) is correctly implemented. The break is
+  one missing wire (`declarationSegments` → controller alias), not a design dead end.
+
+## Bugs
+
+### B1 — List-relative seed emits broken code for member-access children (severity: high)
+
+Seed `{ localName: 'product', segments: ['products[]'], declarationSegments: [] }`
+on:
+
+```jsx
+const ProductCard = ({ product }) => <article>{ product.name }</article>;
+```
+
+compiles to (verified):
+
+```js
+let _uid = ... getLanguageReplace("format", { value: "name", segments: ["name"] } ...); // dead
+return h("article", null, product.name);  // NOT rewritten → throws / renders raw
+```
+
+The declaration `name` is created but never used; `product.name` is left intact.
+Mechanism: `ReplaceController.getReplacementPathForSegments` (`controllers/replace.js:113`)
+resolves a **member** through the path resolver to canonical `products[].name`,
+but `vars.names` holds the **relative** `name`, so no match; an **identifier**
+falls back to its bare name and *does* match. So:
+
+- `const { name } = product; { name }` → wired correctly (`{name}` → `_uid`).
+- `{ product.name }` → not wired (broken).
+
+`registerExternalPathAliases` (`controllers/list.js:142`) stores only
+`alias.segments` (canonical) and discards `declarationSegments` — that is the
+missing wire. **This is exactly the case test line 456 exercises**, with only
+`debug.declarations`/wrapper assertions, so CI is green over broken output.
+
+> Fix: make the controller's external alias carry the relative mapping (pass
+> `declarationSegments` into `registerExternalPathAliases` and prefer it when
+> resolving member segments for seeded bindings), OR restrict list-relative seeds
+> to destructured access and **fail closed + diagnose** on member access. Either
+> way, change test 456 to render and assert `<article>{{name}}</article>` (it will
+> fail today) and add a parent-context integration test (see T1).
+
+### B2 — Seeded children cannot be validated by standalone rendering (severity: medium, test-strategy)
+
+The seeded prop (`product`/`hero`) is `undefined` at runtime, so any child that
+*uses* the prop value (`const { name } = product`, `hero.title` in a non-replaced
+position) throws when rendered standalone. The object-seed test (line 431) only
+passes because member replacement substitutes `hero.title` *before* the undefined
+access. There is **no** end-to-end test where a parent supplies the seeded
+context, so seeded list rendering has zero real output coverage.
+
+> Fix (T1): add an integration test with a real parent (App selects `products`,
+> renders `<ProductCard product={ product } />` in a `.map`, ProductCard seeded)
+> and assert the byte output incl. `$data_1` depth. This is the true Phase C gate
+> and would have caught B1.
+
+## Design concerns
+
+### D1 — `declarationSegments` is a collector-only abstraction (severity: high)
+
+The split is consumed only in the collector (`addDeclarationForExpression:852`,
+`registerBindingAlias:678`). Controllers are unchanged — which reads as "clean
+boundary preserved" (Q1/Q6) but is the root cause of B1: the new relative-path
+concept is **inexpressible to the controller**. The boundary is clean precisely
+because the abstraction doesn't cross it, and it needs to.
+
+> Decide before Phase C: either the relative mapping is a first-class controller
+> input, or the registry declares canonical and de-wraps at serialization. The
+> current middle state (relative declaration string, canonical alias) cannot render
+> member access.
+
+### D2 — `storeSelectorSeedAliasesByComponent` is a public config key with an unsafe contract (severity: medium) (Q2)
+
+It is read straight off plugin `config` (`visitor.js:179`), so any consumer can
+pass seeds for any component and force discovery that emits the B1 broken output.
+The contract (canonical `segments` vs relative `declarationSegments`) is
+undocumented and easy to get wrong — the repo's own test gets a combination that
+compiles to dead code.
+
+> Acceptable as an internal bridge for now, but: (a) document it as internal/
+> unstable; (b) validate seed shape and ignore/throw on malformed seeds;
+> (c) prefer routing it off the user `config` object (symbol-keyed or a dedicated
+> param) so it isn't part of the public option surface.
+
+### D3 — One component used in both list and non-list context gets an incoherent result (severity: medium) (Q7-adjacent, Phase C blocker)
+
+Test line 633 documents detection but not the hazard. With:
+
+```jsx
+<Card name={ featured.name } />                       // object → Phase A trace: Card.name = featured.name
+{ products.map((product) => <Card name={ product.name } />) }  // list → recorded unsupported, dropped
+```
+
+`Card` receives a canonical `featured.name` trace (length 2, no `[]`, so
+`canTraceChildProp` accepts it) **and** the list usage is dropped. Net: every card
+in the list silently renders `{{featured.name}}`. The test asserts only that the
+list case is recorded unsupported; the misleading output is untested.
+
+> Before Phase C: a component reachable from >1 distinct context needs either
+> per-call-site seeds or a hard "ambiguous context" diagnostic. Add a test on the
+> resulting output, not just the unsupported record.
+
+### D4 — Boundary catalog misses JSX children crossing into components (severity: medium) (Q5)
+
+`collectChildComponentPropUsage` covers `JSXAttribute` and `JSXSpreadAttribute`
+only. Selector data passed as **children** to a capitalized component is not
+treated as a boundary:
+
+```jsx
+<Card>{ hero.title }</Card>      // children is an implicit prop crossing a component boundary
+```
+
+Today this happens to work for pass-through (App declares `hero.title`, replaces
+it, `Card` gets the string), but breaks silently if `Card` inspects/transforms
+`children` (`children.props`, `Children.map`, etc.). Array/object-literal props
+(`<C data={[hero]} />`, `<C o={{ x: hero }} />`) are handled by the generic
+`collectSelectorDerivedSegments` traversal but are untested.
+
+> Add `children`-into-component to the boundary catalog (warn/skip), and add
+> explicit tests for array/object-literal props to lock current behavior.
+
+### D5 — Unsupported metadata drops secondary sources (severity: low) (Q4)
+
+For multi-source boundaries, only `selectorSources[0]` is recorded as `path`/
+`message` (`collectChildComponentPropUsage`, the `sourceSegments = selectorSources[0]`
+lines). `<Header hero={ hero || fallbackHero } />` records `hero`, never
+`fallbackHero`. Location is right (always-on `storeSelectorTemplateVarsUnsupported`,
+`visitor.js:286`); completeness is not. Also `componentName` is duplicated at entry
+and detail level, and there's no link from an unsupported record to the
+declaration that would have been synthesized.
+
+> Record all selector-derived sources for an unsupported expression; add
+> per-record provenance once tracing lands.
+
+### D6 — Shadowing is exact-string and canonical/relative-sensitive (severity: low) (Q6)
+
+`shadowedTemplateVars` filters only `selectorResult.declarations` by exact string
+(`visitor.js:203`). `propTraceResult.declarations` (Phase A) is not filtered
+(harmless only because the `Set` dedups exact matches). Shadowing matches
+reliably for the **relative** (`name`) case but rarely for the **canonical**
+(`hero.title`) case, since explicit child vars are usually relative. Partial
+overlaps (`hero` vs `hero.title`) are not reconciled and both reach the registry.
+
+> Acceptable for the slice; document that shadowing is exact-match and decide
+> overlap policy before Phase C.
+
+## Goal-by-goal
+
+| Refactor goal | Status |
+| --- | --- |
+| 1. Seedable child-body discovery | Partial — object seeds render; list-relative member access broken (B1) |
+| 2. Discovery from incoming aliases (not only selector calls) | Met — `registerSeedAliases:651`, runs without selector calls |
+| 3. Fail-closed boundary catalog | Mostly — good attr/spread coverage; gaps D4 |
+| 4. Always record unsupported metadata | Met — `storeSelectorTemplateVarsUnsupported`, not debug-gated (`visitor.js:286`) |
+| 5. Explicit child `templateVars` collision behavior | Met for relative case; caveats D6 |
+
+## Answers to the eight questions
+
+1. **Boundary clean?** Structurally yes (no controller changes), but that is why
+   B1/D1 exist — the relative-declaration abstraction can't reach the controller.
+2. **Seed bridge acceptable?** As internal-only, yes; harden per D2 (it's public
+   and the contract is unsafe).
+3. **`declarationSegments` models list-relative without double-wrap?** Avoids the
+   wrapper (✓) but only renders for destructured/identifier access; member access
+   is broken (B1). Not correct end-to-end.
+4. **Unsupported recorded right/enough?** Right place, always-on (good). Info gaps:
+   secondary sources dropped, no provenance (D5).
+5. **Catalog broad enough?** Good for attribute/spread expressions; add
+   `children`-into-component and literal-prop tests (D4).
+6. **Shadowing safe?** Yes for this slice; exact-match/relative-sensitive (D6).
+7. **Regressions / accidental B/C?** None user-facing — seeds only via config,
+   `canTraceChildProp` unchanged, 124 green. One intended behavior change:
+   previously-silent unsupported prop expressions now warn (improvement).
+8. **Change before Phase B?** Phase B (object-root) is sound on this foundation.
+   Still do first: (a) fix/guard B1 and make test 456 render; (b) add the
+   parent-context integration test (T1); (c) harden the seed bridge (D2). Defer
+   D1's full controller wiring to the Phase C gate, but track it now.
+
