@@ -84,6 +84,12 @@ Implementation direction:
   canonical root, declaration segments, and skip reason.
 - Keep descriptor injection in parent transforms and relative child discovery in
   child transforms.
+- Cross-file child transforms must be configured for relative dynamic-root
+  discovery only. For example, `Header.jsx` should know that `Header.hero` is a
+  dynamic root, but it should not receive a single global canonical seed for
+  `hero`. `HomePage.jsx` and `ArticlePage.jsx` each receive their own callsite
+  descriptor contexts and inject `createTemplateRootDescriptor(...)` at their
+  JSX callsites.
 - Add stable callsite IDs before grouping flows by component. The current
   same-file/cross-file seed flows group by component name; Phase 3 must preserve
   callsite identity before that grouping can erase source distinctions.
@@ -96,7 +102,7 @@ Implementation direction:
   - Handlebars and PHP expected output
   - no relay in the first proof
 - Add one cross-file relay hop only after the direct parent-to-child proof
-  passes.
+  passes. This is the second slice, not part of the smallest proof.
 
 Minimum manifest context schema:
 
@@ -125,6 +131,11 @@ bug.
 
 Keep legacy `seedAliasesByFile` compatibility while migrating so existing
 cross-file tests keep running during the transition.
+
+Regression note: the existing `ambiguous-cross-file-seed` negative fixture
+should become a positive multi-source object-root fixture for the supported
+direct named-import shape. Unsupported import or component shapes should keep
+their negative diagnostics.
 
 ### 2. Cross-File Debug Metadata
 
@@ -171,6 +182,11 @@ Must prove:
   - `export default Header`
   - `export default function Header()`
   - `memo(Header)` / HOCs / wrappers
+- unsupported prop-contract forms are diagnostic-only:
+  - bare single-param components that rely on parameter names as prop names,
+    such as `const Header = ( hero ) => hero.title` paired with
+    `<Header hero={ hero } />`; this is a React prop-shape mismatch, and the
+    transform should not guess intent
 - import cycles are detected and fail closed
 - manifest output is deterministic
 - stale-cache invalidation expectations are specified before caching exists
@@ -196,6 +212,19 @@ Full runtime/package optimization can happen later.
 
 Support path-polymorphic child components in list contexts.
 
+Do this in two steps. Same-file list-relative multi-source should land before
+cross-file list-relative multi-source, because cross-file combines manifest
+callsite contexts, list depth, and declaration relativity.
+
+Prerequisite minimal mixed-context policy:
+
+- explicit `templateVars` shadowing and collision behavior under dynamic roots
+- same child used in list and non-list contexts must either render correctly or
+  fail closed
+- scalar member multi-source, such as `featured.name` and `secondary.name`, is
+  intentionally parent-materialized when possible and should not be treated as
+  an object-root ambiguity
+
 Must prove:
 
 - same child used under different list roots
@@ -220,9 +249,13 @@ Same-file gate:
 - `badges={ product.badges }` plus child `badges.map(...)`
 - `product={ product }` and `badges={ product.badges }` in the same subtree
 - child used at two PHP depths in separate callsites
+- debug metadata asserts both canonical segments and list-relative declaration
+  segments
 
 Cross-file gate:
 
+- only after cross-file object-root callsite contexts and cross-file debug
+  metadata are proven
 - parent files import the same child and pass different list roots
 - same child at `$data_1` and `$data_2`
 - nested list depths preserve the expected PHP context variables
@@ -231,6 +264,8 @@ Cross-file gate:
   not `$data_1['products']['name']`
 - descriptor values passed into `.map()` preserve declaration-relative segments
 - relay through one intermediate component
+- object-field list prop under different list roots, for example
+  `badges={ product.badges }` from different `.map()` parents
 - HBS/PHP byte parity
 
 ### 6. Mixed Context Safety
@@ -331,7 +366,10 @@ manifest shape and diagnostics are stable.
 Prioritized support or diagnostics:
 
 - relative named imports
+- renamed named imports, for example `import { Header as PageHeader }`
 - default imports
+- multiple exports from one child file, including different dynamic-root props
+  per export
 - index files / folder imports
 - `.js`, `.jsx`, `.ts`, `.tsx`
 - TypeScript or bundler path aliases
@@ -344,9 +382,10 @@ Recommended order:
 1. Keep package and namespace imports diagnostic-only.
 2. Lock down existing `.js` / `.jsx` / extensionless / index resolution with
    diagnostics and tests.
-3. Add default imports only with a strict export contract and real usage
+3. Prove import renames and multiple exports for relative named imports.
+4. Add default imports only with a strict export contract and real usage
    pressure.
-4. Add project alias support only through explicit config.
+5. Add project alias support only through explicit config.
 
 ### 9. Shape-Agnostic Production Manifest Wrapper
 
@@ -369,6 +408,11 @@ Do this after cross-file object roots, list-relative context shape, and the
 resolver/parser/component contract are proven. A shape-agnostic skeleton is
 acceptable earlier only if it limits itself to discovery, normalization,
 diagnostic propagation, cache invalidation, and config handoff.
+
+Wrapper v1 may remain limited to relative named imports. Import breadth gates
+unlock broader real-project adoption; they should not be confused with the
+wrapper's core responsibility of producing and handing off a deterministic
+manifest.
 
 ### 10. Diagnostics And Review Mode
 
@@ -478,15 +522,17 @@ Do not block broad path-polymorphic support on shape-polymorphism.
 2. Cross-file debug metadata.
 3. Manifest resolver, parser, and component shape contract.
 4. Minimal runtime/package validation.
-5. List-relative multi-source.
-6. Mixed context hardening.
-7. Common React pattern investigations.
-8. Import graph breadth.
-9. Shape-agnostic production wrapper skeleton.
-10. Runtime/package polish.
-11. Performance and stable API.
-12. Final parity fixture gates.
-13. Shape-polymorphism research.
+5. Minimal mixed-context policy needed by list-relative tracing.
+6. Same-file list-relative multi-source.
+7. Cross-file list-relative multi-source.
+8. Broader mixed context hardening.
+9. Common React pattern investigations.
+10. Import graph breadth.
+11. Shape-agnostic production wrapper skeleton.
+12. Runtime/package polish.
+13. Performance and stable API.
+14. Final parity fixture gates.
+15. Shape-polymorphism research.
 
 ## Review Checkpoints
 
@@ -495,7 +541,8 @@ Pause for review after each major gate:
 - after cross-file object-root HBS/PHP parity
 - after manifest debug metadata lands
 - after resolver/parser/component-shape diagnostics are locked down
-- before list-relative multi-source implementation
+- before same-file list-relative multi-source implementation
+- before cross-file list-relative multi-source implementation
 - before optional chaining, children, or spread support
 - before expanding import graph support
 - before introducing the production wrapper
@@ -523,9 +570,18 @@ Treat the experiment as broadly supported only when:
 - common import shapes are supported or clearly diagnosed
 - a production manifest wrapper exists
 - debug metadata explains successful and skipped paths
+- stable diagnostic `kind` values exist for all supported skip/fail paths
+- manifest graph traversal has tested cycle and depth bounds
+- parent and child transforms are order-independent when given the same
+  manifest
 - strict mode is the CI/review default and the full unit/e2e suite passes under
   that policy
+- cross-file ambiguous-seed negative fixtures are flipped to positive fixtures
+  where callsite contexts intentionally support the shape
 - full-template-surface parity passes in same-file and split-file forms
+- cross-file multi-source object-root e2e fixtures live under `fixtures/e2e/`
+- same-file and cross-file list-relative multi-source e2e fixtures exist
+- mixed-context fail-closed e2e fixture documents the expected diagnostic
 - every selector e2e fixture asserts its debug payload where debug mode is
   relevant
 - PHP nested context depth is proven for all list-relative gates
@@ -533,6 +589,8 @@ Treat the experiment as broadly supported only when:
 - performance bound is documented and tested on a realistic project size
 - real-app integration fixture passes through the production wrapper
 - every permanent non-goal has an explicit fail-closed diagnostic test
+- author-facing config is documented for `experimentalStoreSelectors`,
+  cross-file manifest handoff, strict/review mode, and any production wrapper
 - stable integration API is documented
 
 Until then, keep the feature experimental and documented as draft review work.
