@@ -283,6 +283,9 @@ function templateVarsVisitor( babel, config ) {
 					...selectorDeclarations,
 					...propTraceResult.declarations,
 				] ) );
+				const dynamicRootAliases = ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot );
+				const dynamicRootDebugAliases = dynamicRootAliases.map( createDynamicRootDebugAlias );
+				const dynamicRootProps = dynamicRootPropsByComponent[ componentName ] || [];
 				if ( selectorResult.debug.unsupported.length > 0 ) {
 					unsupportedEntries.push( {
 						componentName,
@@ -296,7 +299,9 @@ function templateVarsVisitor( babel, config ) {
 						selectorResult.hasSelectors ||
 						selectorResult.debug.rawDeclarations.length > 0 ||
 						selectorResult.debug.aliases.length > 0 ||
-						selectorResult.debug.unsupported.length > 0
+						selectorResult.debug.unsupported.length > 0 ||
+						dynamicRootDebugAliases.length > 0 ||
+						dynamicRootProps.length > 0
 					)
 				) {
 					debugEntries.push( {
@@ -309,6 +314,9 @@ function templateVarsVisitor( babel, config ) {
 						unsupported: selectorResult.debug.unsupported,
 						childPropTraces: selectorResult.debug.childPropTraces,
 						incomingPropTraces: childPropTracesByComponent.get( componentName ) || [],
+						dynamicRootAliases: dynamicRootDebugAliases,
+						dynamicRootProps,
+						dynamicRootPropsByComponent,
 						explicitTemplateVars,
 						shadowedTemplateVars,
 						combinedTemplateVars,
@@ -331,7 +339,7 @@ function templateVarsVisitor( babel, config ) {
 				templateVarsController.init( templateVars, componentName, componentPath, babel, {
 					...config,
 					storeSelectorAliases: aliases,
-					dynamicRootAliases: ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot ),
+					dynamicRootAliases,
 					dynamicRootPropsByComponent: dynamicRootPropsByComponent,
 				} );
 				processedComponents.add( componentName );
@@ -465,6 +473,25 @@ function createDynamicRootPropsByComponent( seedAliasesByComponent ) {
 		}
 	} );
 	return entries;
+}
+
+function createDynamicRootDebugAlias( alias ) {
+	return {
+		localName: alias.localName,
+		memberName: alias.memberName,
+		propName: alias.propName,
+		path: stringifyStoreSelectorSegments( alias.segments ),
+		segments: alias.segments || [],
+		declarationPath: stringifyStoreSelectorSegments( alias.declarationSegments || alias.segments ),
+		declarationSegments: alias.declarationSegments || alias.segments || [],
+		dynamicRootPath: stringifyStoreSelectorSegments( alias.dynamicRootSegments || alias.declarationSegments || alias.segments ),
+		dynamicRootSegments: alias.dynamicRootSegments || alias.declarationSegments || alias.segments || [],
+		source: alias.source,
+	};
+}
+
+function stringifyStoreSelectorSegments( segments = [] ) {
+	return segments.join( '.' );
 }
 
 function createStoreSelectorSeedAliasKey( seedAlias ) {

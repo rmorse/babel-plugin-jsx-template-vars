@@ -1030,7 +1030,7 @@ class StoreSelectorCollector {
 					) {
 						diagnostics.error(
 							path,
-							`Store selector object-root-multi-source-ambiguity: prop "${ path.node.name.name }" for child component "${ elementName }" uses an unsupported object-root expression (${ selectorSources.map( source => stringifySegments( source ) ).join( ', ' ) }). Pass one selector-derived object root directly or split the callsites.`
+							`Store selector unsupported-object-root-expression: prop "${ path.node.name.name }" for child component "${ elementName }" uses an unsupported object-root expression (${ selectorSources.map( source => stringifySegments( source ) ).join( ', ' ) }). Pass one selector-derived object root directly or split the callsites.`
 						);
 					}
 

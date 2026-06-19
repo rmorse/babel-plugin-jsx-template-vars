@@ -24,11 +24,14 @@ Current implementation status:
     expands.
   - Dynamic root containment is enforced at transform time for covered same-file
     descriptor paths: bare dynamic-root rendering is rejected before codegen.
+  - Minimal dynamic-root debug metadata is exposed for review mode, including
+    `dynamicRootAliases`, component-local `dynamicRootProps`, and
+    `dynamicRootPropsByComponent`.
 - **Still pending:**
   - Cross-file relative object contexts through a manifest callsite-context
     model.
-  - List-relative multi-source variants.
   - Full debug metadata for callsite contexts and compiled paths.
+  - List-relative multi-source variants.
   - Shape-polymorphic specialization research.
 - **Later residuals to revisit:**
   - Conditional object-root expressions currently fail closed even when every

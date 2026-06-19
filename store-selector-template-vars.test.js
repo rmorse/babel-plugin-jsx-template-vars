@@ -588,6 +588,51 @@ describe('experimental store selectors', () => {
 		]));
 	});
 
+	it('records dynamic root debug metadata when requested', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+		});
+		const childDebug = result.metadata.storeSelectorTemplateVars.find( entry => entry.componentName === 'Header' );
+
+		expect(childDebug.dynamicRootProps).toEqual([ 'hero' ]);
+		expect(childDebug.dynamicRootPropsByComponent).toEqual({
+			Header: [ 'hero' ],
+		});
+		expect(childDebug.dynamicRootAliases).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				propName: 'hero',
+				path: 'hero',
+				declarationPath: 'hero',
+				dynamicRootPath: 'hero',
+			}),
+		]);
+	});
+
 	it.each([
 		[
 			'handlebars',
@@ -2177,7 +2222,7 @@ describe('experimental store selectors', () => {
 		expect(() => transformTemplateVars(source, {
 			language: 'handlebars',
 			...selectorOptions,
-		})).toThrow(/object-root-multi-source-ambiguity/);
+		})).toThrow(/unsupported-object-root-expression/);
 	});
 
 	it('throws when a dynamic root is rendered both as a member and bare value', () => {
@@ -2402,6 +2447,36 @@ describe('experimental store selectors', () => {
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe("<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>");
+	});
+
+	it('preserves registry validation for explicit templateVars collisions under dynamic roots', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			Header.templateVars = [ 'hero[]' ];
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		})).toThrow(/same root cannot be both a list and an object/);
 	});
 
 	it('records diagnostics for wrong prop names in multi-source object-root callsites', () => {
