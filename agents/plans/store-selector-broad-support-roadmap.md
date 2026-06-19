@@ -3,7 +3,8 @@
 ## Goal
 
 Define the remaining work needed before the store-selector experiment can be
-considered high-level support for most normal component-tree authoring patterns.
+considered high-level support for statically traceable, prop-driven component
+tree authoring patterns.
 
 This is a roadmap, not a single implementation plan. Detailed implementation
 plans should remain focused and link back here. The active detailed plan for
@@ -12,7 +13,8 @@ multi-source object-root path-polymorphism is
 
 ## What Broad Support Means
 
-Broad support means an author can:
+Broad support means an author can use common statically traceable prop-driven
+patterns:
 
 - select data from one store-shaped state object
 - pass selected values through ordinary same-file and cross-file component trees
@@ -24,8 +26,11 @@ Broad support means an author can:
 - get clear diagnostics when a shape is unsupported
 
 It does not mean arbitrary React data-flow simulation. The transform should
-still fail closed for dynamic components, HOCs, spreads, render props, generic
-context, and shape-polymorphic output until those are separately proven.
+still fail closed for dynamic components, HOCs, render props, generic context,
+and shape-polymorphic output until those are separately proven. Optional
+chaining, `children` composition, and JSX spreads are common enough that they
+need explicit investigation gates rather than being treated as permanent
+non-goals.
 
 ## Proven Foundation
 
@@ -110,6 +115,14 @@ strategy
 skipReason?
 ```
 
+The manifest should compute one dynamic-root decision per
+`targetFile + targetComponent + propName` and derive both parent callsite
+descriptor injection records and child relative-discovery records from that
+decision. Do not compute `callsiteContextsByFile` and
+`childRelativeDiscoveryByFile` independently; a parent injecting a descriptor
+for a child that was not configured to consume one is a manifest consistency
+bug.
+
 Keep legacy `seedAliasesByFile` compatibility while migrating so existing
 cross-file tests keep running during the transition.
 
@@ -179,25 +192,7 @@ Must prove:
 
 Full runtime/package optimization can happen later.
 
-### 5. Production Manifest Wrapper
-
-The current manifest is explicit and test-oriented. Real project use needs a
-wrapper that can produce and consume it predictably.
-
-Must provide:
-
-- project source discovery
-- filename normalization
-- manifest caching and invalidation policy
-- Babel integration contract
-- strict handling of manifest diagnostics in CI/review mode
-- stable internal API for passing the manifest into plugin config
-
-Do this after cross-file callsite contexts and the resolver/parser/component
-contract are proven, so the wrapper integrates the correct manifest shape and
-does not surface fail-open parser/resolver behavior at project scale.
-
-### 6. List-Relative Multi-Source
+### 5. List-Relative Multi-Source
 
 Support path-polymorphic child components in list contexts.
 
@@ -231,10 +226,104 @@ Cross-file gate:
 - parent files import the same child and pass different list roots
 - same child at `$data_1` and `$data_2`
 - nested list depths preserve the expected PHP context variables
+- descriptors composed inside a list context do not re-apply the list root, for
+  example `products[]` + `name` inside `{{#products}}` must become `$data_1['name']`,
+  not `$data_1['products']['name']`
+- descriptor values passed into `.map()` preserve declaration-relative segments
 - relay through one intermediate component
 - HBS/PHP byte parity
 
-### 7. Import Graph Breadth
+### 6. Mixed Context Safety
+
+Real component trees reuse children in several contexts.
+
+Must decide and prove:
+
+- same child outside a list and inside a list
+- same prop as object root in one callsite and scalar in another
+- same prop as object root in one callsite and list in another
+- explicit `templateVars` coexistence and collision behavior
+- selector-derived props crossing unsupported boundaries
+- dynamic-root child inside a control/conditional, for example
+  `{ visible && <Header hero={ hero } /> }`
+- destructured or props-object defaults that can shadow descriptors, for example
+  `({ hero = {} }) => ...`
+- `warnOnUnsupported: false` does not hide dangerous partial output
+
+Policy:
+
+- Path-polymorphism may be supported through descriptors.
+- Shape-polymorphism must fail closed unless explicit shape evidence exists.
+
+### 7. Common React Pattern Investigations
+
+These patterns are common in real React code. They should be investigated and
+either supported for static subsets or diagnosed clearly.
+
+#### Optional chaining
+
+Likely supportable for static member chains because template paths are static:
+
+```jsx
+hero?.title
+props.hero?.title
+product?.badge?.label
+```
+
+Expected policy:
+
+- normalize static optional member chains to the same path as normal member
+  access
+- keep computed optional access and call results unsupported:
+  - `hero?.[key]`
+  - `getHero()?.title`
+
+#### Children composition
+
+Potentially supportable for visible, static JSX children:
+
+```jsx
+<Card title={ hero.title }>
+	<h2>{ hero.subtitle }</h2>
+</Card>
+```
+
+Expected policy:
+
+- support selector data in children when usage remains directly visible and
+  statically traceable
+- allow list-rendering children that are already supported by map/list handling
+- fail closed when the child component inspects, transforms, clones, or
+  conditionally renders `children`
+- add explicit diagnostics for selector-derived data crossing unsupported
+  `children` boundaries
+
+#### JSX spreads
+
+Harder than optional chaining and children. Support only when the AST contains
+strong static evidence.
+
+Potentially supportable:
+
+```jsx
+<Header {...{ title: hero.title, status: hero.status }} />
+```
+
+Maybe support later:
+
+```jsx
+const headerProps = { title: hero.title };
+<Header {...headerProps} />
+```
+
+Remain fail-closed:
+
+```jsx
+<Header {...props} />
+<Header {...getHeaderProps(hero)} />
+```
+
+### 8. Import Graph Breadth
 
 The initial cross-file support should remain narrow. Broaden only after the
 manifest shape and diagnostics are stable.
@@ -259,35 +348,44 @@ Recommended order:
    pressure.
 4. Add project alias support only through explicit config.
 
-### 8. Mixed Context Safety
+### 9. Shape-Agnostic Production Manifest Wrapper
 
-Real component trees reuse children in several contexts.
+The current manifest is explicit and test-oriented. Real project use needs a
+wrapper that can produce and consume it predictably, but the wrapper should not
+bake in an unstable manifest shape.
 
-Must decide and prove:
+Must provide:
 
-- same child outside a list and inside a list
-- same prop as object root in one callsite and scalar in another
-- same prop as object root in one callsite and list in another
-- explicit `templateVars` coexistence and collision behavior
-- selector-derived props crossing unsupported boundaries
-- `warnOnUnsupported: false` does not hide dangerous partial output
+- project source discovery
+- filename normalization
+- manifest caching and invalidation policy
+- Babel integration contract
+- strict handling of manifest diagnostics in CI/review mode
+- stable internal API for passing the manifest into plugin config
+- no assumptions that prevent object-root, list-relative, and mixed-context
+  manifest records from evolving
 
-Policy:
+Do this after cross-file object roots, list-relative context shape, and the
+resolver/parser/component contract are proven. A shape-agnostic skeleton is
+acceptable earlier only if it limits itself to discovery, normalization,
+diagnostic propagation, cache invalidation, and config handoff.
 
-- Path-polymorphism may be supported through descriptors.
-- Shape-polymorphism must fail closed unless explicit shape evidence exists.
-
-### 9. Diagnostics And Review Mode
+### 10. Diagnostics And Review Mode
 
 Diagnostics must remain as important as output generation.
+This is cross-cutting and should be validated in every gate, not treated as a
+single late implementation phase.
 
 Must prove:
 
+- diagnostics use a structured `kind` taxonomy shared across manifest prepass
+  and in-transform paths
 - every unsupported boundary has a specific diagnostic kind/message
-- strict mode is viable as the CI/review default
+- strict mode is required as the CI/review default for the experiment
 - wrong prop names are diagnosed without guessing intended mappings
 - conditionals, logical expressions, spreads, render props, and dynamic
   components fail clearly
+- every explicit non-goal has a fail-closed diagnostic test
 - debug metadata explains both successful and skipped paths
 
 Known polish:
@@ -295,7 +393,7 @@ Known polish:
 - identical-root conditional expressions currently fail closed; dedupe source
   paths later if real usage requires it.
 
-### 10. Runtime And Package Contract
+### 11. Runtime And Package Contract
 
 Descriptor helpers are part of the generated template runtime contract.
 
@@ -309,10 +407,25 @@ Must prove:
 
 Do not optimize unconditional descriptor imports until the experiment stabilizes.
 
-### 11. Final Parity Fixture Gates
+### 12. Performance And Stable API
+
+Before this moves beyond experiment status, add project-scale safety gates.
+
+Must prove:
+
+- fixed-point tracing and manifest generation have a bounded performance profile
+  on a realistic file count
+- manifest output is deterministic across runs
+- stale-cache invalidation is tested once caching exists
+- a real-app integration fixture runs through the production wrapper
+- public/stable integration API is documented
+- `__crossFileManifest` and other `__` internals are not the promoted user API
+
+### 13. Final Parity Fixture Gates
 
 Before broad support is claimed, add fixture gates that represent realistic app
-surfaces.
+surfaces. This is the explicit closing gate for the roadmap, after the earlier
+feature and infrastructure gates are complete.
 
 Required gates:
 
@@ -335,7 +448,7 @@ Each selector fixture should assert:
 - no orphaned template declarations
 - expected debug metadata when debug mode is enabled
 
-### 12. Shape-Polymorphism Research
+### 14. Shape-Polymorphism Research
 
 Shape-polymorphism remains a separate research track.
 
@@ -365,12 +478,15 @@ Do not block broad path-polymorphic support on shape-polymorphism.
 2. Cross-file debug metadata.
 3. Manifest resolver, parser, and component shape contract.
 4. Minimal runtime/package validation.
-5. Production manifest wrapper basics.
-6. List-relative multi-source.
-7. Import graph breadth.
-8. Mixed context hardening.
-9. Runtime/package polish.
-10. Shape-polymorphism research.
+5. List-relative multi-source.
+6. Mixed context hardening.
+7. Common React pattern investigations.
+8. Import graph breadth.
+9. Shape-agnostic production wrapper skeleton.
+10. Runtime/package polish.
+11. Performance and stable API.
+12. Final parity fixture gates.
+13. Shape-polymorphism research.
 
 ## Review Checkpoints
 
@@ -379,9 +495,11 @@ Pause for review after each major gate:
 - after cross-file object-root HBS/PHP parity
 - after manifest debug metadata lands
 - after resolver/parser/component-shape diagnostics are locked down
-- before introducing the production wrapper
 - before list-relative multi-source implementation
+- before optional chaining, children, or spread support
 - before expanding import graph support
+- before introducing the production wrapper
+- before final parity fixture gates
 - before any shape-polymorphism design is implemented
 
 Each review should ask:
@@ -400,12 +518,21 @@ Treat the experiment as broadly supported only when:
 - same-file and cross-file object-root path-polymorphism work
 - same-file and cross-file list-relative path-polymorphism work
 - parser failures and unsupported component declarations diagnose cleanly
+- common React patterns are supported for static subsets or have explicit
+  fail-closed diagnostics
 - common import shapes are supported or clearly diagnosed
 - a production manifest wrapper exists
 - debug metadata explains successful and skipped paths
-- strict mode is usable for CI
+- strict mode is the CI/review default and the full unit/e2e suite passes under
+  that policy
 - full-template-surface parity passes in same-file and split-file forms
+- every selector e2e fixture asserts its debug payload where debug mode is
+  relevant
 - PHP nested context depth is proven for all list-relative gates
 - package/runtime imports are valid
+- performance bound is documented and tested on a realistic project size
+- real-app integration fixture passes through the production wrapper
+- every permanent non-goal has an explicit fail-closed diagnostic test
+- stable integration API is documented
 
 Until then, keep the feature experimental and documented as draft review work.
