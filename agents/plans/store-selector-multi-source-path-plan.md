@@ -30,6 +30,15 @@ Current implementation status:
   - List-relative multi-source variants.
   - Full debug metadata for callsite contexts and compiled paths.
   - Shape-polymorphic specialization research.
+- **Later residuals to revisit:**
+  - Conditional object-root expressions currently fail closed even when every
+    branch resolves to the same canonical root. This is intentionally safe for
+    now. If real usage hits it, dedupe selector-derived source paths before
+    deciding whether an unsupported conditional must hard-error.
+  - `createTemplateRootDescriptor(segments, declarationSegments?)` currently
+    receives identical arguments from object-root descriptor injection. Keep the
+    second argument for the list-relative phase, where canonical segments and
+    declaration-relative segments are expected to diverge.
 
 The completed slice uses internal template-root descriptors. Parent callsites
 pass descriptors for traced object-root props, and child components compose
