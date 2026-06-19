@@ -1023,6 +1023,70 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('auto-seeds object root props across same-file relay components', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const Shell = ({ hero }) => {
+				return <section><Header hero={ hero } /></section>;
+			};
+
+			const Layout = ({ hero }) => {
+				return <main><Shell hero={ hero } /></main>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Layout hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main><section><h1>{{hero.title}}</h1></section></main>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('fails closed when relay props have ambiguous selector sources', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const Shell = ({ hero }) => {
+				return <section><Header hero={ hero } /></section>;
+			};
+
+			const App = () => {
+				const primary = useStoreSelector((state) => state.primaryHero);
+				const secondary = useStoreSelector((state) => state.secondaryHero);
+				return (
+					<main>
+						<Shell hero={ primary } />
+						<Shell hero={ secondary } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main><section><h1></h1></section><section><h1></h1></section></main>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('has ambiguous or unsupported sources'));
+	});
+
 	it('traces same-file selector props into child component replacements', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `

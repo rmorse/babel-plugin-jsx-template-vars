@@ -143,7 +143,7 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 	};
 }
 
-function createStoreSelectorSeedAliases( componentPath, traces = [], babel, config = {} ) {
+function createStoreSelectorSeedAliases( componentPath, traces = [], babel, config = {}, relatedTraces = traces ) {
 	if ( traces.length === 0 ) {
 		return [];
 	}
@@ -156,9 +156,11 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 	}
 
 	const seedAliases = [];
+	const relatedTracesByProp = groupChildPropTraces( relatedTraces );
 	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
-		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
-		if ( propTraces.some( trace => trace.unsupported ) || sourcePaths.size > 1 ) {
+		const validationTraces = relatedTracesByProp.get( propName ) || propTraces;
+		const sourcePaths = new Set( validationTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
 			const componentName = propTraces[ 0 ]?.componentName || 'child component';
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;

@@ -14,6 +14,8 @@ registry/controller boundary:
   still use explicit flat `templateVars`
 - debug metadata is available through `metadata.storeSelectorTemplateVars`
 - Phase A tracing supports same-file direct scalar child props
+- same-file top-level multi-hop tracing is intentionally supported by the
+  bounded auto-seeding pass; cross-file tracing remains out of scope
 
 Phase A scope is deliberately narrow:
 
@@ -74,7 +76,7 @@ phases. Treat this table as the source of truth for the tracing stream:
 | Phase B | destructured child props / child aliases | object-root child tracing plus child-side usage discovery |
 | Phase C | list item propagation | list item roots, scalar item props, and list-context object-field props |
 | Phase D | rename/destructure variants | child-side rename, nested destructure, defaults, and rest rejection |
-| Phase E | same-file component graph | multi-hop relay through same-file components |
+| Phase E | same-file component graph | implemented for top-level relay; remaining graph hardening and diagnostics |
 | Phase F | cross-file graph | opt-in import graph tracing |
 | Phase G | opt-in context tracing | template-specific context API exploration |
 
@@ -420,7 +422,7 @@ const ProductCard = ({ item: product }) => (
 
 ### Goal
 
-Allow tracing through multiple same-file component hops.
+Maintain and harden tracing through multiple same-file component hops.
 
 ```jsx
 const App = () => <Shell hero={ hero } />;
@@ -436,10 +438,11 @@ hero.title
 
 ### Required Behavior
 
-- Build a same-file component definition map.
-- Trace direct JSX component references through multiple hops.
+- Keep the same-file top-level component definition map as the tracing boundary.
+- Trace direct JSX component references through multiple hops with the bounded
+  fixed-point seed pass.
 - Allow relay components without selector calls to run the child usage collector
-  when they receive incoming prop aliases. This is the prerequisite that lets
+  when they receive incoming prop aliases. This is what lets
   `App -> Shell -> Header` work when `Shell` only forwards `hero`.
 - Detect cycles and stop with a diagnostic.
 - Keep dynamic component references unsupported.
@@ -459,8 +462,10 @@ hero.title
 ### Risks
 
 - Repeated traversal can become expensive or duplicate declarations.
-- Recursion guards already exist for rendered output; tracing needs its own graph
-  cycle guard.
+- The fixed-point pass is bounded by same-file component count and dedupes seed
+  aliases, but explicit cycle diagnostics are still useful before release.
+- Recursion guards already exist for rendered output; tracing should continue to
+  keep its own graph safety checks.
 
 ## Phase F - Cross-File Graph
 
@@ -627,9 +632,10 @@ Ordered by severity against the current implementation:
   harder child binding variants. Simple JSX prop renames should be accepted in
   Phase B/C because traces already carry `propName`; Phase D should focus on
   child-side destructure rename, nested destructure, defaults, and rest rejection.
-- P2: Same-file multi-hop tracing should remain a later graph phase, but the
-  Phase B implementation should be shaped so Phase E can become a bounded
-  fixed-point traversal instead of a second, incompatible tracing system.
+- P2: Same-file top-level multi-hop tracing is now intentionally supported by
+  the bounded fixed-point traversal. Keep explicit tests for two-hop/three-hop
+  relay, ambiguous relay sources, and cycle safety. Cross-file graph tracing
+  remains a separate Phase F concern.
 - P0: Every phase after Phase A depends on seedable child-body usage discovery.
   The current collector is hard-seeded from selector calls, so adding Phase B
   directly risks either synthesizing object roots or duplicating discovery logic.
@@ -658,10 +664,21 @@ Ordered by severity against the current implementation:
 
 ## Recommended Next Step
 
-Implement the seedable discovery refactor first. Do not start Phase B or Phase C
-until this shared primitive and the boundary catalog are in place.
+The seedable discovery refactor, boundary catalog, and same-file auto-seeding
+pass are now implemented. The next gate is the selector-based
+`full-template-surface` parity fixture:
 
-Refactor pass/fail gates:
+- no child component `templateVars`
+- top-level selectors in the parent
+- child object-root and list-item props inferred through auto-seeding
+- `badges={ product.badges }` covered as a list-context object-field prop
+- byte-matched Handlebars and PHP output against `full-template-surface`
+- no orphaned template declarations or leaked runtime selector calls
+
+This gate should prove the no-explicit-child-`templateVars` version of the hard
+fixture before broader cross-file tracing or context tracing work starts.
+
+Historical refactor pass/fail gates, now completed:
 
 - local usage discovery can be seeded by incoming prop aliases without selector
   imports in the child
@@ -672,14 +689,6 @@ Refactor pass/fail gates:
 - unsupported metadata is always recorded, even when warnings are suppressed
 - explicit child `templateVars` collision policy is tested and represented in
   debug metadata
-
-Then implement Phase B only. Do not start list item tracing until Phase B proves
-the seedable engine can discover object member usage safely.
-
-Phase B will prove whether object-root metadata can be transferred safely without
-creating partial transforms. Once Phase B is green and reviewed, Phase C can
-reuse the same discovery engine with list-relative synthesis and inherited
-context metadata.
 
 Phase B pass/fail gates:
 

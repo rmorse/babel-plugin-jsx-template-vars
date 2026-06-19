@@ -201,11 +201,8 @@ function templateVarsVisitor( babel, config ) {
 						return;
 					}
 
-					const validSeedTraces = seedTraces.filter( seedTrace => isValidStoreSelectorSeedTrace(
-						seedTrace,
-						childPropTracesByComponent.get( componentName ) || []
-					) );
-					const seedAliases = createStoreSelectorSeedAliases( componentPath, validSeedTraces, babel, config );
+					const relatedFlows = childPropTracesByComponent.get( componentName ) || [];
+					const seedAliases = createStoreSelectorSeedAliases( componentPath, seedTraces, babel, config, relatedFlows );
 					seedAliases.forEach( ( seedAlias ) => {
 						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
 							addedSeed = true;
@@ -406,16 +403,6 @@ function pushChildPropFlow( flowsByComponent, componentName, flow ) {
 		flowsByComponent.set( componentName, [] );
 	}
 	flowsByComponent.get( componentName ).push( flow );
-}
-
-function isValidStoreSelectorSeedTrace( seedTrace, flows = [] ) {
-	const relatedFlows = flows.filter( flow => flow.propName === seedTrace.propName );
-	const sourcePaths = new Set( relatedFlows.map( flow => flow.path || ( flow.segments || [] ).join( '.' ) ).filter( Boolean ) );
-	return (
-		relatedFlows.length > 0 &&
-		relatedFlows.every( flow => flow.seedOnly ) &&
-		sourcePaths.size === 1
-	);
 }
 
 function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) {
