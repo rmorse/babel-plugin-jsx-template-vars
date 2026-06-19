@@ -2175,7 +2175,16 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe("<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>");
 	});
 
-	it('renders relay props with multiple object-root selector sources', async () => {
+	it.each([
+		[
+			'handlebars',
+			'<main><section><p>{{primaryHero.subtitle}}</p><h1>{{primaryHero.title}}</h1></section><section><p>{{secondaryHero.subtitle}}</p><h1>{{secondaryHero.title}}</h1></section></main>',
+		],
+		[
+			'php',
+			"<main><section><p><?php echo $data['primaryHero']['subtitle']; ?></p><h1><?php echo $data['primaryHero']['title']; ?></h1></section><section><p><?php echo $data['secondaryHero']['subtitle']; ?></p><h1><?php echo $data['secondaryHero']['title']; ?></h1></section></main>",
+		],
+	])('renders relay props with multiple object-root selector sources for %s', async (language, expected) => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
@@ -2206,9 +2215,154 @@ describe('experimental store selectors', () => {
 			module.exports = { App };
 		`;
 
+		const { output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
+			'handlebars',
+			'<main><div><aside>{{primaryHero.eyebrow}}</aside><section><p>{{primaryHero.subtitle}}</p><h1>{{primaryHero.title}}</h1></section></div><div><aside>{{secondaryHero.eyebrow}}</aside><section><p>{{secondaryHero.subtitle}}</p><h1>{{secondaryHero.title}}</h1></section></div></main>',
+		],
+		[
+			'php',
+			"<main><div><aside><?php echo $data['primaryHero']['eyebrow']; ?></aside><section><p><?php echo $data['primaryHero']['subtitle']; ?></p><h1><?php echo $data['primaryHero']['title']; ?></h1></section></div><div><aside><?php echo $data['secondaryHero']['eyebrow']; ?></aside><section><p><?php echo $data['secondaryHero']['subtitle']; ?></p><h1><?php echo $data['secondaryHero']['title']; ?></h1></section></div></main>",
+		],
+	])('renders three-hop multi-source relay props for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const Shell = ({ hero }) => {
+				return (
+					<section>
+						<p>{ hero.subtitle }</p>
+						<Header hero={ hero } />
+					</section>
+				);
+			};
+
+			const Layout = ({ hero }) => {
+				return (
+					<div>
+						<aside>{ hero.eyebrow }</aside>
+						<Shell hero={ hero } />
+					</div>
+				);
+			};
+
+			const App = () => {
+				const primary = useStoreSelector((state) => state.primaryHero);
+				const secondary = useStoreSelector((state) => state.secondaryHero);
+				return (
+					<main>
+						<Layout hero={ primary } />
+						<Layout hero={ secondary } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it('keeps explicit child templateVars compatible with dynamic root composition', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return (
+					<header>
+						<h1>{ hero.title }</h1>
+						{ hero.status === 'published' && <span>Published</span> }
+					</header>
+				);
+			};
+
+			Header.templateVars = [ 'hero.title', 'hero.status' ];
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
-		expect(normalizeTemplateOutput(output)).toBe('<main><section><p>{{primaryHero.subtitle}}</p><h1>{{primaryHero.title}}</h1></section><section><p>{{secondaryHero.subtitle}}</p><h1>{{secondaryHero.title}}</h1></section></main>');
+		expect(normalizeTemplateOutput(output)).toBe("<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>");
+	});
+
+	it('records diagnostics for wrong prop names in multi-source object-root callsites', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header item={ homeHero } />
+						<Header item={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		});
+
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('prop "item"'));
+		expect(result.code).not.toContain('createTemplateRootDescriptor');
+	});
+
+	it('throws for multi-source object-root callsites with unsupported child param shapes in strict mode', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ([ hero ]) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/requires a destructured object or props object parameter/);
 	});
 
 	it.each([

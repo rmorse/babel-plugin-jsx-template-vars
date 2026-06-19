@@ -7,18 +7,21 @@ Active implementation plan for the next store-selector experiment stream.
 Current implementation status:
 
 - **Completed in the first implementation slice:**
-  - Phase 0 safety baseline now routes covered same-file object-root
-    path-polymorphic cases into descriptor composition instead of warning and
-    rendering empty output. Unsupported object-root expressions that would need
-    descriptor context, such as conditional roots, hard-error for the covered
-    same-file component forms.
+  - Phase 0 safety baseline now hard-errors unsupported same-file object-root
+    ambiguity for covered component forms. Conditional object-root expressions
+    and other unsupported expressions that would need descriptor context are
+    rejected before they can render empty output.
   - Phase 0.5 descriptor composition is proven with focused Handlebars and PHP
     tests for replacement, control, one-hop relay, and descriptor containment.
   - Phase 1 same-file object-root path-polymorphism is implemented for
-    destructured child props and renamed props-object parameters.
+    destructured child props and renamed props-object parameters. Covered
+    multi-source object-root callsites are routed into descriptor composition;
+    unsupported ambiguity still fails closed.
   - A narrow Phase 2 same-file hardening slice is implemented for multi-hop
     relay and intermediate components that both consume and forward an object
-    root.
+    root. This is not the full Phase 2 surface; broader relay, mixed-context,
+    and future cross-file relay diagnostics remain review gates as the stream
+    expands.
   - Dynamic root containment is enforced at transform time for covered same-file
     descriptor paths: bare dynamic-root rendering is rejected before codegen.
 - **Still pending:**
@@ -33,6 +36,20 @@ pass descriptors for traced object-root props, and child components compose
 replacement/control paths from those descriptors at template render time. This
 keeps one authored child component and avoids component cloning for the covered
 same-file path-polymorphic cases.
+
+Descriptor helpers are now part of the template runtime contract for this
+experiment. Generated descriptor output may call:
+
+```txt
+createTemplateRootDescriptor(segments, declarationSegments?)
+getTemplateRootPathArg(descriptor, suffixSegments)
+```
+
+The plugin import injection must provide those helpers whenever descriptor
+composition is generated. Custom language integrations must tolerate composed
+path args produced by `getTemplateRootPathArg`. Descriptors may flow through
+traced relay props, but they must never reach rendered output directly; covered
+bare-root render paths fail at transform time.
 
 Background research:
 [store-selector-multi-source-path-research.md](./store-selector-multi-source-path-research.md).
@@ -623,6 +640,11 @@ Pass this phase only when:
 
 Extend object-root path-polymorphism through the explicit cross-file manifest
 without generated component variants.
+
+Same-file descriptor success does not imply cross-file readiness. The current
+cross-file manifest still emits one seed set per child component and suppresses
+ambiguous multi-parent seeds. Phase 3 must introduce the callsite-context model
+below before cross-file multi-source object roots can be treated as supported.
 
 ### Required Behavior
 
