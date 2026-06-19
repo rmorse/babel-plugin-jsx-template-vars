@@ -345,6 +345,7 @@ class StoreSelectorCollector {
 		this.config = config;
 		this.seedAliases = Array.isArray( config.storeSelectorSeedAliases ) ? config.storeSelectorSeedAliases : [];
 		this.declarations = new Set();
+		this.declarationProvenance = new Map();
 		this.selectorDeclarations = [];
 		this.aliasEntries = [];
 		this.aliasesByBinding = new WeakMap();
@@ -399,6 +400,7 @@ class StoreSelectorCollector {
 					source: alias.source,
 				} ) ),
 				listShapes: declarations.filter( declaration => declaration.includes( '[]' ) ),
+				declarationProvenance: this.getDeclarationProvenance( declarations ),
 				unsupported: this.unsupportedPaths,
 				childPropTraces: this.childPropTraces,
 			},
@@ -766,7 +768,10 @@ class StoreSelectorCollector {
 			return;
 		}
 
-		this.declarations.add( stringifySegments( normalizedSegments.slice( 0, lastListIndex + 1 ) ) );
+		this.addDeclaration( stringifySegments( normalizedSegments.slice( 0, lastListIndex + 1 ) ), {
+			kind: 'parent-list-for-child-seed',
+			segments: normalizedSegments.slice( 0, lastListIndex + 1 ),
+		} );
 	}
 
 	collectMapCallShape( path ) {
@@ -793,7 +798,12 @@ class StoreSelectorCollector {
 		const declarationListSegments = markLastSegmentAsList( sourceInfo.declarationSegments );
 		const declaration = stringifySegments( declarationListSegments );
 		if ( declaration ) {
-			this.declarations.add( declaration );
+			this.addDeclaration( declaration, {
+				kind: 'map-list-shape',
+				sourcePath: stringifySegments( sourceInfo.segments ),
+				sourceSegments: sourceInfo.segments,
+				declarationSegments: declarationListSegments,
+			} );
 		}
 		this.registerSafeListChainCallbackAliases( path.get( 'callee.object' ), listSegments, declarationListSegments );
 
@@ -1222,8 +1232,32 @@ class StoreSelectorCollector {
 
 		const declaration = stringifySegments( info.declarationSegments );
 		if ( declaration ) {
-			this.declarations.add( declaration );
+			this.addDeclaration( declaration, {
+				kind: 'usage',
+				sourcePath: stringifySegments( info.segments ),
+				sourceSegments: info.segments,
+				declarationSegments: info.declarationSegments,
+			} );
 		}
+	}
+
+	addDeclaration( declaration, provenance = {} ) {
+		if ( ! declaration ) {
+			return;
+		}
+
+		this.declarations.add( declaration );
+		if ( ! this.declarationProvenance.has( declaration ) ) {
+			this.declarationProvenance.set( declaration, [] );
+		}
+		this.declarationProvenance.get( declaration ).push( {
+			declaration,
+			...provenance,
+		} );
+	}
+
+	getDeclarationProvenance( declarations ) {
+		return declarations.flatMap( declaration => this.declarationProvenance.get( declaration ) || [] );
 	}
 
 	collectSelectorDerivedSegments( expressionPath ) {

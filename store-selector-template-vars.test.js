@@ -439,9 +439,16 @@ describe('experimental store selectors', () => {
 			expect.objectContaining({ localName: 'products', path: 'products' }),
 			expect.objectContaining({ localName: 'product', path: 'products[]' }),
 		]));
+		expect(debug.declarationProvenance).toEqual(expect.arrayContaining([
+			expect.objectContaining({ declaration: 'title', kind: 'usage', sourcePath: 'title' }),
+			expect.objectContaining({ declaration: 'products[]', kind: 'map-list-shape', sourcePath: 'products' }),
+		]));
 		expect(debug.unsupported).toEqual([]);
 		expect(childDebug.aliases).toEqual(expect.arrayContaining([
 			expect.objectContaining({ localName: 'name', path: 'products[].name', declarationPath: 'name' }),
+		]));
+		expect(childDebug.declarationProvenance).toEqual(expect.arrayContaining([
+			expect.objectContaining({ declaration: 'name', kind: 'usage', sourcePath: 'products[].name' }),
 		]));
 		expect(warn).not.toHaveBeenCalled();
 	});
@@ -506,9 +513,50 @@ describe('experimental store selectors', () => {
 
 		expect(debug.declarations).toEqual([ 'name' ]);
 		expect(debug.listShapes).toEqual([]);
+		expect(debug.declarationProvenance).toEqual([
+			expect.objectContaining({ declaration: 'name', kind: 'usage', sourcePath: 'products[].name' }),
+		]);
 		expect(result.code).not.toContain('{{#products}}');
 		expectNoOrphanedTemplateReplacements(result.code, [ 'product.name' ]);
 		expect(normalizeTemplateOutput(output)).toBe('<article>{{name}}</article>');
+	});
+
+	it('records props-object member aliases in selector debug metadata', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (whatever) => {
+				return <h1>{ whatever.item.title }</h1>;
+			};
+
+			const App = () => {
+				const anything = useStoreSelector((state) => state.hero);
+				return <Header item={ anything } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+		});
+		const childDebug = result.metadata.storeSelectorTemplateVars.find( entry => entry.componentName === 'Header' );
+
+		expect(childDebug.aliases).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'whatever',
+				memberName: 'item',
+				path: 'hero',
+				declarationPath: 'hero',
+				source: 'seed',
+			}),
+		]));
+		expect(childDebug.declarationProvenance).toEqual(expect.arrayContaining([
+			expect.objectContaining({ declaration: 'hero.title', kind: 'usage', sourcePath: 'hero.title' }),
+		]));
 	});
 
 	it.each([

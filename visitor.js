@@ -272,6 +272,7 @@ function templateVarsVisitor( babel, config ) {
 						declarations: selectorResult.debug.declarations,
 						aliases: selectorResult.debug.aliases,
 						listShapes: selectorResult.debug.listShapes,
+						declarationProvenance: selectorResult.debug.declarationProvenance,
 						unsupported: selectorResult.debug.unsupported,
 						childPropTraces: selectorResult.debug.childPropTraces,
 						incomingPropTraces: childPropTracesByComponent.get( componentName ) || [],

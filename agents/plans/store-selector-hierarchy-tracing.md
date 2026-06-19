@@ -16,6 +16,7 @@ registry/controller boundary:
   for Handlebars and PHP without child component `templateVars`, including
   list-context object-field props such as `badges={ product.badges }`
 - debug metadata is available through `metadata.storeSelectorTemplateVars`
+- debug metadata includes declaration provenance and props-object member aliases
 - Phase A tracing supports same-file direct scalar child props
 - same-file top-level multi-hop tracing is intentionally supported by the
   bounded auto-seeding pass; cross-file tracing remains out of scope
@@ -578,10 +579,20 @@ Never:
 
 ## Debug Metadata Additions
 
-Extend `metadata.storeSelectorTemplateVars` as tracing grows:
+`metadata.storeSelectorTemplateVars` now includes:
 
+- synthesized declarations and raw declarations
+- list shapes
+- aliases, including props-object member aliases via `memberName`
 - outgoing prop traces
 - incoming prop traces
+- unsupported boundaries
+- explicit, shadowed, and combined template vars
+- `declarationProvenance`, keyed by synthesized declaration, with the usage or
+  map-list source path that caused the declaration
+
+Remaining metadata hardening as tracing grows:
+
 - graph hop count
 - source component and target component
 - source prop name, child local binding name, and canonical path
