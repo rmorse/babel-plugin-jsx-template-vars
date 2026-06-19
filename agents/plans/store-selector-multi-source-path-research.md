@@ -4,9 +4,9 @@
 
 Research and investigation note for reviewer feedback.
 
-This document is not an implementation plan yet. It explores a limitation in
-the current experimental store-selector hierarchy tracing model and compares
-possible next architecture directions.
+This document is research background, not the active implementation checklist.
+It explores a limitation in the current experimental store-selector hierarchy
+tracing model and compares possible next architecture directions.
 
 Step-by-step implementation plan:
 [store-selector-multi-source-path-plan.md](./store-selector-multi-source-path-plan.md).

@@ -16,7 +16,7 @@ implementation direction.
 
 ## Current Research Background
 
-- [store-selector-callsite-specialization-research.md](./store-selector-callsite-specialization-research.md)
+- [store-selector-multi-source-path-research.md](./store-selector-multi-source-path-research.md)
   - Research background for multi-source path handling.
   - Revised after review to evaluate relative object-root context before
     specialization.

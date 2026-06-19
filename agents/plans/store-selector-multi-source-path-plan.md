@@ -5,7 +5,7 @@
 Step-by-step implementation plan for the next store-selector experiment stream.
 
 Background research:
-[store-selector-callsite-specialization-research.md](./store-selector-callsite-specialization-research.md).
+[store-selector-multi-source-path-research.md](./store-selector-multi-source-path-research.md).
 
 This plan converts the multi-source path research into concrete checkpoints,
 implementation guidance, caveats, and testing criteria. It is intentionally
@@ -162,6 +162,9 @@ template build.
 - Keep existing last-wins prevention.
 - Change this specific ambiguity class from warning-only degraded output to a
   hard diagnostic by default.
+- Use a dedicated diagnostic kind such as
+  `object-root-multi-source-ambiguity` so this change is surgical. It should not
+  hard-error scalar member materialization cases that already render correctly.
 - Preserve machine-readable debug metadata for the competing sources.
 - Do not change unrelated unsupported warnings unless they share the same
   partial-output risk.
@@ -179,6 +182,8 @@ Likely code areas:
 - Cross-file two parent files seeding the same child prop with different roots
   remains fail-closed.
 - Existing scalar parent materialization tests still pass.
+- Scalar member multi-source cases that parent-materialize correctly do not
+  trigger the object-root ambiguity diagnostic.
 - Existing unsupported boundary tests still produce the expected diagnostics.
 - Debug metadata includes every competing source path.
 
@@ -295,6 +300,12 @@ should not produce `[object Object]`, `{{home.hero}}`, or silent empty output.
   composed segment arrays for Handlebars and PHP.
 - If descriptor composition requires controller changes, those changes must be
   generic path/context support, not store-selector-specific output logic.
+- Treat the intended extension point as the existing parent JSX callsite
+  injection model, analogous to `__context__` injection for lists: the parent
+  injects a root descriptor, and child-relative path resolution consumes it.
+- Prefer generic `resolveSegments` / `pathResolver` integration for composing
+  descriptor segments with member paths. Controllers should continue to receive
+  ordinary structured path args after resolution.
 
 ### Required Tests
 
@@ -422,6 +433,13 @@ relay.
 - Pass an internal root descriptor for traced object-root props.
 - Resolve replacement/control arguments by composing member segments from that
   descriptor.
+- Anchor this in the parent JSX callsite injection path, not in global
+  per-component seed state. The model is:
+
+```txt
+parent JSX callsite injects descriptor -> child pathResolver composes member paths
+```
+
 - Fail closed if a descriptor is rendered bare or crosses an unsupported sink.
 - Ensure callsite identity is preserved before component/prop grouping erases
   source distinctions.
@@ -527,6 +545,9 @@ App -> Shell:    hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 Shell -> Header: hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 ```
 
+- Relay components inherit and forward the same object-root descriptor. They do
+  not re-root the descriptor at the local prop name. In the example above,
+  `Shell.hero` and `Header.hero` both resolve against `home.hero`.
 - Treat each edge environment as the unit of propagation. A component can be
   visited multiple times with different incoming environments without collapsing
   them into one global component binding.
@@ -601,6 +622,16 @@ ArticlePage Header -> article.hero.title
 
 - Extend the manifest to record callsite edge environments, not one global seed
   per child prop.
+- Conceptually replace the single-seed model with two manifest views:
+
+```txt
+callsiteContextsByFile
+  parent-file callsite edges and canonical object roots
+
+childRelativeDiscoveryByFile
+  child-file relative paths discovered without one global canonical seed
+```
+
 - Parent-side manifest records should include:
   - source file
   - source component

@@ -5,7 +5,7 @@
 Superseded historical review.
 
 This review was written against an earlier specialization-first version of
-[store-selector-callsite-specialization-research.md](./store-selector-callsite-specialization-research.md).
+[store-selector-multi-source-path-research.md](./store-selector-multi-source-path-research.md).
 The active source of truth is now
 [store-selector-multi-source-path-plan.md](./store-selector-multi-source-path-plan.md).
 
@@ -22,7 +22,7 @@ This file is retained only as audit history for the review process.
 ---
 
 Critical review of
-[`store-selector-callsite-specialization-research.md`](./store-selector-callsite-specialization-research.md)
+[`store-selector-multi-source-path-research.md`](./store-selector-multi-source-path-research.md)
 against the shipped store-selector implementation on
 `experiment/store-selector-data-contract` (collector, cross-file manifest,
 registry, controllers, and existing tests).
