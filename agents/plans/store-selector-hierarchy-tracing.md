@@ -106,6 +106,10 @@ Phase B and Phase C to use the same discovery engine.
 - Accept seed aliases shaped like `local binding -> canonical segments`.
 - Support a seed mode for object roots and a C-ready seed mode for list-relative
   roots.
+- Keep `experimentalStoreSelectors.__seedAliasesByComponent` as an
+  undocumented internal bridge for tests and future cross-file prepass input. It
+  must remain validated/fail-closed and should not be documented as supported
+  author-facing API while the experiment is in draft.
 - Preserve existing selector-call collection behavior.
 - Always record unsupported metadata in transform metadata, even when warnings
   are suppressed with `warnOnUnsupported: false`.

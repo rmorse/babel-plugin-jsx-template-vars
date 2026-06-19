@@ -631,7 +631,7 @@ class StoreSelectorCollector {
 				}
 
 				if ( this.canSeedChildProp( elementName, segments ) ) {
-					this.addParentListDeclarationForSeed( segments );
+					this.addParentListDeclarationForSeed( expressionInfo.declarationSegments );
 					this.childPropSeedTraces.push( {
 						componentName: elementName,
 						propName: path.node.name.name,

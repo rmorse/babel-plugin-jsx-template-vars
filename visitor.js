@@ -284,7 +284,7 @@ function templateVarsVisitor( babel, config ) {
 					} );
 				}
 
-				if ( combinedTemplateVars.length === 0 ) {
+				if ( combinedTemplateVars.length === 0 && aliases.length === 0 ) {
 					return;
 				}
 

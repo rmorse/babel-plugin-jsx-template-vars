@@ -597,6 +597,49 @@ describe('experimental store selectors', () => {
 
 	it.each([
 		[
+			'handlebars',
+			'<main>{{#products}}<article><span>{{name}}</span></article>{{/products}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><span><?php echo $data_1['name']; ?></span></article><?php } ?></main>",
+		],
+	])('auto-seeds list item props through forwarding intermediates for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Inner = ({ product }) => <span>{ product.name }</span>;
+
+			const ProductCard = ({ product }) => (
+				<article>
+					<Inner product={ product } />
+				</article>
+			);
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard product={ product } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, {
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		});
+
+		expectNoOrphanedTemplateReplacements(code, [ 'product.name' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
 			{ localName: 'hero' },
 			/seed aliases must include a localName string and segments array/,
 		],
