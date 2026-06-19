@@ -124,6 +124,40 @@ be a last-wins bug. Suppressing the seed avoids that particular bug, but warning
 and continuing can still produce empty child output. This is a degraded-output
 failure, not a fully safe fail-closed state.
 
+This limitation is not cross-file-only. The same ambiguity exists in one file:
+
+```jsx
+const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+const App = () => {
+	const homeHero = useStoreSelector((state) => state.home.hero);
+	const articleHero = useStoreSelector((state) => state.article.hero);
+
+	return (
+		<main>
+			<Header hero={ homeHero } />
+			<Header hero={ articleHero } />
+		</main>
+	);
+};
+```
+
+The underlying limitation is global per component binding:
+
+```txt
+Header.hero -> one canonical source
+```
+
+but reusable components need per-callsite context:
+
+```txt
+Home callsite:    Header.hero -> home.hero
+Article callsite: Header.hero -> article.hero
+```
+
+Cross-file reuse makes this more visible, but same-file multi-callsite reuse has
+the same root cause.
+
 ## Important Distinction: Path Difference Vs Shape Difference
 
 There are two different problems here.
@@ -149,6 +183,29 @@ different parent callsites map that contract to different locations in the
 global server data object.
 
 The transform should eventually support this.
+
+Scalar member props are less urgent because some parent-side materialization
+already works today:
+
+```jsx
+<Card name={ featured.name } />
+<Card name={ secondary.name } />
+```
+
+can render distinct scalar replacements at the parent callsites. The hard case
+is object-root child usage and role inference inside the child:
+
+```jsx
+const Header = ({ hero }) => (
+	<header>
+		<h1>{ hero.title }</h1>
+		{ hero.status === 'published' && <span>Published</span> }
+	</header>
+);
+```
+
+That is where the child needs a per-callsite object context rather than a
+single global `Header.hero` seed.
 
 ### Same Prop Name, Different Shape
 
@@ -599,6 +656,29 @@ The hashed identity needs to include:
 - explicit child `templateVars` that coexist with the trace context
 - role-affecting metadata, if shape inference starts depending on it
 
+For multi-hop chains, the key should be based on the normalized incoming trace
+context at the specialized component boundary, not on whichever parent happened
+to relay the prop most recently. For example:
+
+```txt
+App.homeHero -> Shell.hero -> Header.hero
+```
+
+and:
+
+```txt
+App.homeHero -> Layout.hero -> Header.hero
+```
+
+may be dedupable only if the resulting `Header.hero` incoming context is
+identical, including canonical path, declaration relativity, list depth, and
+shape metadata.
+
+For list-context variants, same canonical segments are not enough. Two contexts
+that share a source path but differ in inherited list depth or relative
+declaration segments must remain distinct unless a test proves they generate
+identical output.
+
 For example:
 
 ```json
@@ -911,6 +991,25 @@ Unsupported reasoning:
 author passed wrong prop name -> transform guesses intended prop
 ```
 
+Supporting multiple valid canonical paths does not change this boundary. These
+are valid mappings:
+
+```txt
+Home callsite:    Header.hero -> home.hero
+Article callsite: Header.hero -> article.hero
+```
+
+because both callsites satisfy the same local child contract:
+
+```txt
+Header reads hero.title
+```
+
+But wrong prop names, mismatched destructuring, dynamic props, or incompatible
+local shapes should still fail closed. Multi-source support should remove false
+conflicts between valid callsites; it should not infer intended wiring when the
+React component contract itself is wrong.
+
 This distinction should remain explicit in docs and diagnostics.
 
 ## Debug Metadata Requirements
@@ -979,16 +1078,24 @@ object-context model:
 7. Nested list object-field prop, such as `badges={ product.badges }`.
 8. Multi-hop propagation through an intermediate component.
 9. Explicit child `templateVars` coexistence.
-10. Mixed list/non-list contexts fail closed or render correctly without partial
+10. Explicit child `templateVars` collision with traced declarations fails
+    closed or has a documented precedence rule.
+11. Conditional prop source in one callsite, such as `hero={ cond ? a : b }`,
+    fails closed unless the transform can prove one canonical source.
+12. Same child inside and outside `.map()` in one parent fails closed or renders
+    correctly without partial output.
+13. Mixed list/non-list contexts fail closed or render correctly without partial
     output.
-11. Handlebars and PHP output parity.
-12. No last-wins behavior.
-13. No orphaned replace/list/control declarations.
-14. Debug metadata mapping callsite -> context root -> compiled paths.
-15. Existing ambiguous warning-only degraded output is replaced by a hard error
+14. Child usage covers replacement, control, and list roles where those roles are
+    supported by the strategy.
+15. Handlebars and PHP output parity.
+16. No last-wins behavior.
+17. No orphaned replace/list/control declarations.
+18. Debug metadata mapping callsite -> context root -> compiled paths.
+19. Existing ambiguous warning-only degraded output is replaced by a hard error
     or a correct transform.
-16. Existing flat API behavior remains unchanged.
-17. Existing non-specialized selector fixtures remain unchanged.
+20. Existing flat API behavior remains unchanged.
+21. Existing non-specialized selector fixtures remain unchanged.
 
 Scalar prop reuse should remain a regression test, but it is not the motivating
 hard case because parent-side materialization already handles many scalar leaf
@@ -1006,13 +1113,18 @@ specialization needs additional gates:
 4. Parent callsites are rewritten before the final controller pass.
 5. Cross-file mode has an explicit import/export strategy.
 6. Multi-prop specializations are covered.
-7. Transitive multi-hop closure is bounded and tested.
-8. Recursive/cyclic component graphs fail closed or use a tested fixed-point
+7. Conditional prop sources fail closed unless one canonical source can be
+   proven.
+8. Same child inside and outside `.map()` is covered.
+9. Specialized children used in control and list roles are covered.
+10. Explicit child `templateVars` coexistence and collision behavior is covered.
+11. Transitive multi-hop closure is bounded and tested.
+12. Recursive/cyclic component graphs fail closed or use a tested fixed-point
    policy.
-9. Variant count has a hard bound and debug metadata reports generated variants.
-10. No orphaned generated variants or imports.
-11. Handlebars and PHP output parity.
-12. Existing ambiguous fail-closed behavior remains for unsupported flows.
+13. Variant count has a hard bound and debug metadata reports generated variants.
+14. No orphaned generated variants or imports.
+15. Handlebars and PHP output parity.
+16. Existing ambiguous fail-closed behavior remains for unsupported flows.
 
 ## Acceptance Gates For Shape-Polymorphism
 
@@ -1079,6 +1191,10 @@ narrow same-file relative object-context proof:
 - no cross-file rewriting yet
 - object-root control coverage
 - full debug metadata for both callsite contexts
+
+That first slice is object-root only. The broader path-polymorphism program
+still includes list-relative multi-source variants, including child components
+used inside and outside `.map()` and list-context object-field props.
 
 Only after that should we extend the model to cross-file manifest output.
 
