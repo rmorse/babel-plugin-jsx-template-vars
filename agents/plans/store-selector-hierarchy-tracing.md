@@ -20,7 +20,9 @@ registry/controller boundary:
 - same-file top-level multi-hop tracing is intentionally supported by the
   bounded auto-seeding pass; cross-file tracing remains out of scope
 - focused multi-hop and cycle-safety tests cover the bounded fixed-point pass
-- non-object-pattern child params now warn by default and throw in strict mode
+- simple props-object child params such as `(props) => props.hero.title` are
+  supported for replacement, control, and list-context child usage
+- unsupported child param patterns warn by default and throw in strict mode
 
 Phase A scope is deliberately narrow:
 
@@ -140,10 +142,11 @@ strict mode unless a phase explicitly supports them:
 - multiple selector-derived sources for one prop
 - the same child rendered inside and outside a list context with the same traced
   prop
-- traced child components whose first parameter is not a destructured object
-  pattern, for example `const Header = (props) => ...` or
-  `const Header = (hero) => ...`; current tracing requires static prop-to-binding
-  resolution from `({ hero })`
+- traced child components whose first parameter cannot be statically resolved as
+  either a destructured object pattern or a props-object identifier. Supported
+  examples are `({ hero }) => hero.title` and `(props) => props.hero.title`;
+  bare param-as-prop forms such as `(hero) => hero.title` for
+  `<Header hero={ hero } />` remain outside this slice.
 - dynamic component names
 - imported/unknown child components before cross-file tracing
 - prop mutation or rebinding that obscures provenance
@@ -692,9 +695,9 @@ before broader cross-file tracing or context tracing work starts.
 
 Send the completed full-surface parity and hardening gate through review. If
 reviewers agree the same-file hierarchy story is stable, choose the next slice
-from the remaining documented boundaries: non-object-pattern child parameter
-support, cross-file tracing exploration, or broader unsupported-boundary/debug
-metadata hardening.
+from the remaining documented boundaries: bare param-as-prop diagnostics,
+cross-file tracing exploration, or broader unsupported-boundary/debug metadata
+hardening.
 
 Historical refactor pass/fail gates, now completed:
 
@@ -719,8 +722,8 @@ Phase B pass/fail gates:
 - object-root direct render policy is covered by an explicit unsupported
   warning/strict negative test
 - unsupported computed members, child forwarding, unknown/imported child
-  components, non-object-pattern child params, and spreads warn by default and
-  throw in strict mode
+  components, unsupported param patterns, and spreads warn by default and throw
+  in strict mode
 - selector parent plus flat child `templateVars` does not silently byte-match a
   fully traced target when provenance was lost; it emits the partial-flat-fallback
   diagnostic

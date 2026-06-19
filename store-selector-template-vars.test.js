@@ -1123,7 +1123,7 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it('warns and fails closed when traced child params are not destructured', async () => {
+	it('auto-seeds object root props into props-object child params', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -1142,16 +1142,76 @@ describe('experimental store selectors', () => {
 
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
-		expect(normalizeTemplateOutput(output)).toBe('<h1></h1>');
-		expect(warn).toHaveBeenCalledWith(expect.stringContaining('requires a destructured object parameter'));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it('throws for non-destructured traced child params in strict mode', () => {
+	it('auto-seeds object root props into props-object child controls', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 			const Header = (props) => {
-				return <h1>{ props.hero.title }</h1>;
+				return (
+					<header>
+						{ props.hero.status === 'published' && <aside>Published</aside> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<header>{{#if_equal hero.status 'published'}}<aside>Published</aside>{{/if_equal}}</header>");
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('auto-seeds list-context object fields into props-object child params', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ProductCard = (props) => (
+				<article>
+					{ props.badges.map((badge) => (
+						<span>{ badge.label }</span>
+					)) }
+				</article>
+			);
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard badges={ product.badges } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main>{{#products}}<article>{{#badges}}<span>{{label}}</span>{{/badges}}</article>{{/products}}</main>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('throws for unsupported traced child param patterns in strict mode', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ([ hero ]) => {
+				return <h1>{ hero.title }</h1>;
 			};
 
 			const App = () => {
@@ -1165,7 +1225,7 @@ describe('experimental store selectors', () => {
 		expect(() => transformTemplateVars(source, {
 			...selectorOptions,
 			strict: true,
-		})).toThrow(/requires a destructured object parameter/);
+		})).toThrow(/requires a destructured object or props object parameter/);
 	});
 
 	it('auto-seeds object root props across same-file relay components', async () => {

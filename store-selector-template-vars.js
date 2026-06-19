@@ -101,6 +101,44 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 	const functionPath = componentPath.get( 'declarations.0.init' );
 	const firstParamPath = functionPath.get( 'params.0' );
 	const firstParam = firstParamPath?.node;
+	if ( firstParam && babel.types.isIdentifier( firstParam ) ) {
+		const binding = firstParamPath.scope.getBinding( firstParam.name );
+		if ( ! binding ) {
+			return {
+				aliases: [],
+				declarations: [],
+			};
+		}
+
+		const aliases = [];
+		const declarations = [];
+		groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
+			const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+			if ( propTraces.some( trace => trace.unsupported || trace.seedOnly ) || sourcePaths.size > 1 ) {
+				const componentName = propTraces[ 0 ]?.componentName || 'child component';
+				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+				const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
+				diagnostics.unsupported( componentPath, message, config );
+				return;
+			}
+
+			const trace = propTraces[ 0 ];
+			const segments = normalizeCanonicalSegments( trace.segments );
+			aliases.push( {
+				bindingIdentifier: binding.identifier,
+				localName: firstParam.name,
+				memberName: propName,
+				segments,
+			} );
+			declarations.push( stringifySegments( segments ) );
+		} );
+
+		return {
+			aliases,
+			declarations: Array.from( new Set( declarations ) ).sort(),
+		};
+	}
+
 	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
 		warnUnsupportedChildParamShape( componentPath, traces, config );
 		return {
@@ -159,6 +197,36 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 	const functionPath = componentPath.get( 'declarations.0.init' );
 	const firstParamPath = functionPath.get( 'params.0' );
 	const firstParam = firstParamPath?.node;
+	if ( firstParam && babel.types.isIdentifier( firstParam ) ) {
+		const binding = firstParamPath.scope.getBinding( firstParam.name );
+		if ( ! binding ) {
+			return [];
+		}
+
+		const seedAliases = [];
+		const relatedTracesByProp = groupChildPropTraces( relatedTraces );
+		groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
+			const validationTraces = relatedTracesByProp.get( propName ) || propTraces;
+			const sourcePaths = new Set( validationTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+			if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
+				const componentName = propTraces[ 0 ]?.componentName || 'child component';
+				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+				const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
+				diagnostics.unsupported( componentPath, message, config );
+				return;
+			}
+
+			seedAliases.push( {
+				localName: firstParam.name,
+				memberName: propName,
+				segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
+				declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
+			} );
+		} );
+
+		return seedAliases;
+	}
+
 	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
 		warnUnsupportedChildParamShape( componentPath, traces, config );
 		return [];
@@ -197,7 +265,7 @@ function warnUnsupportedChildParamShape( componentPath, traces, config ) {
 	const propNames = Array.from( new Set( traces.map( trace => trace.propName ).filter( Boolean ) ) );
 	const propList = propNames.length > 0 ? ` for prop${ propNames.length === 1 ? '' : 's' } "${ propNames.join( ', ' ) }"` : '';
 	const exampleProp = propNames[ 0 ] || 'value';
-	const message = `Store selector tracing for child component "${ componentName }" requires a destructured object parameter, for example ({ ${ exampleProp } }) => ...; tracing is disabled${ propList }.`;
+	const message = `Store selector tracing for child component "${ componentName }" requires a destructured object or props object parameter, for example ({ ${ exampleProp } }) => ... or (props) => props.${ exampleProp }; tracing is disabled${ propList }.`;
 	diagnostics.unsupported( componentPath, message, config );
 }
 
@@ -280,6 +348,7 @@ class StoreSelectorCollector {
 		this.selectorDeclarations = [];
 		this.aliasEntries = [];
 		this.aliasesByBinding = new WeakMap();
+		this.memberAliasesByBinding = new WeakMap();
 		this.mapCallPaths = new Set();
 		this.unsupportedChildPropExpressions = new WeakSet();
 		this.unsupportedPaths = [];
@@ -322,6 +391,7 @@ class StoreSelectorCollector {
 				declarations,
 				aliases: this.aliasEntries.map( ( alias ) => ( {
 					localName: alias.localName,
+					memberName: alias.memberName,
 					path: stringifySegments( alias.segments ),
 					segments: alias.segments,
 					declarationPath: stringifySegments( alias.declarationSegments ),
@@ -855,6 +925,14 @@ class StoreSelectorCollector {
 				);
 			}
 
+			if ( typeof seedAlias.memberName === 'string' && seedAlias.memberName.length > 0 ) {
+				this.registerMemberAlias( seedAlias.localName, seedAlias.memberName, seedAlias.segments, this.componentFunctionPath, {
+					declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
+					source: 'seed',
+				} );
+				return;
+			}
+
 			this.registerBindingAlias( binding, seedAlias.localName, seedAlias.segments, {
 				declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
 				source: 'seed',
@@ -869,6 +947,15 @@ class StoreSelectorCollector {
 		}
 
 		this.registerBindingAlias( binding, localName, segments, options );
+	}
+
+	registerMemberAlias( objectLocalName, memberName, segments, path, options = {} ) {
+		const binding = path.scope.getBinding( objectLocalName );
+		if ( ! binding ) {
+			return;
+		}
+
+		this.registerBindingMemberAlias( binding, objectLocalName, memberName, segments, options );
 	}
 
 	registerBindingAlias( binding, localName, segments, options = {} ) {
@@ -894,6 +981,39 @@ class StoreSelectorCollector {
 		};
 
 		this.aliasesByBinding.set( binding.identifier, entry );
+		this.aliasEntries.push( entry );
+	}
+
+	registerBindingMemberAlias( binding, objectLocalName, memberName, segments, options = {} ) {
+		const normalizedSegments = normalizeCanonicalSegments( segments );
+		const normalizedDeclarationSegments = Array.isArray( options.declarationSegments ) ?
+			normalizeCanonicalSegments( options.declarationSegments ) :
+			normalizedSegments;
+		let aliasesByMember = this.memberAliasesByBinding.get( binding.identifier );
+		if ( ! aliasesByMember ) {
+			aliasesByMember = new Map();
+			this.memberAliasesByBinding.set( binding.identifier, aliasesByMember );
+		}
+
+		const existing = aliasesByMember.get( memberName );
+		if (
+			existing &&
+			stringifySegments( existing.segments ) === stringifySegments( normalizedSegments ) &&
+			stringifySegments( existing.declarationSegments ) === stringifySegments( normalizedDeclarationSegments )
+		) {
+			return;
+		}
+
+		const entry = {
+			bindingIdentifier: binding.identifier,
+			localName: objectLocalName,
+			memberName,
+			segments: normalizedSegments,
+			declarationSegments: normalizedDeclarationSegments,
+			source: options.source || 'local',
+		};
+
+		aliasesByMember.set( memberName, entry );
 		this.aliasEntries.push( entry );
 	}
 
@@ -1036,6 +1156,11 @@ class StoreSelectorCollector {
 		}
 
 		if ( types.isMemberExpression( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
+			const memberInfo = this.resolveMemberAliasInfo( expression, path );
+			if ( memberInfo ) {
+				return memberInfo;
+			}
+
 			const objectInfo = this.resolveExpressionInfo( expression.object, path );
 			return objectInfo ? {
 				segments: [ ...objectInfo.segments, expression.property.name ],
@@ -1048,6 +1173,27 @@ class StoreSelectorCollector {
 		}
 
 		return null;
+	}
+
+	resolveMemberAliasInfo( expression, path ) {
+		if (
+			! this.babel.types.isIdentifier( expression.object ) ||
+			! this.babel.types.isIdentifier( expression.property )
+		) {
+			return null;
+		}
+
+		const binding = path.scope.getBinding( expression.object.name );
+		if ( ! binding ) {
+			return null;
+		}
+
+		const aliasesByMember = this.memberAliasesByBinding.get( binding.identifier );
+		const alias = aliasesByMember?.get( expression.property.name );
+		return alias ? {
+			segments: alias.segments,
+			declarationSegments: alias.declarationSegments || alias.segments,
+		} : null;
 	}
 
 	resolveIdentifierSegments( name, path ) {
@@ -1320,7 +1466,18 @@ class StoreSelectorCollector {
 
 function createAliasResolver( aliases = [] ) {
 	const aliasesByBinding = new WeakMap();
+	const memberAliasesByBinding = new WeakMap();
 	aliases.forEach( ( alias ) => {
+		if ( alias.bindingIdentifier && alias.memberName ) {
+			let aliasesByMember = memberAliasesByBinding.get( alias.bindingIdentifier );
+			if ( ! aliasesByMember ) {
+				aliasesByMember = new Map();
+				memberAliasesByBinding.set( alias.bindingIdentifier, aliasesByMember );
+			}
+			aliasesByMember.set( alias.memberName, alias );
+			return;
+		}
+
 		if ( alias.bindingIdentifier ) {
 			aliasesByBinding.set( alias.bindingIdentifier, alias );
 		}
@@ -1332,6 +1489,16 @@ function createAliasResolver( aliases = [] ) {
 		}
 
 		const binding = path?.scope?.getBinding( segments[ 0 ] );
+		if ( binding && segments.length > 1 && memberAliasesByBinding.has( binding.identifier ) ) {
+			const alias = memberAliasesByBinding.get( binding.identifier ).get( segments[ 1 ] );
+			if ( alias ) {
+				return [
+					...( alias.declarationSegments || alias.segments ),
+					...segments.slice( 2 ),
+				];
+			}
+		}
+
 		if ( binding && aliasesByBinding.has( binding.identifier ) ) {
 			return [
 				...( aliasesByBinding.get( binding.identifier ).declarationSegments || aliasesByBinding.get( binding.identifier ).segments ),

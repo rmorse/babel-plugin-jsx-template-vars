@@ -27,6 +27,7 @@ class ListController {
 		this.listMetadataBySourceKey = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.sourceKey, meta ] ) );
 		this.scalarMetadataByPath = new Map( ( vars.scalarMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.pathAliasesByBinding = new WeakMap();
+		this.memberPathAliasesByBinding = new WeakMap();
 		this.renderedListAliasesByBinding = new WeakMap();
 		this.unsupportedRenderedAliasesByBinding = new WeakMap();
 
@@ -143,6 +144,19 @@ class ListController {
 	registerExternalPathAliases( aliases = [] ) {
 		aliases.forEach( ( alias ) => {
 			if ( ! alias.bindingIdentifier || ! Array.isArray( alias.segments ) ) {
+				return;
+			}
+
+			if ( alias.memberName ) {
+				let aliasesByMember = this.memberPathAliasesByBinding.get( alias.bindingIdentifier );
+				if ( ! aliasesByMember ) {
+					aliasesByMember = new Map();
+					this.memberPathAliasesByBinding.set( alias.bindingIdentifier, aliasesByMember );
+				}
+				aliasesByMember.set( alias.memberName, {
+					segments: this.normalizeCanonicalSegments( alias.segments ),
+					declarationSegments: this.normalizeCanonicalSegments( alias.declarationSegments || alias.segments ),
+				} );
 				return;
 			}
 
@@ -818,6 +832,11 @@ class ListController {
 		}
 
 		if ( this.isStaticMemberExpression( expression ) ) {
+			const memberCandidates = this.resolveMemberExpressionSegmentCandidates( expression, path );
+			if ( memberCandidates.length > 0 ) {
+				return memberCandidates[ 0 ];
+			}
+
 			const objectSegments = this.resolveExpressionSegments( expression.object, path );
 			if ( ! objectSegments || ! types.isIdentifier( expression.property ) ) {
 				return null;
@@ -843,6 +862,12 @@ class ListController {
 		}
 
 		const tail = segments.slice( 1 );
+		const memberCandidates = this.resolveMemberSegmentCandidates( segments[ 0 ], segments[ 1 ], path )
+			.map( rootSegments => [ ...rootSegments, ...segments.slice( 2 ) ] );
+		if ( memberCandidates.length > 0 ) {
+			return dedupeSegmentCandidates( memberCandidates );
+		}
+
 		const candidates = this.resolveIdentifierSegmentCandidates( segments[ 0 ], path )
 			.map( rootSegments => [ ...rootSegments, ...tail ] );
 		return dedupeSegmentCandidates( candidates );
@@ -863,6 +888,32 @@ class ListController {
 		}
 
 		return [ [ this.normalizeRootSegment( name ) ] ];
+	}
+
+	resolveMemberExpressionSegmentCandidates( expression, path ) {
+		const { types } = this.babel;
+		if ( ! types.isIdentifier( expression.object ) || ! types.isIdentifier( expression.property ) ) {
+			return [];
+		}
+		return this.resolveMemberSegmentCandidates( expression.object.name, expression.property.name, path );
+	}
+
+	resolveMemberSegmentCandidates( objectName, memberName, path ) {
+		if ( ! objectName || ! memberName ) {
+			return [];
+		}
+
+		const binding = path?.scope?.getBinding( objectName );
+		const aliasesByMember = binding ? this.memberPathAliasesByBinding.get( binding.identifier ) : null;
+		const alias = aliasesByMember?.get( memberName );
+		if ( ! alias ) {
+			return [];
+		}
+
+		return dedupeSegmentCandidates( [
+			alias.declarationSegments || alias.segments,
+			alias.segments,
+		] );
 	}
 
 	isStaticMemberExpression( expression ) {
