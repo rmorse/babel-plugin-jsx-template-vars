@@ -8,6 +8,9 @@ This document is not an implementation plan yet. It explores a limitation in
 the current experimental store-selector hierarchy tracing model and compares
 possible next architecture directions.
 
+Step-by-step implementation plan:
+[store-selector-multi-source-path-plan.md](./store-selector-multi-source-path-plan.md).
+
 The immediate problem is multiple parent callsites using the same child
 component with different canonical data paths. The first version of this note
 recommended callsite-specific component specialization. Reviewer feedback
