@@ -1096,6 +1096,33 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('auto-seeds object root props into child component controls', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return (
+					<header>
+						{ hero.status === 'published' && <aside>Published</aside> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<header>{{#if_equal hero.status 'published'}}<aside>Published</aside>{{/if_equal}}</header>");
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('warns and fails closed when traced child params are not destructured', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -1169,6 +1196,38 @@ describe('experimental store selectors', () => {
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe('<main><section><h1>{{hero.title}}</h1></section></main>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('auto-seeds relay components that also consume incoming props', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const Shell = ({ hero }) => {
+				return (
+					<section>
+						<p>{ hero.subtitle }</p>
+						<Header hero={ hero } />
+					</section>
+				);
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Shell hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<section><p>{{hero.subtitle}}</p><h1>{{hero.title}}</h1></section>');
 		expect(warn).not.toHaveBeenCalled();
 	});
 
