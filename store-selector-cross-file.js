@@ -4,6 +4,7 @@ const {
 	collectStoreSelectorImports,
 	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
+	createStoreSelectorDynamicRootAliases,
 	createStoreSelectorSeedAliases,
 } = require( './store-selector-template-vars' );
 
@@ -13,12 +14,16 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const debug = {
 		importEdges: [],
 		seedEdges: [],
+		callsiteContexts: [],
 		skippedImports: [],
 		ambiguousSeeds: [],
 	};
 	resolveRecordImports( records, diagnostics, debug );
 
 	const seedAliasesByFile = {};
+	const dynamicRootPropsByFile = {};
+	const callsiteContextsByFile = {};
+	const childRelativeDiscoveryByFile = {};
 	const seedAliasStates = new Map();
 	const totalComponents = Array.from( records.values() )
 		.reduce( ( count, record ) => count + record.componentPaths.size, 0 );
@@ -28,6 +33,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 
 		records.forEach( ( record ) => {
 			const componentNames = getRecordComponentNames( record );
+			const componentPaths = getRecordComponentPaths( record, records );
 			const childPropTracesByComponent = new Map();
 			const childSeedTracesByComponent = new Map();
 
@@ -39,6 +45,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 					{
 						...options.config,
 						storeSelectorComponentNames: componentNames,
+						storeSelectorComponentPaths: componentPaths,
 						storeSelectorSeedAliases: getManifestSeeds( seedAliasesByFile, record.filename, componentName ),
 						storeSelectorNeutralizeSelectors: false,
 					}
@@ -67,7 +74,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 				);
 
 				seedAliases.forEach( ( seedAlias ) => {
-					if ( addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, debug, target.filename, target.componentName, seedAlias, {
+					if ( addManifestSeedAlias( seedAliasesByFile, dynamicRootPropsByFile, callsiteContextsByFile, childRelativeDiscoveryByFile, seedAliasStates, diagnostics, debug, target.filename, target.componentName, target.componentPath, seedAlias, {
 						sourceFilename: seedTraces[ 0 ]?.sourceFilename || record.filename,
 						sourceComponentName: seedTraces[ 0 ]?.sourceComponentName,
 						sourceChildComponentName: localComponentName,
@@ -85,6 +92,9 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 
 	return {
 		seedAliasesByFile,
+		dynamicRootPropsByFile,
+		callsiteContextsByFile,
+		childRelativeDiscoveryByFile,
 		componentNamesByFile: createComponentNamesByFile( records ),
 		diagnostics,
 		debug: {
@@ -391,6 +401,18 @@ function getRecordComponentNames( record ) {
 	] );
 }
 
+function getRecordComponentPaths( record, records ) {
+	const componentPaths = new Map( record.componentPaths );
+	record.imports.forEach( ( imported, localName ) => {
+		const targetRecord = records.get( imported.filename );
+		const componentPath = targetRecord?.componentPaths.get( imported.componentName );
+		if ( componentPath ) {
+			componentPaths.set( localName, componentPath );
+		}
+	} );
+	return componentPaths;
+}
+
 function createComponentNamesByFile( records ) {
 	const componentNamesByFile = {};
 	records.forEach( ( record ) => {
@@ -402,7 +424,20 @@ function createComponentNamesByFile( records ) {
 	return componentNamesByFile;
 }
 
-function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, debug, filename, componentName, seedAlias, source = {} ) {
+function addManifestSeedAlias(
+	seedAliasesByFile,
+	dynamicRootPropsByFile,
+	callsiteContextsByFile,
+	childRelativeDiscoveryByFile,
+	seedAliasStates,
+	diagnostics,
+	debug,
+	filename,
+	componentName,
+	componentPath,
+	seedAlias,
+	source = {}
+) {
 	if ( ! seedAlias || ! seedAlias.localName ) {
 		return false;
 	}
@@ -410,12 +445,81 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 	const normalizedFilename = normalizeFilename( filename );
 	const stateKey = createSeedAliasStateKey( normalizedFilename, componentName, seedAlias );
 	const sourceKey = createSeedAliasSourceKey( seedAlias );
+	const propName = getSeedAliasPropName( seedAlias );
 	const existingState = seedAliasStates.get( stateKey );
+	if ( existingState?.dynamicRoot ) {
+		addDynamicRootCallsiteContext(
+			dynamicRootPropsByFile,
+			callsiteContextsByFile,
+			debug,
+			source,
+			normalizedFilename,
+			componentName,
+			existingState.seedAlias,
+			seedAlias
+		);
+		return false;
+	}
 	if ( existingState?.ambiguous ) {
 		return false;
 	}
 
 	if ( existingState && existingState.sourceKey !== sourceKey ) {
+		const dynamicRootAlias = createDynamicRootAliasForSeedConflict(
+			componentPath,
+			componentName,
+			existingState.seedAlias,
+			seedAlias
+		);
+		if ( dynamicRootAlias ) {
+			removeManifestSeedAlias( seedAliasesByFile, normalizedFilename, componentName, existingState.seedAlias );
+			pushManifestSeedAlias( seedAliasesByFile, normalizedFilename, componentName, dynamicRootAlias );
+			seedAliasStates.set( stateKey, {
+				dynamicRoot: true,
+				sourceKey: createSeedAliasSourceKey( dynamicRootAlias ),
+				seedAlias: dynamicRootAlias,
+			} );
+			addChildRelativeDiscovery(
+				childRelativeDiscoveryByFile,
+				normalizedFilename,
+				componentName,
+				dynamicRootAlias
+			);
+			addDynamicRootCallsiteContext(
+				dynamicRootPropsByFile,
+				callsiteContextsByFile,
+				debug,
+				existingState.source,
+				normalizedFilename,
+				componentName,
+				dynamicRootAlias,
+				existingState.seedAlias
+			);
+			addDynamicRootCallsiteContext(
+				dynamicRootPropsByFile,
+				callsiteContextsByFile,
+				debug,
+				source,
+				normalizedFilename,
+				componentName,
+				dynamicRootAlias,
+				seedAlias
+			);
+			debug.seedEdges.push( {
+				sourceFilename: source.sourceFilename,
+				sourceComponentName: source.sourceComponentName,
+				sourceChildComponentName: source.sourceChildComponentName,
+				targetFilename: normalizedFilename,
+				targetComponentName: componentName,
+				localName: dynamicRootAlias.localName,
+				memberName: dynamicRootAlias.memberName,
+				sourcePath: stringifySegments( dynamicRootAlias.segments || [] ),
+				declarationPath: stringifySegments( dynamicRootAlias.declarationSegments || [] ),
+				strategy: 'dynamic-root',
+			} );
+			return true;
+		}
+
 		removeManifestSeedAlias( seedAliasesByFile, normalizedFilename, componentName, existingState.seedAlias );
 		const sourcePaths = Array.from( new Set( [
 			stringifySegments( existingState.seedAlias.segments || [] ),
@@ -427,6 +531,7 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 			componentName,
 			localName: seedAlias.localName,
 			memberName: seedAlias.memberName,
+			propName,
 			declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
 			sourcePaths,
 			message: `Store selector cross-file tracing found ambiguous sources for "${ componentName }.${ seedAlias.memberName || seedAlias.localName }" (${ sourcePaths.join( ', ' ) }); seed tracing is disabled for this binding.`,
@@ -439,23 +544,14 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 		return false;
 	}
 
-	if ( ! seedAliasesByFile[ normalizedFilename ] ) {
-		seedAliasesByFile[ normalizedFilename ] = {};
-	}
-	if ( ! seedAliasesByFile[ normalizedFilename ][ componentName ] ) {
-		seedAliasesByFile[ normalizedFilename ][ componentName ] = [];
-	}
-
-	const seedAliases = seedAliasesByFile[ normalizedFilename ][ componentName ];
-	const seedKey = createSeedAliasKey( seedAlias );
-	if ( seedAliases.some( existing => createSeedAliasKey( existing ) === seedKey ) ) {
+	if ( ! pushManifestSeedAlias( seedAliasesByFile, normalizedFilename, componentName, seedAlias ) ) {
 		return false;
 	}
 
-	seedAliases.push( seedAlias );
 	seedAliasStates.set( stateKey, {
 		sourceKey,
 		seedAlias,
+		source,
 	} );
 	debug.seedEdges.push( {
 		sourceFilename: source.sourceFilename,
@@ -469,6 +565,150 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 		declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
 	} );
 	return true;
+}
+
+function pushManifestSeedAlias( seedAliasesByFile, filename, componentName, seedAlias ) {
+	if ( ! seedAliasesByFile[ filename ] ) {
+		seedAliasesByFile[ filename ] = {};
+	}
+	if ( ! seedAliasesByFile[ filename ][ componentName ] ) {
+		seedAliasesByFile[ filename ][ componentName ] = [];
+	}
+
+	const seedAliases = seedAliasesByFile[ filename ][ componentName ];
+	const seedKey = createSeedAliasKey( seedAlias );
+	if ( seedAliases.some( existing => createSeedAliasKey( existing ) === seedKey ) ) {
+		return false;
+	}
+
+	seedAliases.push( seedAlias );
+	return true;
+}
+
+function createDynamicRootAliasForSeedConflict( componentPath, componentName, existingSeedAlias, seedAlias ) {
+	if (
+		! componentPath ||
+		getSeedAliasPropName( existingSeedAlias ) !== getSeedAliasPropName( seedAlias ) ||
+		seedAliasHasListContext( existingSeedAlias ) ||
+		seedAliasHasListContext( seedAlias )
+	) {
+		return null;
+	}
+
+	const traces = [ existingSeedAlias, seedAlias ].map( alias => ( {
+		componentName,
+		propName: getSeedAliasPropName( alias ),
+		path: stringifySegments( alias.segments || [] ),
+		segments: alias.segments || [],
+		declarationSegments: alias.declarationSegments || alias.segments || [],
+	} ) );
+	const dynamicRootAliases = createStoreSelectorDynamicRootAliases( componentPath, traces, babel );
+	return dynamicRootAliases[ 0 ] || null;
+}
+
+function addDynamicRootCallsiteContext(
+	dynamicRootPropsByFile,
+	callsiteContextsByFile,
+	debug,
+	source,
+	targetFilename,
+	targetComponentName,
+	dynamicRootAlias,
+	sourceSeedAlias
+) {
+	if ( ! source?.sourceFilename || ! source?.sourceChildComponentName ) {
+		return;
+	}
+
+	const sourceFilename = normalizeFilename( source.sourceFilename );
+	const propName = getSeedAliasPropName( dynamicRootAlias );
+	if ( ! dynamicRootPropsByFile[ sourceFilename ] ) {
+		dynamicRootPropsByFile[ sourceFilename ] = {};
+	}
+	if ( ! dynamicRootPropsByFile[ sourceFilename ][ source.sourceChildComponentName ] ) {
+		dynamicRootPropsByFile[ sourceFilename ][ source.sourceChildComponentName ] = [];
+	}
+	if ( ! dynamicRootPropsByFile[ sourceFilename ][ source.sourceChildComponentName ].includes( propName ) ) {
+		dynamicRootPropsByFile[ sourceFilename ][ source.sourceChildComponentName ].push( propName );
+	}
+
+	if ( ! callsiteContextsByFile[ sourceFilename ] ) {
+		callsiteContextsByFile[ sourceFilename ] = [];
+	}
+
+	const context = {
+		callsiteId: createCallsiteContextId( callsiteContextsByFile, sourceFilename, source, propName ),
+		parentFile: sourceFilename,
+		parentComponent: source.sourceComponentName,
+		targetFile: targetFilename,
+		targetComponent: targetComponentName,
+		importEdgeId: `${ sourceFilename }::${ source.sourceChildComponentName }->${ targetFilename }::${ targetComponentName }`,
+		jsxTag: source.sourceChildComponentName,
+		propName,
+		canonicalSegments: sourceSeedAlias.segments || [],
+		declarationSegments: sourceSeedAlias.declarationSegments || sourceSeedAlias.segments || [],
+		strategy: 'dynamic-root-descriptor',
+	};
+	const contextKey = createCallsiteContextKey( context );
+	if ( callsiteContextsByFile[ sourceFilename ].some( existing => createCallsiteContextKey( existing ) === contextKey ) ) {
+		return;
+	}
+
+	callsiteContextsByFile[ sourceFilename ].push( context );
+	if ( ! debug.callsiteContexts ) {
+		debug.callsiteContexts = [];
+	}
+	debug.callsiteContexts.push( context );
+}
+
+function createCallsiteContextId( callsiteContextsByFile, sourceFilename, source, propName ) {
+	const ordinal = ( callsiteContextsByFile[ sourceFilename ] || [] ).length + 1;
+	return `${ sourceFilename }#${ source.sourceComponentName || 'unknown' }#${ source.sourceChildComponentName }.${ propName }#${ ordinal }`;
+}
+
+function createCallsiteContextKey( context ) {
+	return [
+		context.parentFile,
+		context.parentComponent || '',
+		context.jsxTag,
+		context.propName,
+		context.targetFile,
+		context.targetComponent,
+		( context.canonicalSegments || [] ).join( '.' ),
+		( context.declarationSegments || [] ).join( '.' ),
+	].join( '|' );
+}
+
+function addChildRelativeDiscovery( childRelativeDiscoveryByFile, filename, componentName, dynamicRootAlias ) {
+	if ( ! childRelativeDiscoveryByFile[ filename ] ) {
+		childRelativeDiscoveryByFile[ filename ] = {};
+	}
+	if ( ! childRelativeDiscoveryByFile[ filename ][ componentName ] ) {
+		childRelativeDiscoveryByFile[ filename ][ componentName ] = [];
+	}
+
+	const entry = {
+		localName: dynamicRootAlias.localName,
+		memberName: dynamicRootAlias.memberName,
+		propName: getSeedAliasPropName( dynamicRootAlias ),
+		dynamicRootSegments: dynamicRootAlias.dynamicRootSegments || dynamicRootAlias.declarationSegments || dynamicRootAlias.segments || [],
+	};
+	const entryKey = [
+		entry.localName,
+		entry.memberName || '',
+		entry.propName,
+		( entry.dynamicRootSegments || [] ).join( '.' ),
+	].join( '|' );
+	if ( childRelativeDiscoveryByFile[ filename ][ componentName ].some( existing => [
+		existing.localName,
+		existing.memberName || '',
+		existing.propName,
+		( existing.dynamicRootSegments || [] ).join( '.' ),
+	].join( '|' ) === entryKey ) ) {
+		return;
+	}
+
+	childRelativeDiscoveryByFile[ filename ][ componentName ].push( entry );
 }
 
 function removeManifestSeedAlias( seedAliasesByFile, filename, componentName, seedAlias ) {
@@ -500,6 +740,8 @@ function createSeedAliasKey( seedAlias ) {
 		seedAlias.memberName || '',
 		( seedAlias.segments || [] ).join( '.' ),
 		( seedAlias.declarationSegments || [] ).join( '.' ),
+		seedAlias.dynamicRoot ? 'dynamic-root' : '',
+		seedAlias.propName || '',
 	].join( '|' );
 }
 
@@ -514,6 +756,17 @@ function createSeedAliasStateKey( filename, componentName, seedAlias ) {
 
 function createSeedAliasSourceKey( seedAlias ) {
 	return ( seedAlias.segments || [] ).join( '.' );
+}
+
+function getSeedAliasPropName( seedAlias ) {
+	return seedAlias?.propName || seedAlias?.memberName || seedAlias?.localName;
+}
+
+function seedAliasHasListContext( seedAlias ) {
+	return [
+		...( seedAlias?.segments || [] ),
+		...( seedAlias?.declarationSegments || [] ),
+	].some( segment => String( segment ).endsWith( '[]' ) );
 }
 
 function getTopLevelComponentPaths( programPath, types ) {

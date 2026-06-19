@@ -1226,54 +1226,119 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
-	it('does not trace ambiguous cross-file seeds from multiple parent files', () => {
+	it.each([
+		[
+			'handlebars',
+			'HomePage',
+			"<main><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</main>",
+		],
+		[
+			'handlebars',
+			'ArticlePage',
+			"<main><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</main>",
+		],
+		[
+			'php',
+			'HomePage',
+			"<main><h1><?php echo $data['home']['hero']['title']; ?></h1><?php if ( $data['home']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></main>",
+		],
+		[
+			'php',
+			'ArticlePage',
+			"<main><h1><?php echo $data['article']['hero']['title']; ?></h1><?php if ( $data['article']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></main>",
+		],
+	])('traces cross-file multi-source object roots for %s %s', async (language, exportName, expected) => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
-				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				export const Header = ({ hero }) => (
+					<main>
+						<h1>{ hero.title }</h1>
+						{ hero.status === 'published' && <span>Published</span> }
+					</main>
+				);
 			`,
-			'A.jsx': `
+			'HomePage.jsx': `
 				import { Header } from './Header.jsx';
 				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-				const A = () => {
-					const hero = useStoreSelector((state) => state.heroA);
+				const HomePage = () => {
+					const hero = useStoreSelector((state) => state.home.hero);
 					return <Header hero={ hero } />;
 				};
 
-				module.exports = { A };
+				module.exports = { HomePage };
 			`,
-			'B.jsx': `
+			'ArticlePage.jsx': `
 				import { Header } from './Header.jsx';
 				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-				const B = () => {
-					const hero = useStoreSelector((state) => state.heroB);
+				const ArticlePage = () => {
+					const hero = useStoreSelector((state) => state.article.hero);
 					return <Header hero={ hero } />;
 				};
 
-				module.exports = { B };
+				module.exports = { ArticlePage };
 			`,
 		});
 
 		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+		const entryFilename = path.join(root, `${ exportName }.jsx`);
+		const { codeByFile, output } = await renderTemplateModules(
+			language,
+			files,
+			entryFilename,
+			exportName,
+			{},
+			options
+		);
+		const combinedCode = Object.values(codeByFile).join('\n');
 
-		expect(manifest.diagnostics).toEqual([
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toEqual([
 			expect.objectContaining({
-				kind: 'ambiguous-cross-file-seed',
-				componentName: 'Header',
 				localName: 'hero',
-				sourcePaths: [ 'heroA', 'heroB' ],
+				propName: 'hero',
+				dynamicRoot: true,
+				dynamicRootSegments: [ 'hero' ],
 			}),
 		]);
-		expect(manifest.debug.ambiguousSeeds).toEqual([
+		expect(manifest.dynamicRootPropsByFile[path.join(root, 'HomePage.jsx')]).toEqual({
+			Header: [ 'hero' ],
+		});
+		expect(manifest.dynamicRootPropsByFile[path.join(root, 'ArticlePage.jsx')]).toEqual({
+			Header: [ 'hero' ],
+		});
+		expect(manifest.childRelativeDiscoveryByFile[path.join(root, 'Header.jsx')].Header).toEqual([
 			expect.objectContaining({
-				kind: 'ambiguous-cross-file-seed',
-				componentName: 'Header',
 				localName: 'hero',
-				sourcePaths: [ 'heroA', 'heroB' ],
+				propName: 'hero',
+				dynamicRootSegments: [ 'hero' ],
 			}),
 		]);
-		expect(manifest.seedAliasesByFile).toEqual({});
+		expect(manifest.callsiteContextsByFile[path.join(root, 'HomePage.jsx')]).toEqual([
+			expect.objectContaining({
+				parentComponent: 'HomePage',
+				targetComponent: 'Header',
+				propName: 'hero',
+				canonicalSegments: [ 'home', 'hero' ],
+				strategy: 'dynamic-root-descriptor',
+			}),
+		]);
+		expect(manifest.callsiteContextsByFile[path.join(root, 'ArticlePage.jsx')]).toEqual([
+			expect.objectContaining({
+				parentComponent: 'ArticlePage',
+				targetComponent: 'Header',
+				propName: 'hero',
+				canonicalSegments: [ 'article', 'hero' ],
+				strategy: 'dynamic-root-descriptor',
+			}),
+		]);
+		expect(combinedCode).not.toContain('useStoreSelector');
+		expect(combinedCode).toContain('createTemplateRootDescriptor');
+		expect(combinedCode).toContain('getTemplateRootPathArg');
+		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 
 	it('records unsupported selector metadata for JSX member components', () => {

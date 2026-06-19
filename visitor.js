@@ -183,11 +183,16 @@ function templateVarsVisitor( babel, config ) {
 			const selectorResults = new Map();
 			const childPropTracesByComponent = new Map();
 			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename );
+			const crossFileDynamicRootPropsByComponent = getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename );
 
 			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
 				selectorResults.clear();
 				childPropTracesByComponent.clear();
 				const childSeedTracesByComponent = new Map();
+				const dynamicRootPropsForCollection = mergeDynamicRootPropsByComponent(
+					createDynamicRootPropsByComponent( seedAliasesByComponent ),
+					crossFileDynamicRootPropsByComponent
+				);
 
 				componentPaths.forEach( ( componentPath, componentName ) => {
 					const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
@@ -195,6 +200,7 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorComponentNames: componentNames,
 						storeSelectorComponentPaths: componentPaths,
 						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
 						storeSelectorNeutralizeSelectors: false,
 					} );
 					selectorResults.set( componentName, selectorResult );
@@ -217,7 +223,10 @@ function templateVarsVisitor( babel, config ) {
 					} );
 				} );
 
-				const dynamicRootPropsForPass = createDynamicRootPropsByComponent( seedAliasesByComponent );
+				const dynamicRootPropsForPass = mergeDynamicRootPropsByComponent(
+					createDynamicRootPropsByComponent( seedAliasesByComponent ),
+					crossFileDynamicRootPropsByComponent
+				);
 				childSeedTracesByComponent.forEach( ( seedTraces, componentName ) => {
 					const componentPath = componentPaths.get( componentName );
 					if ( ! componentPath ) {
@@ -241,7 +250,10 @@ function templateVarsVisitor( babel, config ) {
 				}
 			}
 
-			const dynamicRootPropsByComponent = createDynamicRootPropsByComponent( seedAliasesByComponent );
+			const dynamicRootPropsByComponent = mergeDynamicRootPropsByComponent(
+				createDynamicRootPropsByComponent( seedAliasesByComponent ),
+				crossFileDynamicRootPropsByComponent
+			);
 
 			selectorResults.clear();
 			childPropTracesByComponent.clear();
@@ -428,6 +440,18 @@ function getCrossFileSeedAliases( storeSelectorOptions, filename, componentName 
 	return Array.isArray( seedAliases ) ? seedAliases : [];
 }
 
+function getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return {};
+	}
+
+	const dynamicRootPropsByFile = storeSelectorOptions.__crossFileManifest?.dynamicRootPropsByFile || {};
+	const propsByComponent = getCrossFileManifestEntry( dynamicRootPropsByFile, filename );
+	return propsByComponent && typeof propsByComponent === 'object' && ! Array.isArray( propsByComponent ) ?
+		propsByComponent :
+		{};
+}
+
 function getCrossFileManifestEntry( manifestByFile, filename ) {
 	if ( ! manifestByFile || ! filename ) {
 		return null;
@@ -473,6 +497,25 @@ function createDynamicRootPropsByComponent( seedAliasesByComponent ) {
 		}
 	} );
 	return entries;
+}
+
+function mergeDynamicRootPropsByComponent( ...sources ) {
+	const merged = {};
+	sources.forEach( ( source ) => {
+		if ( ! source || typeof source !== 'object' ) {
+			return;
+		}
+
+		Object.entries( source ).forEach( ( [ componentName, props ] ) => {
+			if ( ! Array.isArray( props ) ) {
+				return;
+			}
+			const existing = new Set( merged[ componentName ] || [] );
+			props.forEach( prop => existing.add( prop ) );
+			merged[ componentName ] = Array.from( existing ).sort();
+		} );
+	} );
+	return merged;
 }
 
 function createDynamicRootDebugAlias( alias ) {

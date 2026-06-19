@@ -22,15 +22,20 @@ Current implementation status:
     root. This is not the full Phase 2 surface; broader relay, mixed-context,
     and future cross-file relay diagnostics remain review gates as the stream
     expands.
+  - A narrow cross-file object-root slice is implemented for direct relative
+    named imports: two parent files can pass different object roots to one child
+    component, the child transforms with relative dynamic-root discovery, and
+    each parent injects its own template-root descriptor callsite context.
+    Replacement and control output are covered in Handlebars and PHP.
   - Dynamic root containment is enforced at transform time for covered same-file
     descriptor paths: bare dynamic-root rendering is rejected before codegen.
   - Minimal dynamic-root debug metadata is exposed for review mode, including
     `dynamicRootAliases`, component-local `dynamicRootProps`, and
     `dynamicRootPropsByComponent`.
 - **Still pending:**
-  - Cross-file relative object contexts through a manifest callsite-context
-    model.
-  - Full debug metadata for callsite contexts and compiled paths.
+  - Cross-file relay through intermediate files.
+  - Full debug metadata for callsite contexts and compiled paths beyond the
+    manifest-level direct-callsite context records.
   - List-relative multi-source variants.
   - Shape-polymorphic specialization research.
 - **Later residuals to revisit:**

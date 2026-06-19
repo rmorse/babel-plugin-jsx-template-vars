@@ -43,6 +43,9 @@ Already implemented and reviewed:
 - Child prop auto-seeding for same-file component trees.
 - Same-file multi-hop relay for object and list contexts.
 - Same-file path-polymorphic object roots via template-root descriptors.
+- Direct cross-file path-polymorphic object roots for relative named imports,
+  with parent-side descriptor callsite contexts and child-side relative
+  dynamic-root discovery.
 - Descriptor hardening:
   - generated runtime helper imports
   - transform-time containment for bare descriptors
@@ -51,7 +54,8 @@ Already implemented and reviewed:
 - Selector-only `full-template-surface` parity.
 - Split-file `full-template-surface` parity for the current manifest model.
 - PHP nested list depth coverage.
-- Minimal dynamic-root debug metadata in review mode.
+- Minimal dynamic-root debug metadata in review mode, plus manifest-level
+  callsite context records for the direct cross-file object-root slice.
 
 Current boundaries are documented in:
 
