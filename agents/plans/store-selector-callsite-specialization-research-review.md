@@ -1,5 +1,26 @@
 # Review: store selector callsite specialization research
 
+## Status
+
+Superseded historical review.
+
+This review was written against an earlier specialization-first version of
+[store-selector-callsite-specialization-research.md](./store-selector-callsite-specialization-research.md).
+The active source of truth is now
+[store-selector-multi-source-path-plan.md](./store-selector-multi-source-path-plan.md).
+
+The specialization-first verdict below has been overridden by later review and
+planning. Current direction is:
+
+1. make unsafe multi-source ambiguity hard-fail
+2. validate template-render-time root descriptor composition
+3. prove relative object-root path-polymorphism without component cloning
+4. keep callsite-specific specialization as a conditional fallback
+
+This file is retained only as audit history for the review process.
+
+---
+
 Critical review of
 [`store-selector-callsite-specialization-research.md`](./store-selector-callsite-specialization-research.md)
 against the shipped store-selector implementation on

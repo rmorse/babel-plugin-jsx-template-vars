@@ -15,7 +15,7 @@ The immediate problem is multiple parent callsites using the same child
 component with different canonical data paths. The first version of this note
 recommended callsite-specific component specialization. Reviewer feedback
 identified a lighter option that better matches the existing list-context
-machinery: root-relative child emission with a per-callsite object context.
+machinery: template-render-time root descriptor composition.
 
 A related, harder problem is shape-polymorphic props, where the same child prop
 name may receive a scalar in one callsite and a list or object in another.
@@ -72,9 +72,9 @@ Important current-state correction: unsupported selector flows are not always
 hard failures. `diagnostics.unsupported()` warns by default and throws only when
 `strict: true` is enabled. In some ambiguous same-file cases, the transform can
 therefore continue and produce degraded empty output rather than fail closed.
-That behavior should not be described as safe. The safe interim policy should be
-to make this specific multi-source ambiguity a hard error until a correct
-architecture lands, or require `strict: true` for this experiment in CI.
+That behavior should not be described as safe. The interim policy should make
+this specific multi-source ambiguity a hard error until a correct architecture
+lands.
 
 ## The Current Ambiguity
 
@@ -269,17 +269,20 @@ explicit signal.
 
 Do not start with component cloning.
 
-First evaluate root-relative object emission with a per-callsite object context.
-This is closer to how list-item children already work:
+First evaluate template-render-time root descriptor composition. This is a
+relative-context strategy where a parent passes an internal descriptor for the
+object root and the child composes member paths from that descriptor:
 
 ```txt
-parent supplies context root -> child emits relative paths inside that context
+parent descriptor: hero -> ['home', 'hero']
+child usage:       hero.title
+compiled path:     home.hero.title
 ```
 
 Keep the current ambiguous-seed suppression in place, but do not describe it as
 safe unless the ambiguity hard-errors. The current default warning-only behavior
 can produce empty output, so this ambiguity should become a hard error by
-default or require `strict: true` until relative object-context handling is
+default until descriptor composition or another correct architecture is
 implemented.
 
 Callsite-specific specialization remains a candidate, but it should not be the
@@ -331,23 +334,16 @@ where:
 const Header = ({ hero }) => <h1>{ hero.title }</h1>;
 ```
 
-could compile as object-context-wrapped callsites:
-
-```hbs
-{{#with home.hero}}<h1>{{title}}</h1>{{/with}}
-{{#with article.hero}}<h1>{{title}}</h1>{{/with}}
-```
-
-or through equivalent build-time path-prefix composition:
+should first be evaluated as descriptor composition:
 
 ```txt
-Header local hero.title + callsite root home.hero -> home.hero.title
-Header local hero.title + callsite root article.hero -> article.hero.title
+parent passes descriptor: hero -> ['home', 'hero']
+child composes:           hero.title -> home.hero.title
 ```
 
 The important difference from specialization is that the child source does not
-need to be cloned for path-polymorphism. The child can emit relative paths, and
-the parent callsite supplies the root context.
+need to be cloned for path-polymorphism. The child can stay singular and compose
+paths from an internal root descriptor supplied by the callsite.
 
 ### Why This Fits The Existing Architecture
 
@@ -361,31 +357,12 @@ This direction is consistent with the existing list machinery:
   correctly under different inherited list contexts
 - the registry already carries structured path metadata, not only strings
 
-The new work would be object-context support rather than full component cloning.
+The new work would be descriptor composition and containment, rather than full
+component cloning.
 
 ### Possible Output Models
 
-There are two possible implementation models.
-
-#### Context Block Wrapping
-
-The parent wraps the child output in an object context:
-
-```hbs
-{{#with home.hero}}<h1>{{title}}</h1>{{/with}}
-```
-
-Open questions:
-
-- Which Handlebars helper should provide strict object context behavior?
-- Does `#with` introduce unwanted truthy/falsy behavior when the object is
-  absent?
-- Do we need a project-provided helper for object context, similar to the
-  planned strict equality helper?
-- What is the exact PHP equivalent?
-- Can object context nesting compose cleanly with list context nesting?
-
-#### Build-Time Prefix Composition
+#### Preferred: Template-Render-Time Descriptor Composition
 
 The child continues to discover relative usage:
 
@@ -409,6 +386,19 @@ Open questions:
 - Does it work when the child passes the object onward to another child?
 - Does it work for nested object fields inside list contexts?
 - How does it interact with explicit child `templateVars`?
+- How do we guarantee descriptors never render as raw values?
+
+#### Last Resort: Context Block Wrapping
+
+The parent could wrap child output in an object context:
+
+```hbs
+{{#with home.hero}}<h1>{{title}}</h1>{{/with}}
+```
+
+This is a last resort, not the preferred path. It changes Handlebars output
+semantics when the object is falsy, and there is no current PHP object-context
+equivalent.
 
 ### Immediate Interim Policy
 
@@ -1177,14 +1167,15 @@ Shape-polymorphism needs its own tests:
 
 ## Recommended Next Step
 
-Keep the current ambiguous-seed suppression in place, but do not rely on
-warning-only degraded output as a safe interim. This ambiguity should become a
-hard error by default or require `strict: true` in review/CI mode.
+Keep the current ambiguous-seed suppression in place, but do not treat
+warning-only degraded output as safe. This ambiguity should become a hard error
+by default.
 
 Ask reviewers to evaluate this document before implementation.
 
 If the revised direction is accepted, the first implementation slice should be a
-narrow same-file relative object-context proof:
+narrow descriptor-composition spike followed by a same-file relative
+object-context proof:
 
 - one child component
 - two parent callsites
@@ -1193,6 +1184,7 @@ narrow same-file relative object-context proof:
 - Handlebars and PHP assertions
 - no cross-file rewriting yet
 - object-root control coverage
+- descriptor containment coverage for bare `{ hero }`
 - full debug metadata for both callsite contexts
 
 That first slice is object-root only. The broader path-polymorphism program

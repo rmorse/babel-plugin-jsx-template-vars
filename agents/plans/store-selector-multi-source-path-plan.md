@@ -81,16 +81,21 @@ list wrapping. That remains a separate research gate.
 Use a staged decision model:
 
 1. Make unsafe ambiguity loud.
-2. Prove same-file relative object-root context.
-3. Harden object-root context for controls, multi-hop, and diagnostics.
-4. Extend relative object context across the cross-file manifest.
-5. Extend path-polymorphism to list-relative multi-source variants.
-6. Use callsite-specific specialization only if relative contexts cannot solve
+2. Spike descriptor composition in isolation.
+3. Prove same-file relative object-root context.
+4. Harden object-root context for controls, multi-hop, and diagnostics.
+5. Extend relative object context across the cross-file manifest.
+6. Extend path-polymorphism to list-relative multi-source variants.
+7. Use callsite-specific specialization only if relative contexts cannot solve
    the path-polymorphic cases.
 
 This order deliberately avoids starting with component cloning/import rewrites.
-List children already prove that relative child output can work under a parent
-context. Object roots should be evaluated against that architecture first.
+The key reason to try descriptor composition first is cross-file cost asymmetry:
+component specialization needs generated variants plus import/callsite rewrites,
+while descriptor composition can keep the authored child component singular and
+avoid generated module exports. Existing list handling proves that relative
+declarations are viable in the output model, but object-root descriptor
+composition is a distinct transform mechanic that must be proven directly.
 
 ## Global Invariants
 
@@ -104,6 +109,9 @@ Every phase must preserve these constraints:
 - Do not silently drop selector-derived data.
 - Do not produce last-wins behavior.
 - Do not emit orphaned replace/list/control declarations.
+- Do not let compiler-internal root descriptors reach rendered output. Bare
+  object-root descriptor rendering must fail closed, not produce `[object
+  Object]` or any other runtime descriptor string.
 - Preserve flat `templateVars` behavior.
 - Preserve existing selector fixtures unless a fixture intentionally pins a
   safer fail-closed behavior.
@@ -153,8 +161,7 @@ template build.
   receives multiple canonical sources.
 - Keep existing last-wins prevention.
 - Change this specific ambiguity class from warning-only degraded output to a
-  hard diagnostic by default, or require `strict: true` for this experiment in
-  CI/review mode.
+  hard diagnostic by default.
 - Preserve machine-readable debug metadata for the competing sources.
 - Do not change unrelated unsupported warnings unless they share the same
   partial-output risk.
@@ -168,8 +175,7 @@ Likely code areas:
 
 ### Required Tests
 
-- Same-file two object-root callsites for one child prop hard-error or require
-  strict mode.
+- Same-file two object-root callsites for one child prop hard-error by default.
 - Cross-file two parent files seeding the same child prop with different roots
   remains fail-closed.
 - Existing scalar parent materialization tests still pass.
@@ -183,6 +189,109 @@ Pass this phase only when:
 - no ambiguous object-root multi-source case renders empty output silently
 - no last-wins behavior exists
 - `npm test` passes
+
+## Phase 0.5 - Descriptor Composition Spike
+
+### Goal
+
+Validate the transform shape that underpins Phases 1 through 4 before building
+the full feature.
+
+This phase should answer whether a parent can pass a compiler-internal root
+descriptor and a child can compose member paths from that descriptor during the
+template render pass.
+
+### Core Mechanic
+
+Today, unsupported object-root callsites may effectively pass a rendered
+replacement string:
+
+```txt
+hero={{home.hero}}
+```
+
+That cannot support child member access:
+
+```jsx
+hero.title
+```
+
+because the child receives a rendered string, not path metadata.
+
+The intended mechanic is:
+
+```txt
+parent passes descriptor: hero -> { segments: ['home', 'hero'] }
+child composes:           hero.title -> ['home', 'hero', 'title']
+```
+
+This is not pure build-time string rewriting. It is template-render-time
+descriptor composition: the child function remains singular, but its prop value
+is a compiler-internal descriptor that the transform/runtime helpers can use to
+resolve replacement and control paths.
+
+### Spike Scope
+
+Hand-write or minimally transform the intended output shape for:
+
+```jsx
+const Header = ({ hero }) => (
+	<header>
+		<h1>{ hero.title }</h1>
+		{ hero.status === 'published' && <span>Published</span> }
+	</header>
+);
+```
+
+with two parent callsites:
+
+```jsx
+<Header hero={ homeHero } />
+<Header hero={ articleHero } />
+```
+
+The spike should prove:
+
+- descriptor values can be passed as props through the current render harness
+- child replacement paths can compose from descriptor segments
+- child control paths can compose from descriptor segments
+- descriptors can relay through one intermediate component
+- bare descriptor rendering fails closed:
+
+```jsx
+const Header = ({ hero }) => <h1>{ hero }</h1>;
+```
+
+should not produce `[object Object]`, `{{home.hero}}`, or silent empty output.
+
+### Implementation Guidance
+
+- Prefer a focused test helper or temporary spike test over broad production
+  wiring.
+- Do not add final public API or broad transform behavior in this phase.
+- Keep descriptors internal and unobservable in user-authored output.
+- Confirm `getLanguageReplace` and `getLanguageControl` can already consume the
+  composed segment arrays for Handlebars and PHP.
+- If descriptor composition requires controller changes, those changes must be
+  generic path/context support, not store-selector-specific output logic.
+
+### Required Tests
+
+- Descriptor replacement composition works for Handlebars.
+- Descriptor replacement composition works for PHP.
+- Descriptor control composition works for Handlebars.
+- Descriptor control composition works for PHP.
+- One-hop relay preserves descriptor segments.
+- Bare descriptor rendering fails closed.
+
+### Gate
+
+Pass this phase only when:
+
+- the descriptor composition mechanic is proven in isolation
+- descriptor containment is enforced
+- no component cloning/import rewriting is needed for the spike
+- the findings are folded back into this plan before Phase 1 implementation
 
 ## Phase 1 - Same-File Relative Object-Root Proof
 
@@ -221,11 +330,42 @@ first Header  -> home.hero.title / home.hero.status
 second Header -> article.hero.title / article.hero.status
 ```
 
-### Output Strategy Decision
+### Output Strategy
 
-Choose and document one of these implementation strategies during this phase.
+Phase 1 should use descriptor composition if Phase 0.5 proves it. Context block
+wrapping is a last resort, not a co-equal option.
 
-#### Option A: Context Block Wrapping
+#### Preferred: Template-Render-Time Descriptor Composition
+
+The parent passes an internal root descriptor instead of materializing the object
+prop as a rendered replacement string:
+
+```txt
+hero -> { segments: ['home', 'hero'] }
+```
+
+Child discovery records local relative usage:
+
+```txt
+hero.title -> title relative to incoming hero root
+```
+
+The child composes each template path from the descriptor:
+
+```txt
+home.hero descriptor + title -> home.hero.title
+article.hero descriptor + title -> article.hero.title
+```
+
+Risks:
+
+- descriptor values must never reach rendered output directly
+- replacement, control, and nested member usage must all compose correctly
+- descriptor relay through intermediate components must preserve segments
+- generic path/context wiring may be needed, but selector-specific controller
+  output must be avoided
+
+#### Last Resort: Context Block Wrapping
 
 Parent callsites wrap child output in an object context:
 
@@ -240,40 +380,26 @@ Risks:
 - We may need a required helper for strict object context.
 - PHP needs equivalent context behavior.
 - Context nesting with lists must be proven.
-
-#### Option B: Build-Time Prefix Composition
-
-Child discovery records local relative usage:
-
-```txt
-hero.title -> title relative to incoming hero root
-```
-
-Each callsite composes the relative path with its canonical root:
-
-```txt
-home.hero + title -> home.hero.title
-article.hero + title -> article.hero.title
-```
-
-Risks:
-
-- Must preserve child controls and nested member usage.
-- May require a generic context/path-resolution extension in controller wiring.
-- Must avoid selector-specific output branches.
+- It changes output semantics: if the object is falsy, a `#with` block can omit
+  wrapper HTML that absolute path replacement would otherwise render as empty
+  content.
+- There is no current PHP object-context equivalent.
 
 ### Recommendation For The First Spike
 
-Try build-time prefix composition first if it can preserve current output
-semantics. Fall back to an explicit object-context helper only if prefix
-composition cannot support controls or nested context.
+Use descriptor composition first. Fall back to explicit object-context helpers
+only if descriptor composition cannot support controls, nested objects, or
+relay.
 
 ### Implementation Guidance
 
 - Introduce a callsite context record for object-root props.
 - Keep the child component root-agnostic.
 - Discover child usage relative to the incoming prop root.
-- Resolve replacement/control arguments through the callsite context.
+- Pass an internal root descriptor for traced object-root props.
+- Resolve replacement/control arguments by composing member segments from that
+  descriptor.
+- Fail closed if a descriptor is rendered bare or crosses an unsupported sink.
 - Ensure callsite identity is preserved before component/prop grouping erases
   source distinctions.
 - Do not generate cloned component variants in this phase.
