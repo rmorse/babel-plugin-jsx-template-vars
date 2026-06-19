@@ -516,6 +516,8 @@ Validated behavior:
 - named exported variable components
 - unresolved imports, non-relative imports, and barrel/re-export targets do not
   invent seeds and report diagnostics
+- default imports and namespace/member component imports do not invent seeds and
+  report diagnostics
 
 ### Required Behavior
 
@@ -535,8 +537,12 @@ Validated behavior:
 - unresolved import diagnostic: implemented.
 - barrel/re-export unsupported diagnostic: implemented.
 - no tracing through non-relative/package imports: implemented.
+- default import unsupported diagnostic: implemented.
+- namespace/member component unsupported diagnostics: implemented.
 - default import: not supported in this slice unless a later review decides to
   add a strict default-export contract.
+  Namespace/member component imports are also deferred until a later slice
+  defines a strict import and JSX-member tracing contract.
 
 ### Risks
 

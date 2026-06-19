@@ -1016,6 +1016,70 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
+	it('does not trace default cross-file imports', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import Header from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-default-import',
+				source: './Header.jsx',
+				localName: 'Header',
+				importedName: 'default',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('does not trace namespace cross-file imports', () => {
+		const files = crossFileFixtureFiles({
+			'Cards.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import * as Cards from './Cards.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Cards.Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-namespace-import',
+				source: './Cards.jsx',
+				localName: 'Cards',
+				importedName: '*',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
 	it('reports re-export barrels as unsupported cross-file targets', () => {
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
@@ -1049,6 +1113,60 @@ describe('experimental store selectors', () => {
 		]);
 		expect(manifest.componentNamesByFile).toEqual({});
 		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('records unsupported selector metadata for JSX member components', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import * as Cards from './Cards.jsx';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Cards.Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, selectorOptions);
+
+		expect(result.metadata.storeSelectorTemplateVarsUnsupported).toEqual([
+			expect.objectContaining({
+				componentName: 'App',
+				unsupported: [
+					expect.objectContaining({
+						kind: 'child-prop-boundary',
+						path: 'hero',
+						componentName: 'Cards.Header',
+						propName: 'hero',
+						target: 'Cards.Header.hero',
+						boundary: 'JSXMemberExpression',
+						sourcePaths: [ 'hero' ],
+					}),
+				],
+			}),
+		]);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('unsupported member component "Cards.Header"'));
+	});
+
+	it('throws for selector values passed to JSX member components in strict mode', () => {
+		const source = `
+			import * as Cards from './Cards.jsx';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Cards.Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/unsupported member component "Cards.Header"/);
 	});
 
 	it('bounds same-file auto-seeding cycles during discovery', () => {

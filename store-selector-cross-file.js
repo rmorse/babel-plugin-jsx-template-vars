@@ -157,6 +157,17 @@ function collectRawComponentImports( programPath, filename ) {
 					source: node.source.value,
 					filename,
 				} );
+				return;
+			}
+
+			if ( babel.types.isImportNamespaceSpecifier( specifier ) && isComponentName( specifier.local.name ) ) {
+				imports.push( {
+					kind: 'namespace',
+					localName: specifier.local.name,
+					importedName: '*',
+					source: node.source.value,
+					filename,
+				} );
 			}
 		} );
 	} );
@@ -177,6 +188,30 @@ function resolveRecordImports( records, diagnostics ) {
 				return;
 			}
 
+			if ( importInfo.kind === 'default' ) {
+				diagnostics.push( {
+					kind: 'unsupported-default-import',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+					message: `Store selector cross-file tracing does not support default imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
+				} );
+				return;
+			}
+
+			if ( importInfo.kind === 'namespace' ) {
+				diagnostics.push( {
+					kind: 'unsupported-namespace-import',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+					message: `Store selector cross-file tracing does not support namespace imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
+				} );
+				return;
+			}
+
 			const targetFilename = resolveImportFilename( record.filename, importInfo.source, records );
 			if ( ! targetFilename ) {
 				diagnostics.push( {
@@ -190,13 +225,11 @@ function resolveRecordImports( records, diagnostics ) {
 			}
 
 			const targetRecord = records.get( targetFilename );
-			const targetComponentName = importInfo.kind === 'default' ?
-				resolveDefaultComponentName( targetRecord, importInfo.localName ) :
-				importInfo.importedName;
+			const targetComponentName = importInfo.importedName;
 
 			if ( ! targetComponentName || ! targetRecord.componentPaths.has( targetComponentName ) ) {
 				diagnostics.push( {
-					kind: importInfo.kind === 'default' ? 'unsupported-default-import' : 'unsupported-reexport',
+					kind: 'unsupported-reexport',
 					filename: record.filename,
 					source: importInfo.source,
 					localName: importInfo.localName,
@@ -221,13 +254,6 @@ function getImportSpecifierName( imported ) {
 		return imported.name;
 	}
 	return imported?.value;
-}
-
-function resolveDefaultComponentName( targetRecord, localName ) {
-	if ( targetRecord.componentPaths.has( localName ) ) {
-		return localName;
-	}
-	return null;
 }
 
 function resolveImportFilename( fromFilename, source, records ) {

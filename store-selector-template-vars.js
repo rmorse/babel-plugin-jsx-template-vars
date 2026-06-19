@@ -610,10 +610,11 @@ class StoreSelectorCollector {
 		this.componentPath.traverse( {
 			JSXElement: ( path ) => {
 				const openingElement = path.node.openingElement;
-				const elementName = openingElement?.name?.name;
-				if ( typeof elementName !== 'string' || ! /^[A-Z]/.test( elementName ) ) {
+				const componentInfo = this.getChildComponentInfo( openingElement?.name );
+				if ( ! componentInfo ) {
 					return;
 				}
+				const { elementName, traceable } = componentInfo;
 
 				path.get( 'children' ).forEach( ( childPath ) => {
 					if ( ! this.babel.types.isJSXExpressionContainer( childPath.node ) ) {
@@ -627,6 +628,19 @@ class StoreSelectorCollector {
 
 					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
 					if ( selectorSources.length === 0 ) {
+						return;
+					}
+
+					if ( ! traceable ) {
+						this.recordUnsupportedChildComponentBoundary(
+							childPath,
+							childPath.node.expression,
+							selectorSources,
+							elementName,
+							'children',
+							'JSXChildren',
+							`Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used as children for unsupported member component "${ elementName }".`
+						);
 						return;
 					}
 
@@ -650,13 +664,27 @@ class StoreSelectorCollector {
 			},
 			JSXSpreadAttribute: ( path ) => {
 				const openingElement = path.parentPath?.node;
-				const elementName = openingElement?.name?.name;
-				if ( typeof elementName !== 'string' || ! /^[A-Z]/.test( elementName ) ) {
+				const componentInfo = this.getChildComponentInfo( openingElement?.name );
+				if ( ! componentInfo ) {
 					return;
 				}
+				const { elementName, traceable } = componentInfo;
 
 				const selectorSources = this.collectSelectorDerivedSegments( path.get( 'argument' ) );
 				if ( selectorSources.length === 0 ) {
+					return;
+				}
+
+				if ( ! traceable ) {
+					this.recordUnsupportedChildComponentBoundary(
+						path,
+						path.node.argument,
+						selectorSources,
+						elementName,
+						'<spread>',
+						'JSXSpreadAttribute',
+						`Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used in spread props for unsupported member component "${ elementName }".`
+					);
 					return;
 				}
 
@@ -679,10 +707,11 @@ class StoreSelectorCollector {
 			},
 			JSXAttribute: ( path ) => {
 				const openingElement = path.parentPath?.node;
-				const elementName = openingElement?.name?.name;
-				if ( typeof elementName !== 'string' || ! /^[A-Z]/.test( elementName ) ) {
+				const componentInfo = this.getChildComponentInfo( openingElement?.name );
+				if ( ! componentInfo ) {
 					return;
 				}
+				const { elementName, traceable } = componentInfo;
 
 				const value = path.node.value;
 				if ( ! this.babel.types.isJSXExpressionContainer( value ) ) {
@@ -690,6 +719,24 @@ class StoreSelectorCollector {
 				}
 
 				const expressionPath = path.get( 'value.expression' );
+				if ( ! traceable ) {
+					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
+					if ( selectorSources.length === 0 ) {
+						return;
+					}
+
+					this.recordUnsupportedChildComponentBoundary(
+						path,
+						value.expression,
+						selectorSources,
+						elementName,
+						path.node.name.name,
+						'JSXMemberExpression',
+						`Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is passed to unsupported member component "${ elementName }".`
+					);
+					return;
+				}
+
 				const expressionInfo = this.resolveExpressionInfo( value.expression, path );
 				if ( ! expressionInfo || ! isSelectorDerivedPath( expressionInfo.segments ) ) {
 					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
@@ -756,6 +803,24 @@ class StoreSelectorCollector {
 				);
 			},
 		} );
+	}
+
+	recordUnsupportedChildComponentBoundary( path, expressionNode, selectorSources, elementName, propName, boundary, message ) {
+		const sourceSegments = selectorSources[ 0 ];
+		this.unsupportedChildPropExpressions.add( expressionNode );
+		this.recordUnsupported( 'child-prop-boundary', sourceSegments, message, {
+			boundary,
+			componentName: elementName,
+			propName,
+			target: `${ elementName }.${ propName }`,
+			sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+			sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+		} );
+		diagnostics.unsupported(
+			path,
+			message,
+			this.config
+		);
 	}
 
 	addParentListDeclarationForSeed( segments ) {
@@ -1152,6 +1217,48 @@ class StoreSelectorCollector {
 		}
 
 		return '<unknown>';
+	}
+
+	getChildComponentInfo( name ) {
+		const elementName = this.getJSXElementName( name );
+		if ( ! elementName ) {
+			return null;
+		}
+
+		if ( this.babel.types.isJSXIdentifier( name ) ) {
+			return /^[A-Z]/.test( elementName ) ? {
+				elementName,
+				traceable: true,
+			} : null;
+		}
+
+		if ( this.babel.types.isJSXMemberExpression( name ) ) {
+			const rootName = elementName.split( '.' )[ 0 ];
+			return /^[A-Z]/.test( rootName ) ? {
+				elementName,
+				traceable: false,
+			} : null;
+		}
+
+		return null;
+	}
+
+	getJSXElementName( name ) {
+		if ( ! name ) {
+			return null;
+		}
+
+		if ( this.babel.types.isJSXIdentifier( name ) ) {
+			return name.name;
+		}
+
+		if ( this.babel.types.isJSXMemberExpression( name ) ) {
+			const objectName = this.getJSXElementName( name.object );
+			const propertyName = this.getJSXElementName( name.property );
+			return objectName && propertyName ? `${ objectName }.${ propertyName }` : null;
+		}
+
+		return null;
 	}
 
 	resolveExpressionSegments( expression, path ) {
