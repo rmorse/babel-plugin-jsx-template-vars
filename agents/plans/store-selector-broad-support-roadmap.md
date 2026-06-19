@@ -79,6 +79,39 @@ Implementation direction:
   canonical root, declaration segments, and skip reason.
 - Keep descriptor injection in parent transforms and relative child discovery in
   child transforms.
+- Add stable callsite IDs before grouping flows by component. The current
+  same-file/cross-file seed flows group by component name; Phase 3 must preserve
+  callsite identity before that grouping can erase source distinctions.
+- Keep the first implementation slice deliberately narrow:
+  - direct relative named imports only
+  - `const` / `export const` component declarations only
+  - two parent files importing one child
+  - one object-root prop
+  - child replacement plus control
+  - Handlebars and PHP expected output
+  - no relay in the first proof
+- Add one cross-file relay hop only after the direct parent-to-child proof
+  passes.
+
+Minimum manifest context schema:
+
+```txt
+callsiteId
+parentFile
+parentComponent
+targetFile
+targetComponent
+importEdgeId
+jsxTag
+propName
+canonicalSegments
+declarationSegments
+strategy
+skipReason?
+```
+
+Keep legacy `seedAliasesByFile` compatibility while migrating so existing
+cross-file tests keep running during the transition.
 
 ### 2. Cross-File Debug Metadata
 
@@ -87,19 +120,66 @@ Cross-file tracing must be inspectable before the graph becomes broad.
 Must expose:
 
 - resolved import edge
-- parent component and JSX callsite
+- normalized parent and target filenames
+- parent component and JSX callsite ordinal or source location
 - target component/export
+- import edge ID
 - prop name
+- role
 - canonical root
+- canonical segments
+- declaration segments
+- context depth
+- strategy
 - local child paths
 - compiled paths
-- skipped edges and reasons
+- skip reason for skipped edges
 - cross-file seed/callsite propagation hops
 
 This should build on the existing dynamic-root debug metadata, but it needs
 callsite identity and file-level provenance.
 
-### 3. Production Manifest Wrapper
+### 3. Manifest Resolver, Parser, And Component Shape Contract
+
+Before scanning real projects, the manifest must have a narrow but stable
+resolver/parser/component declaration contract.
+
+Must prove:
+
+- parser failures are diagnostics, not crashes
+- `.js` / `.jsx` / extensionless / index resolution behavior is locked down
+  against the current resolver
+- `.ts` / `.tsx` are either parsed intentionally or diagnosed cleanly
+- supported component forms are explicit:
+  - `const Header = () => ...`
+  - `export const Header = () => ...`
+- unsupported component forms are diagnostic-only:
+  - `export function Header()`
+  - `export default Header`
+  - `export default function Header()`
+  - `memo(Header)` / HOCs / wrappers
+- import cycles are detected and fail closed
+- manifest output is deterministic
+- stale-cache invalidation expectations are specified before caching exists
+
+This gate should not add broad import support. It should make current narrow
+support predictable enough for a project wrapper.
+
+### 4. Minimal Runtime And Package Validation
+
+Some runtime/package checks must be pre-wrapper, because the wrapper should not
+validate a harness-only path.
+
+Must prove:
+
+- generated imports only reference exported runtime helpers
+- package contents include runtime helper entrypoints
+- non-harness transformed modules can resolve generated imports
+- descriptor helpers remain part of the documented template runtime contract
+
+Full runtime/package optimization can happen later.
+
+### 5. Production Manifest Wrapper
 
 The current manifest is explicit and test-oriented. Real project use needs a
 wrapper that can produce and consume it predictably.
@@ -113,10 +193,11 @@ Must provide:
 - strict handling of manifest diagnostics in CI/review mode
 - stable internal API for passing the manifest into plugin config
 
-Do this after cross-file callsite contexts are proven, so the wrapper integrates
-the correct manifest shape.
+Do this after cross-file callsite contexts and the resolver/parser/component
+contract are proven, so the wrapper integrates the correct manifest shape and
+does not surface fail-open parser/resolver behavior at project scale.
 
-### 4. List-Relative Multi-Source
+### 6. List-Relative Multi-Source
 
 Support path-polymorphic child components in list contexts.
 
@@ -132,11 +213,28 @@ Must prove:
 - no list/non-list leakage
 - mixed list and non-list callsites fail closed unless the transform can prove a
   correct relative context
+- exact wrapper-count assertions catch duplicate wrapping
 
 This should build on descriptor `declarationSegments`, where canonical segments
 and list-relative declaration segments diverge.
 
-### 5. Import Graph Breadth
+Same-file gate:
+
+- one parent file, same child under two different list roots
+- `product={ product }` plus child `product.name`
+- `badges={ product.badges }` plus child `badges.map(...)`
+- `product={ product }` and `badges={ product.badges }` in the same subtree
+- child used at two PHP depths in separate callsites
+
+Cross-file gate:
+
+- parent files import the same child and pass different list roots
+- same child at `$data_1` and `$data_2`
+- nested list depths preserve the expected PHP context variables
+- relay through one intermediate component
+- HBS/PHP byte parity
+
+### 7. Import Graph Breadth
 
 The initial cross-file support should remain narrow. Broaden only after the
 manifest shape and diagnostics are stable.
@@ -155,11 +253,13 @@ Prioritized support or diagnostics:
 Recommended order:
 
 1. Keep package and namespace imports diagnostic-only.
-2. Add index-file and extension resolution.
-3. Add default imports only with a strict export contract.
+2. Lock down existing `.js` / `.jsx` / extensionless / index resolution with
+   diagnostics and tests.
+3. Add default imports only with a strict export contract and real usage
+   pressure.
 4. Add project alias support only through explicit config.
 
-### 6. Mixed Context Safety
+### 8. Mixed Context Safety
 
 Real component trees reuse children in several contexts.
 
@@ -177,7 +277,7 @@ Policy:
 - Path-polymorphism may be supported through descriptors.
 - Shape-polymorphism must fail closed unless explicit shape evidence exists.
 
-### 7. Diagnostics And Review Mode
+### 9. Diagnostics And Review Mode
 
 Diagnostics must remain as important as output generation.
 
@@ -195,7 +295,7 @@ Known polish:
 - identical-root conditional expressions currently fail closed; dedupe source
   paths later if real usage requires it.
 
-### 8. Runtime And Package Contract
+### 10. Runtime And Package Contract
 
 Descriptor helpers are part of the generated template runtime contract.
 
@@ -209,7 +309,7 @@ Must prove:
 
 Do not optimize unconditional descriptor imports until the experiment stabilizes.
 
-### 9. Final Parity Fixture Gates
+### 11. Final Parity Fixture Gates
 
 Before broad support is claimed, add fixture gates that represent realistic app
 surfaces.
@@ -235,7 +335,7 @@ Each selector fixture should assert:
 - no orphaned template declarations
 - expected debug metadata when debug mode is enabled
 
-### 10. Shape-Polymorphism Research
+### 12. Shape-Polymorphism Research
 
 Shape-polymorphism remains a separate research track.
 
@@ -263,12 +363,14 @@ Do not block broad path-polymorphic support on shape-polymorphism.
 
 1. Cross-file object-root callsite contexts.
 2. Cross-file debug metadata.
-3. Production manifest wrapper basics.
-4. List-relative multi-source.
-5. Import graph breadth.
-6. Mixed context hardening.
-7. Runtime/package polish.
-8. Shape-polymorphism research.
+3. Manifest resolver, parser, and component shape contract.
+4. Minimal runtime/package validation.
+5. Production manifest wrapper basics.
+6. List-relative multi-source.
+7. Import graph breadth.
+8. Mixed context hardening.
+9. Runtime/package polish.
+10. Shape-polymorphism research.
 
 ## Review Checkpoints
 
@@ -276,6 +378,7 @@ Pause for review after each major gate:
 
 - after cross-file object-root HBS/PHP parity
 - after manifest debug metadata lands
+- after resolver/parser/component-shape diagnostics are locked down
 - before introducing the production wrapper
 - before list-relative multi-source implementation
 - before expanding import graph support
@@ -296,6 +399,7 @@ Treat the experiment as broadly supported only when:
 
 - same-file and cross-file object-root path-polymorphism work
 - same-file and cross-file list-relative path-polymorphism work
+- parser failures and unsupported component declarations diagnose cleanly
 - common import shapes are supported or clearly diagnosed
 - a production manifest wrapper exists
 - debug metadata explains successful and skipped paths
