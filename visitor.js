@@ -48,6 +48,7 @@ const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
 const {
 	collectStoreSelectorImports,
+	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,
 	createStoreSelectorPropAliases,
@@ -196,7 +197,7 @@ function templateVarsVisitor( babel, config ) {
 					} );
 					selectorResults.set( componentName, selectorResult );
 
-					collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent );
+					collectStoreSelectorChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent );
 				} );
 
 				let addedSeed = false;
@@ -230,7 +231,7 @@ function templateVarsVisitor( babel, config ) {
 				} );
 				selectorResults.set( componentName, selectorResult );
 
-				collectChildPropFlows( selectorResult, childPropTracesByComponent, new Map() );
+				collectStoreSelectorChildPropFlows( selectorResult, childPropTracesByComponent, new Map() );
 			} );
 
 			componentPaths.forEach( ( componentPath, componentName ) => {
@@ -370,12 +371,20 @@ function createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions
 }
 
 function getCrossFileComponentNames( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return [];
+	}
+
 	const componentNamesByFile = storeSelectorOptions.__crossFileManifest?.componentNamesByFile || {};
 	const componentNames = getCrossFileManifestEntry( componentNamesByFile, filename );
 	return Array.isArray( componentNames ) ? componentNames : [];
 }
 
 function getCrossFileSeedAliases( storeSelectorOptions, filename, componentName ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return [];
+	}
+
 	const seedAliasesByFile = storeSelectorOptions.__crossFileManifest?.seedAliasesByFile || {};
 	const seedAliasesByComponent = getCrossFileManifestEntry( seedAliasesByFile, filename );
 	const seedAliases = seedAliasesByComponent?.[ componentName ];
@@ -399,51 +408,6 @@ function normalizeStoreSelectorFilename( filename ) {
 	return path.normalize( path.resolve( filename ) );
 }
 
-function collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent ) {
-	( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
-		pushChildPropFlow( childPropTracesByComponent, trace.componentName, trace );
-	} );
-
-	( selectorResult.childPropSeedTraces || [] ).forEach( ( trace ) => {
-		const seedTrace = {
-			...trace,
-			seedOnly: true,
-		};
-		pushChildPropFlow( childPropTracesByComponent, trace.componentName, seedTrace );
-		pushChildPropFlow( childSeedTracesByComponent, trace.componentName, seedTrace );
-	} );
-
-	( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
-		if (
-			! unsupported.componentName ||
-			! unsupported.propName ||
-			! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
-		) {
-			return;
-		}
-
-		pushChildPropFlow( childPropTracesByComponent, unsupported.componentName, {
-			componentName: unsupported.componentName,
-			propName: unsupported.propName,
-			path: unsupported.path,
-			segments: unsupported.segments,
-			unsupported: true,
-			message: unsupported.message,
-		} );
-	} );
-}
-
-function pushChildPropFlow( flowsByComponent, componentName, flow ) {
-	if ( ! componentName ) {
-		return;
-	}
-
-	if ( ! flowsByComponent.has( componentName ) ) {
-		flowsByComponent.set( componentName, [] );
-	}
-	flowsByComponent.get( componentName ).push( flow );
-}
-
 function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) {
 	if ( ! seedAliasesByComponent.has( componentName ) ) {
 		seedAliasesByComponent.set( componentName, [] );
@@ -462,6 +426,7 @@ function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedA
 function createStoreSelectorSeedAliasKey( seedAlias ) {
 	return [
 		seedAlias.localName,
+		seedAlias.memberName || '',
 		( seedAlias.segments || [] ).join( '.' ),
 		( seedAlias.declarationSegments || [] ).join( '.' ),
 	].join( '|' );

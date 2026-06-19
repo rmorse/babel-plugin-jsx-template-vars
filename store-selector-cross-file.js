@@ -2,6 +2,7 @@ const path = require( 'path' );
 const babel = require( '@babel/core' );
 const {
 	collectStoreSelectorImports,
+	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
 	createStoreSelectorSeedAliases,
 } = require( './store-selector-template-vars' );
@@ -9,7 +10,13 @@ const {
 function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const records = createFileRecords( files );
 	const diagnostics = [];
-	resolveRecordImports( records, diagnostics );
+	const debug = {
+		importEdges: [],
+		seedEdges: [],
+		skippedImports: [],
+		ambiguousSeeds: [],
+	};
+	resolveRecordImports( records, diagnostics, debug );
 
 	const seedAliasesByFile = {};
 	const seedAliasStates = new Map();
@@ -37,7 +44,11 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 					}
 				);
 
-				collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent );
+				collectStoreSelectorChildPropFlows(
+					annotateSelectorResultSource( selectorResult, record.filename, componentName ),
+					childPropTracesByComponent,
+					childSeedTracesByComponent
+				);
 			} );
 
 			childSeedTracesByComponent.forEach( ( seedTraces, localComponentName ) => {
@@ -56,7 +67,11 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 				);
 
 				seedAliases.forEach( ( seedAlias ) => {
-					if ( addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, target.filename, target.componentName, seedAlias ) ) {
+					if ( addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, debug, target.filename, target.componentName, seedAlias, {
+						sourceFilename: seedTraces[ 0 ]?.sourceFilename || record.filename,
+						sourceComponentName: seedTraces[ 0 ]?.sourceComponentName,
+						sourceChildComponentName: localComponentName,
+					} ) ) {
 						addedSeed = true;
 					}
 				} );
@@ -72,6 +87,27 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 		seedAliasesByFile,
 		componentNamesByFile: createComponentNamesByFile( records ),
 		diagnostics,
+		debug: {
+			...debug,
+			diagnostics,
+		},
+	};
+}
+
+function annotateSelectorResultSource( selectorResult, sourceFilename, sourceComponentName ) {
+	const annotate = trace => ( {
+		...trace,
+		sourceFilename,
+		sourceComponentName,
+	} );
+	return {
+		...selectorResult,
+		childPropTraces: ( selectorResult.childPropTraces || [] ).map( annotate ),
+		childPropSeedTraces: ( selectorResult.childPropSeedTraces || [] ).map( annotate ),
+		debug: {
+			...selectorResult.debug,
+			unsupported: ( selectorResult.debug.unsupported || [] ).map( annotate ),
+		},
 	};
 }
 
@@ -175,7 +211,7 @@ function collectRawComponentImports( programPath, filename ) {
 	return imports;
 }
 
-function resolveRecordImports( records, diagnostics ) {
+function resolveRecordImports( records, diagnostics, debug ) {
 	records.forEach( ( record ) => {
 		record.rawImports.forEach( ( importInfo ) => {
 			if ( ! isRelativeImport( importInfo.source ) ) {
@@ -186,6 +222,7 @@ function resolveRecordImports( records, diagnostics ) {
 					localName: importInfo.localName,
 					message: `Store selector cross-file tracing only supports relative imports; "${ importInfo.source }" is skipped.`,
 				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
 			}
 
@@ -198,6 +235,7 @@ function resolveRecordImports( records, diagnostics ) {
 					importedName: importInfo.importedName,
 					message: `Store selector cross-file tracing does not support default imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
 				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
 			}
 
@@ -210,6 +248,7 @@ function resolveRecordImports( records, diagnostics ) {
 					importedName: importInfo.importedName,
 					message: `Store selector cross-file tracing does not support namespace imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
 				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
 			}
 
@@ -222,6 +261,7 @@ function resolveRecordImports( records, diagnostics ) {
 					localName: importInfo.localName,
 					message: `Store selector cross-file tracing could not resolve "${ importInfo.source }" from "${ record.filename }".`,
 				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
 			}
 
@@ -238,6 +278,7 @@ function resolveRecordImports( records, diagnostics ) {
 					targetFilename,
 					message: `Store selector cross-file tracing could not find component "${ importInfo.importedName }" in "${ targetFilename }". Barrel files and re-exports are not supported in this slice.`,
 				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, targetFilename ) );
 				return;
 			}
 
@@ -246,8 +287,28 @@ function resolveRecordImports( records, diagnostics ) {
 				componentName: targetComponentName,
 				filename: targetFilename,
 			} );
+			debug.importEdges.push( {
+				sourceFilename: record.filename,
+				importSource: importInfo.source,
+				localName: importInfo.localName,
+				importedName: importInfo.importedName,
+				targetFilename,
+				targetComponentName,
+			} );
 		} );
 	} );
+}
+
+function createSkippedImportDebugEntry( diagnostic, importInfo, targetFilename ) {
+	return {
+		kind: diagnostic.kind,
+		filename: diagnostic.filename,
+		source: importInfo.source,
+		localName: importInfo.localName,
+		importedName: importInfo.importedName,
+		targetFilename,
+		message: diagnostic.message,
+	};
 }
 
 function getImportSpecifierName( imported ) {
@@ -341,52 +402,7 @@ function createComponentNamesByFile( records ) {
 	return componentNamesByFile;
 }
 
-function collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent ) {
-	( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
-		pushChildPropFlow( childPropTracesByComponent, trace.componentName, trace );
-	} );
-
-	( selectorResult.childPropSeedTraces || [] ).forEach( ( trace ) => {
-		const seedTrace = {
-			...trace,
-			seedOnly: true,
-		};
-		pushChildPropFlow( childPropTracesByComponent, trace.componentName, seedTrace );
-		pushChildPropFlow( childSeedTracesByComponent, trace.componentName, seedTrace );
-	} );
-
-	( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
-		if (
-			! unsupported.componentName ||
-			! unsupported.propName ||
-			! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
-		) {
-			return;
-		}
-
-		pushChildPropFlow( childPropTracesByComponent, unsupported.componentName, {
-			componentName: unsupported.componentName,
-			propName: unsupported.propName,
-			path: unsupported.path,
-			segments: unsupported.segments,
-			unsupported: true,
-			message: unsupported.message,
-		} );
-	} );
-}
-
-function pushChildPropFlow( flowsByComponent, componentName, flow ) {
-	if ( ! componentName ) {
-		return;
-	}
-
-	if ( ! flowsByComponent.has( componentName ) ) {
-		flowsByComponent.set( componentName, [] );
-	}
-	flowsByComponent.get( componentName ).push( flow );
-}
-
-function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, filename, componentName, seedAlias ) {
+function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, debug, filename, componentName, seedAlias, source = {} ) {
 	if ( ! seedAlias || ! seedAlias.localName ) {
 		return false;
 	}
@@ -405,7 +421,7 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 			stringifySegments( existingState.seedAlias.segments || [] ),
 			stringifySegments( seedAlias.segments || [] ),
 		] ) ).filter( Boolean );
-		diagnostics.push( {
+		const diagnostic = {
 			kind: 'ambiguous-cross-file-seed',
 			filename: normalizedFilename,
 			componentName,
@@ -414,7 +430,9 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 			declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
 			sourcePaths,
 			message: `Store selector cross-file tracing found ambiguous sources for "${ componentName }.${ seedAlias.memberName || seedAlias.localName }" (${ sourcePaths.join( ', ' ) }); seed tracing is disabled for this binding.`,
-		} );
+		};
+		diagnostics.push( diagnostic );
+		debug.ambiguousSeeds.push( diagnostic );
 		seedAliasStates.set( stateKey, {
 			ambiguous: true,
 		} );
@@ -438,6 +456,17 @@ function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, 
 	seedAliasStates.set( stateKey, {
 		sourceKey,
 		seedAlias,
+	} );
+	debug.seedEdges.push( {
+		sourceFilename: source.sourceFilename,
+		sourceComponentName: source.sourceComponentName,
+		sourceChildComponentName: source.sourceChildComponentName,
+		targetFilename: normalizedFilename,
+		targetComponentName: componentName,
+		localName: seedAlias.localName,
+		memberName: seedAlias.memberName,
+		sourcePath: stringifySegments( seedAlias.segments || [] ),
+		declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
 	} );
 	return true;
 }

@@ -789,6 +789,27 @@ describe('experimental store selectors', () => {
 		);
 
 		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual([
+			expect.objectContaining({
+				sourceFilename: path.join(process.cwd(), '__cross_file_store_selector_tests__', 'App.jsx'),
+				localName: 'Header',
+				importedName: 'Header',
+				targetFilename: path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx'),
+				targetComponentName: 'Header',
+			}),
+		]);
+		expect(manifest.debug.seedEdges).toEqual([
+			expect.objectContaining({
+				sourceFilename: path.join(process.cwd(), '__cross_file_store_selector_tests__', 'App.jsx'),
+				sourceComponentName: 'App',
+				sourceChildComponentName: 'Header',
+				targetFilename: path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx'),
+				targetComponentName: 'Header',
+				localName: 'hero',
+				sourcePath: 'hero',
+				declarationPath: 'hero',
+			}),
+		]);
 		expect(manifest.seedAliasesByFile[path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx')].Header).toEqual([
 			expect.objectContaining({
 				localName: 'hero',
@@ -798,6 +819,43 @@ describe('experimental store selectors', () => {
 		]);
 		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
+	it('does not consume a cross-file manifest unless crossFile is enabled', async () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(process.cwd(), '__cross_file_store_selector_tests__', 'App.jsx'),
+			'App',
+			{},
+			{
+				experimentalStoreSelectors: {
+					__crossFileManifest: manifest,
+				},
+				warnOnUnsupported: false,
+			}
+		);
+
+		expect(manifest.seedAliasesByFile[path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx')].Header).toHaveLength(1);
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1></h1></main>');
 	});
 
 	it.each([
@@ -1044,6 +1102,14 @@ describe('experimental store selectors', () => {
 				importedName: 'default',
 			}),
 		]);
+		expect(manifest.debug.skippedImports).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-default-import',
+				source: './Header.jsx',
+				localName: 'Header',
+				importedName: 'default',
+			}),
+		]);
 		expect(manifest.componentNamesByFile).toEqual({});
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
@@ -1147,6 +1213,14 @@ describe('experimental store selectors', () => {
 		const manifest = createStoreSelectorCrossFileManifest(files);
 
 		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'ambiguous-cross-file-seed',
+				componentName: 'Header',
+				localName: 'hero',
+				sourcePaths: [ 'heroA', 'heroB' ],
+			}),
+		]);
+		expect(manifest.debug.ambiguousSeeds).toEqual([
 			expect.objectContaining({
 				kind: 'ambiguous-cross-file-seed',
 				componentName: 'Header',

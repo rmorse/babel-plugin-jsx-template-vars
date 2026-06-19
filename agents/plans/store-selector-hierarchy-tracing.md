@@ -502,9 +502,12 @@ than implicit per-file build-order state:
   runs the same bounded seed discovery model across the file graph.
 - The manifest exposes `seedAliasesByFile` and `componentNamesByFile`.
 - The normal plugin consumes that manifest through
-  `experimentalStoreSelectors.__crossFileManifest`.
+  `experimentalStoreSelectors.__crossFileManifest` only when `crossFile: true`
+  is also set.
 - The transform remains per-file; the manifest is the handoff that makes child
   seeds available regardless of transform order.
+- The manifest also returns graph debug metadata: resolved import edges, seed
+  propagation edges, skipped imports, ambiguous seed decisions, and diagnostics.
 
 Validated behavior:
 
@@ -520,6 +523,8 @@ Validated behavior:
   report diagnostics
 - ambiguous cross-file seeds for the same child binding do not invent a
   last-wins alias and report diagnostics
+- `crossFile: true` is a meaningful opt-in gate; manifests are ignored without
+  it
 
 ### Required Behavior
 
@@ -542,6 +547,8 @@ Validated behavior:
 - default import unsupported diagnostic: implemented.
 - namespace/member component unsupported diagnostics: implemented.
 - ambiguous cross-file seed diagnostic: implemented.
+- graph debug metadata for import edges, seed edges, skipped imports, and
+  ambiguous seed decisions: implemented.
 - default import: not supported in this slice unless a later review decides to
   add a strict default-export contract.
   Namespace/member component imports are also deferred until a later slice
@@ -635,10 +642,20 @@ Never:
 - `declarationProvenance`, keyed by synthesized declaration, with the usage or
   map-list source path that caused the declaration
 
+`createStoreSelectorCrossFileManifest(files)` now includes graph-level debug
+metadata:
+
+- resolved import edges, including source file, import source, local name,
+  target file, and target component
+- seed propagation edges, including source file/component, child tag name,
+  target file/component, local binding, source path, and declaration path
+- skipped imports with diagnostic kind and message
+- ambiguous seed decisions with conflicting source paths
+
 Remaining metadata hardening as tracing grows:
 
-- graph hop count
-- source component and target component
+- graph hop count beyond the current source/target edge records
+- source component and target component in transform-level metadata
 - source prop name, child local binding name, and canonical path
 - trace status:
   `supported`, `unsupported`, `partial-flat-fallback`, or `skipped`
@@ -751,11 +768,11 @@ before broader context tracing work starts.
 
 ## Recommended Next Step
 
-Send the completed cross-file manifest gate through review. If reviewers agree
-the explicit prepass shape is sound, choose the next slice from the remaining
-documented boundaries: a production file-system wrapper for the manifest,
-bare param-as-prop diagnostics, broader unsupported-boundary/debug metadata
-hardening, marker coexistence, or context tracing.
+Send the completed cross-file manifest and graph-debug gate through review. If
+reviewers agree the explicit prepass shape is sound, choose the next slice from
+the remaining documented boundaries: a production file-system wrapper for the
+manifest, bare param-as-prop diagnostics, marker coexistence, or context
+tracing.
 
 Historical refactor pass/fail gates, now completed:
 

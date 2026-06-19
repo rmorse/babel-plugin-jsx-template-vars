@@ -289,6 +289,51 @@ function groupChildPropTraces( traces ) {
 	return tracesByProp;
 }
 
+function collectStoreSelectorChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent ) {
+	( selectorResult.childPropTraces || [] ).forEach( ( trace ) => {
+		pushChildPropFlow( childPropTracesByComponent, trace.componentName, trace );
+	} );
+
+	( selectorResult.childPropSeedTraces || [] ).forEach( ( trace ) => {
+		const seedTrace = {
+			...trace,
+			seedOnly: true,
+		};
+		pushChildPropFlow( childPropTracesByComponent, trace.componentName, seedTrace );
+		pushChildPropFlow( childSeedTracesByComponent, trace.componentName, seedTrace );
+	} );
+
+	( selectorResult.debug.unsupported || [] ).forEach( ( unsupported ) => {
+		if (
+			! unsupported.componentName ||
+			! unsupported.propName ||
+			! [ 'child-prop', 'child-prop-boundary' ].includes( unsupported.kind )
+		) {
+			return;
+		}
+
+		pushChildPropFlow( childPropTracesByComponent, unsupported.componentName, {
+			componentName: unsupported.componentName,
+			propName: unsupported.propName,
+			path: unsupported.path,
+			segments: unsupported.segments,
+			unsupported: true,
+			message: unsupported.message,
+		} );
+	} );
+}
+
+function pushChildPropFlow( flowsByComponent, componentName, flow ) {
+	if ( ! componentName ) {
+		return;
+	}
+
+	if ( ! flowsByComponent.has( componentName ) ) {
+		flowsByComponent.set( componentName, [] );
+	}
+	flowsByComponent.get( componentName ).push( flow );
+}
+
 function findObjectPatternBindingPath( patternPath, propName, babel ) {
 	const properties = patternPath.get( 'properties' );
 	for ( const propertyPath of properties ) {
@@ -1704,6 +1749,7 @@ module.exports = {
 	STORE_SELECTOR_EXPORT,
 	assertNoUnprocessedStoreSelectorReferences,
 	collectStoreSelectorImports,
+	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
 	createStoreSelectorPropAliases,
 	createStoreSelectorSeedAliases,
