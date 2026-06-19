@@ -50,6 +50,9 @@ selector path -> local binding -> JSX prop -> child prop binding -> child usage
 Each phase should:
 
 - preserve the registry-first architecture
+- preserve normal React component semantics; do not reinterpret a component's
+  parameter name as a prop name or invent mappings to rescue mismatched
+  parent/child prop contracts
 - synthesize the same flat paths that a user could have declared manually
 - keep controllers selector-agnostic apart from generic alias wiring
 - fail closed or warn when metadata crosses an unsupported boundary

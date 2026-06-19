@@ -1096,6 +1096,29 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('auto-seeds renamed selector locals into renamed child props', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ item }) => {
+				return <h1>{ item.title }</h1>;
+			};
+
+			const App = () => {
+				const anything = useStoreSelector((state) => state.hero);
+				return <Header item={ anything } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('auto-seeds object root props into child component controls', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -1143,6 +1166,52 @@ describe('experimental store selectors', () => {
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('auto-seeds props-object child params regardless of parameter name', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (whatever) => {
+				return <h1>{ whatever.item.title }</h1>;
+			};
+
+			const App = () => {
+				const anything = useStoreSelector((state) => state.hero);
+				return <Header item={ anything } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('does not invent mappings for mismatched props-object member names', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (hero) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const anything = useStoreSelector((state) => state.hero);
+				return <Header hero={ anything } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1></h1>');
 		expect(warn).not.toHaveBeenCalled();
 	});
 
