@@ -135,6 +135,10 @@ strict mode unless a phase explicitly supports them:
 - multiple selector-derived sources for one prop
 - the same child rendered inside and outside a list context with the same traced
   prop
+- traced child components whose first parameter is not a destructured object
+  pattern, for example `const Header = (props) => ...` or
+  `const Header = (hero) => ...`; current tracing requires static prop-to-binding
+  resolution from `({ hero })`
 - dynamic component names
 - imported/unknown child components before cross-file tracing
 - prop mutation or rebinding that obscures provenance
@@ -701,7 +705,8 @@ Phase B pass/fail gates:
 - object-root direct render policy is covered by an explicit unsupported
   warning/strict negative test
 - unsupported computed members, child forwarding, unknown/imported child
-  components, and spreads warn by default and throw in strict mode
+  components, non-object-pattern child params, and spreads warn by default and
+  throw in strict mode
 - selector parent plus flat child `templateVars` does not silently byte-match a
   fully traced target when provenance was lost; it emits the partial-flat-fallback
   diagnostic
