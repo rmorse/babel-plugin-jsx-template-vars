@@ -12,6 +12,9 @@ registry/controller boundary:
 - `store-selector-complex-surface` byte-matches `full-template-surface` for
   Handlebars and PHP as a parent-selector parity fixture, while child components
   still use explicit flat `templateVars`
+- `store-selector-full-template-surface` byte-matches `full-template-surface`
+  for Handlebars and PHP without child component `templateVars`, including
+  list-context object-field props such as `badges={ product.badges }`
 - debug metadata is available through `metadata.storeSelectorTemplateVars`
 - Phase A tracing supports same-file direct scalar child props
 - same-file top-level multi-hop tracing is intentionally supported by the
@@ -648,8 +651,9 @@ Ordered by severity against the current implementation:
   the child in a way that creates a second list wrapper. It needs relative child
   paths plus inherited context metadata.
 - P1: The current complex-surface parity fixture is a parent-selector parity
-  baseline, not a hierarchy-tracing proof. Phase C needs a no-explicit-child
-  `templateVars` parity fixture before it is treated as proven.
+  baseline, not a hierarchy-tracing proof. This is now covered by
+  `store-selector-full-template-surface`, which removes child `templateVars` and
+  byte-matches `full-template-surface`.
 
 ## Review Questions
 
@@ -666,11 +670,11 @@ Ordered by severity against the current implementation:
 - Should the runtime API remain `useStoreSelector`, or should the template-only
   nature be made explicit with a different exported name before release?
 
-## Recommended Next Step
+## Completed Full-Surface Parity Gate
 
-The seedable discovery refactor, boundary catalog, and same-file auto-seeding
-pass are now implemented. The next gate is the selector-based
-`full-template-surface` parity fixture:
+The seedable discovery refactor, boundary catalog, same-file auto-seeding pass,
+and selector-based `full-template-surface` parity fixture are now implemented.
+The parity fixture verifies:
 
 - no child component `templateVars`
 - top-level selectors in the parent
@@ -679,8 +683,16 @@ pass are now implemented. The next gate is the selector-based
 - byte-matched Handlebars and PHP output against `full-template-surface`
 - no orphaned template declarations or leaked runtime selector calls
 
-This gate should prove the no-explicit-child-`templateVars` version of the hard
-fixture before broader cross-file tracing or context tracing work starts.
+This proves the no-explicit-child-`templateVars` version of the hard fixture
+before broader cross-file tracing or context tracing work starts.
+
+## Recommended Next Step
+
+Send the completed full-surface parity gate through review. If reviewers agree
+the same-file hierarchy story is stable, choose the next slice from the remaining
+documented boundaries: non-object-pattern child parameter diagnostics,
+cross-file tracing exploration, or broader unsupported-boundary/debug metadata
+hardening.
 
 Historical refactor pass/fail gates, now completed:
 
