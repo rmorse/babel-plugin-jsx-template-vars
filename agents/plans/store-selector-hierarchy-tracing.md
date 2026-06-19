@@ -518,6 +518,8 @@ Validated behavior:
   invent seeds and report diagnostics
 - default imports and namespace/member component imports do not invent seeds and
   report diagnostics
+- ambiguous cross-file seeds for the same child binding do not invent a
+  last-wins alias and report diagnostics
 
 ### Required Behavior
 
@@ -539,6 +541,7 @@ Validated behavior:
 - no tracing through non-relative/package imports: implemented.
 - default import unsupported diagnostic: implemented.
 - namespace/member component unsupported diagnostics: implemented.
+- ambiguous cross-file seed diagnostic: implemented.
 - default import: not supported in this slice unless a later review decides to
   add a strict default-export contract.
   Namespace/member component imports are also deferred until a later slice

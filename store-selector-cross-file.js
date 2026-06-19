@@ -12,6 +12,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	resolveRecordImports( records, diagnostics );
 
 	const seedAliasesByFile = {};
+	const seedAliasStates = new Map();
 	const totalComponents = Array.from( records.values() )
 		.reduce( ( count, record ) => count + record.componentPaths.size, 0 );
 
@@ -55,7 +56,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 				);
 
 				seedAliases.forEach( ( seedAlias ) => {
-					if ( addManifestSeedAlias( seedAliasesByFile, target.filename, target.componentName, seedAlias ) ) {
+					if ( addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, target.filename, target.componentName, seedAlias ) ) {
 						addedSeed = true;
 					}
 				} );
@@ -385,12 +386,41 @@ function pushChildPropFlow( flowsByComponent, componentName, flow ) {
 	flowsByComponent.get( componentName ).push( flow );
 }
 
-function addManifestSeedAlias( seedAliasesByFile, filename, componentName, seedAlias ) {
+function addManifestSeedAlias( seedAliasesByFile, seedAliasStates, diagnostics, filename, componentName, seedAlias ) {
 	if ( ! seedAlias || ! seedAlias.localName ) {
 		return false;
 	}
 
 	const normalizedFilename = normalizeFilename( filename );
+	const stateKey = createSeedAliasStateKey( normalizedFilename, componentName, seedAlias );
+	const sourceKey = createSeedAliasSourceKey( seedAlias );
+	const existingState = seedAliasStates.get( stateKey );
+	if ( existingState?.ambiguous ) {
+		return false;
+	}
+
+	if ( existingState && existingState.sourceKey !== sourceKey ) {
+		removeManifestSeedAlias( seedAliasesByFile, normalizedFilename, componentName, existingState.seedAlias );
+		const sourcePaths = Array.from( new Set( [
+			stringifySegments( existingState.seedAlias.segments || [] ),
+			stringifySegments( seedAlias.segments || [] ),
+		] ) ).filter( Boolean );
+		diagnostics.push( {
+			kind: 'ambiguous-cross-file-seed',
+			filename: normalizedFilename,
+			componentName,
+			localName: seedAlias.localName,
+			memberName: seedAlias.memberName,
+			declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
+			sourcePaths,
+			message: `Store selector cross-file tracing found ambiguous sources for "${ componentName }.${ seedAlias.memberName || seedAlias.localName }" (${ sourcePaths.join( ', ' ) }); seed tracing is disabled for this binding.`,
+		} );
+		seedAliasStates.set( stateKey, {
+			ambiguous: true,
+		} );
+		return false;
+	}
+
 	if ( ! seedAliasesByFile[ normalizedFilename ] ) {
 		seedAliasesByFile[ normalizedFilename ] = {};
 	}
@@ -405,7 +435,30 @@ function addManifestSeedAlias( seedAliasesByFile, filename, componentName, seedA
 	}
 
 	seedAliases.push( seedAlias );
+	seedAliasStates.set( stateKey, {
+		sourceKey,
+		seedAlias,
+	} );
 	return true;
+}
+
+function removeManifestSeedAlias( seedAliasesByFile, filename, componentName, seedAlias ) {
+	const seedAliases = seedAliasesByFile[ filename ]?.[ componentName ];
+	if ( ! seedAliases ) {
+		return;
+	}
+
+	const seedKey = createSeedAliasKey( seedAlias );
+	const nextSeedAliases = seedAliases.filter( existing => createSeedAliasKey( existing ) !== seedKey );
+	if ( nextSeedAliases.length > 0 ) {
+		seedAliasesByFile[ filename ][ componentName ] = nextSeedAliases;
+		return;
+	}
+
+	delete seedAliasesByFile[ filename ][ componentName ];
+	if ( Object.keys( seedAliasesByFile[ filename ] ).length === 0 ) {
+		delete seedAliasesByFile[ filename ];
+	}
 }
 
 function getManifestSeeds( seedAliasesByFile, filename, componentName ) {
@@ -419,6 +472,19 @@ function createSeedAliasKey( seedAlias ) {
 		( seedAlias.segments || [] ).join( '.' ),
 		( seedAlias.declarationSegments || [] ).join( '.' ),
 	].join( '|' );
+}
+
+function createSeedAliasStateKey( filename, componentName, seedAlias ) {
+	return [
+		filename,
+		componentName,
+		seedAlias.localName,
+		seedAlias.memberName || '',
+	].join( '|' );
+}
+
+function createSeedAliasSourceKey( seedAlias ) {
+	return ( seedAlias.segments || [] ).join( '.' );
 }
 
 function getTopLevelComponentPaths( programPath, types ) {
@@ -471,6 +537,10 @@ function isRelativeImport( source ) {
 
 function normalizeFilename( filename ) {
 	return path.normalize( path.resolve( filename ) );
+}
+
+function stringifySegments( segments ) {
+	return segments.map( segment => String( segment ) ).join( '.' );
 }
 
 module.exports = {

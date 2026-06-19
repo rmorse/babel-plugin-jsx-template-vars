@@ -1115,6 +1115,48 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
+	it('does not trace ambiguous cross-file seeds from multiple parent files', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'A.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const A = () => {
+					const hero = useStoreSelector((state) => state.heroA);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { A };
+			`,
+			'B.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const B = () => {
+					const hero = useStoreSelector((state) => state.heroB);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { B };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'ambiguous-cross-file-seed',
+				componentName: 'Header',
+				localName: 'hero',
+				sourcePaths: [ 'heroA', 'heroB' ],
+			}),
+		]);
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
 	it('records unsupported selector metadata for JSX member components', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
