@@ -7,9 +7,11 @@ Active implementation plan for the next store-selector experiment stream.
 Current implementation status:
 
 - **Completed in the first implementation slice:**
-  - Phase 0 safety baseline for same-file object-root ambiguity now routes
-    covered path-polymorphic object-root cases into descriptor composition
-    instead of warning and rendering empty output.
+  - Phase 0 safety baseline now routes covered same-file object-root
+    path-polymorphic cases into descriptor composition instead of warning and
+    rendering empty output. Unsupported object-root expressions that would need
+    descriptor context, such as conditional roots, hard-error for the covered
+    same-file component forms.
   - Phase 0.5 descriptor composition is proven with focused Handlebars and PHP
     tests for replacement, control, one-hop relay, and descriptor containment.
   - Phase 1 same-file object-root path-polymorphism is implemented for
@@ -17,6 +19,8 @@ Current implementation status:
   - A narrow Phase 2 same-file hardening slice is implemented for multi-hop
     relay and intermediate components that both consume and forward an object
     root.
+  - Dynamic root containment is enforced at transform time for covered same-file
+    descriptor paths: bare dynamic-root rendering is rejected before codegen.
 - **Still pending:**
   - Cross-file relative object contexts through a manifest callsite-context
     model.

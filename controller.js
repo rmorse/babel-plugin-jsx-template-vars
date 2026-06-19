@@ -193,7 +193,7 @@ const templateVarsController = {
 					const configAttribute = types.jSXAttribute(types.jSXIdentifier('__config__'), types.jSXExpressionContainer(types.identifier(self.recursionIdentifier.name)));
 					subPath.node.openingElement.attributes.push(configAttribute);
 
-					injectStoreSelectorRootDescriptors(subPath, listController, config, types);
+					injectDynamicRootDescriptors(subPath, listController, config, types);
 				}
 
 				/**
@@ -355,7 +355,7 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 
 module.exports = templateVarsController;
 
-function injectStoreSelectorRootDescriptors(path, listController, config, types) {
+function injectDynamicRootDescriptors(path, listController, config, types) {
 	const elementName = path.node.openingElement?.name?.name;
 	const rootProps = getDynamicRootPropsForComponent(config, elementName);
 	if (rootProps.size === 0) {
@@ -378,7 +378,7 @@ function injectStoreSelectorRootDescriptors(path, listController, config, types)
 		if (!segments) {
 			diagnostics.error(
 				expressionPath,
-				`Store selector dynamic root prop "${propName}" for child component "${elementName}" must receive a selector-derived or descriptor-derived value.`
+				`Dynamic root prop "${propName}" for child component "${elementName}" must receive a selector-derived or descriptor-derived value.`
 			);
 		}
 
@@ -394,7 +394,7 @@ function injectStoreSelectorRootDescriptors(path, listController, config, types)
 }
 
 function getDynamicRootPropsForComponent(config, componentName) {
-	const propsByComponent = config.storeSelectorDynamicRootPropsByComponent || {};
+	const propsByComponent = config.dynamicRootPropsByComponent || {};
 	const props = propsByComponent[componentName];
 	return new Set(Array.isArray(props) ? props : []);
 }
@@ -413,7 +413,7 @@ function isLocalDynamicRootExpression(expression, config, types) {
 		return false;
 	}
 
-	return (config.storeSelectorDynamicRootAliases || []).some((alias) => {
+	return (config.dynamicRootAliases || []).some((alias) => {
 		const rootSegments = [alias.localName, alias.memberName].filter(Boolean);
 		return rootSegments.length === segments.length &&
 			rootSegments.every((segment, index) => segment === segments[index]);

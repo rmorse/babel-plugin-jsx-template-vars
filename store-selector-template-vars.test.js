@@ -1351,13 +1351,13 @@ describe('experimental store selectors', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-			const Header = ({ hero }) => {
-				return <h1>{ hero.title }</h1>;
+			const Header = ({ title }) => {
+				return <h1>{ title }</h1>;
 			};
 
 			const App = () => {
-				const hero = useStoreSelector((state) => state.hero);
-				return <Header hero={ hero || {} } />;
+				const title = useStoreSelector((state) => state.hero.title);
+				return <Header title={ title || '' } />;
 			};
 
 			module.exports = { App };
@@ -1375,11 +1375,11 @@ describe('experimental store selectors', () => {
 				unsupported: [
 					expect.objectContaining({
 						kind: 'child-prop-boundary',
-						path: 'hero',
+						path: 'hero.title',
 						componentName: 'Header',
-						propName: 'hero',
-						target: 'Header.hero',
-						sourcePaths: [ 'hero' ],
+						propName: 'title',
+						target: 'Header.title',
+						sourcePaths: [ 'hero.title' ],
 					}),
 				],
 			}),
@@ -2061,6 +2061,58 @@ describe('experimental store selectors', () => {
 			language: 'handlebars',
 			...selectorOptions,
 		})).toThrow(/must receive a selector-derived or descriptor-derived value/);
+	});
+
+	it('throws for conditional object-root sources before rendering empty output', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = ({ useArticle }) => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return <Header hero={ useArticle ? articleHero : homeHero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		})).toThrow(/object-root-multi-source-ambiguity/);
+	});
+
+	it('throws when a dynamic root is rendered both as a member and bare value', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => (
+				<header>
+					<h1>{ hero.title }</h1>
+					<p>{ hero }</p>
+				</header>
+			);
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		})).toThrow(/cannot be rendered directly/);
 	});
 
 	it('renders multi-source object roots through local aliases in child components', async () => {

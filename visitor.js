@@ -193,6 +193,7 @@ function templateVarsVisitor( babel, config ) {
 					const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
 						...config,
 						storeSelectorComponentNames: componentNames,
+						storeSelectorComponentPaths: componentPaths,
 						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 						storeSelectorNeutralizeSelectors: false,
 					} );
@@ -248,6 +249,7 @@ function templateVarsVisitor( babel, config ) {
 				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
 					...config,
 					storeSelectorComponentNames: componentNames,
+					storeSelectorComponentPaths: componentPaths,
 					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 				} );
@@ -329,8 +331,8 @@ function templateVarsVisitor( babel, config ) {
 				templateVarsController.init( templateVars, componentName, componentPath, babel, {
 					...config,
 					storeSelectorAliases: aliases,
-					storeSelectorDynamicRootAliases: ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot ),
-					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
+					dynamicRootAliases: ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot ),
+					dynamicRootPropsByComponent: dynamicRootPropsByComponent,
 				} );
 				processedComponents.add( componentName );
 			} );

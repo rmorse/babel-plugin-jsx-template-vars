@@ -255,6 +255,9 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 				segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
 				declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
 				dynamicRoot: propTraces[ 0 ].dynamicRoot === true,
+				dynamicRootSegments: propTraces[ 0 ].dynamicRoot === true ?
+					normalizeCanonicalSegments( propTraces[ 0 ].dynamicRootSegments || propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ) :
+					undefined,
 				propName,
 			} );
 		} );
@@ -299,6 +302,9 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 			segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
 			declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
 			dynamicRoot: propTraces[ 0 ].dynamicRoot === true,
+			dynamicRootSegments: propTraces[ 0 ].dynamicRoot === true ?
+				normalizeCanonicalSegments( propTraces[ 0 ].dynamicRootSegments || propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ) :
+				undefined,
 			propName,
 		} );
 	} );
@@ -336,6 +342,7 @@ function createStoreSelectorDynamicRootAliases( componentPath, traces = [], babe
 				segments: [ firstParam.name, propName ],
 				declarationSegments: [ firstParam.name, propName ],
 				dynamicRoot: true,
+				dynamicRootSegments: [ firstParam.name, propName ],
 				propName,
 			} );
 			return;
@@ -351,6 +358,7 @@ function createStoreSelectorDynamicRootAliases( componentPath, traces = [], babe
 			segments: [ bindingPath.node.name ],
 			declarationSegments: [ bindingPath.node.name ],
 			dynamicRoot: true,
+			dynamicRootSegments: [ bindingPath.node.name ],
 			propName,
 		} );
 	} );
@@ -765,6 +773,7 @@ class StoreSelectorCollector {
 					this.registerAlias( id.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
 						dynamicRoot: sourceInfo.dynamicRoot,
+						dynamicRootSegments: sourceInfo.dynamicRootSegments,
 					} );
 					if ( this.isSafeListChainCall( init ) ) {
 						this.registerSafeListChainCallbackAliases(
@@ -780,6 +789,7 @@ class StoreSelectorCollector {
 					this.registerPatternAliases( id, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
 						dynamicRoot: sourceInfo.dynamicRoot,
+						dynamicRootSegments: sourceInfo.dynamicRootSegments,
 					} );
 				}
 			},
@@ -798,6 +808,7 @@ class StoreSelectorCollector {
 					this.registerAlias( left.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
 						dynamicRoot: sourceInfo.dynamicRoot,
+						dynamicRootSegments: sourceInfo.dynamicRootSegments,
 					} );
 					return;
 				}
@@ -1014,6 +1025,15 @@ class StoreSelectorCollector {
 					}
 
 					const sourceSegments = selectorSources[ 0 ];
+					if (
+						this.isPotentialDynamicRootBoundary( elementName, path.node.name.name, selectorSources )
+					) {
+						diagnostics.error(
+							path,
+							`Store selector object-root-multi-source-ambiguity: prop "${ path.node.name.name }" for child component "${ elementName }" uses an unsupported object-root expression (${ selectorSources.map( source => stringifySegments( source ) ).join( ', ' ) }). Pass one selector-derived object root directly or split the callsites.`
+						);
+					}
+
 					const message = `Store selector value "${ stringifySegments( sourceSegments ) }" is used in unsupported prop expression for child component "${ elementName }".`;
 					this.unsupportedChildPropExpressions.add( value.expression );
 					this.recordUnsupported( 'child-prop-boundary', sourceSegments, message, {
@@ -1040,6 +1060,7 @@ class StoreSelectorCollector {
 						path: stringifySegments( segments ),
 						segments: normalizeSegments( segments ),
 						dynamicRoot: true,
+						dynamicRootSegments: expressionInfo.dynamicRootSegments,
 					} );
 					this.unsupportedChildPropExpressions.add( value.expression );
 					return;
@@ -1064,6 +1085,7 @@ class StoreSelectorCollector {
 						segments: normalizeSegments( segments ),
 						declarationSegments: this.getChildSeedDeclarationSegments( expressionInfo ),
 						dynamicRoot: expressionInfo.dynamicRoot,
+						dynamicRootSegments: expressionInfo.dynamicRootSegments,
 					} );
 					this.unsupportedChildPropExpressions.add( value.expression );
 					return;
@@ -1287,6 +1309,7 @@ class StoreSelectorCollector {
 					declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
 					source: 'seed',
 					dynamicRoot: seedAlias.dynamicRoot,
+					dynamicRootSegments: seedAlias.dynamicRootSegments,
 				} );
 				return;
 			}
@@ -1295,6 +1318,7 @@ class StoreSelectorCollector {
 				declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
 				source: 'seed',
 				dynamicRoot: seedAlias.dynamicRoot,
+				dynamicRootSegments: seedAlias.dynamicRootSegments,
 			} );
 		} );
 	}
@@ -1338,6 +1362,9 @@ class StoreSelectorCollector {
 			declarationSegments: normalizedDeclarationSegments,
 			source: options.source || 'local',
 			dynamicRoot: options.dynamicRoot === true,
+			dynamicRootSegments: options.dynamicRoot === true ?
+				normalizeCanonicalSegments( options.dynamicRootSegments || normalizedDeclarationSegments ) :
+				undefined,
 		};
 
 		this.aliasesByBinding.set( binding.identifier, entry );
@@ -1372,6 +1399,9 @@ class StoreSelectorCollector {
 			declarationSegments: normalizedDeclarationSegments,
 			source: options.source || 'local',
 			dynamicRoot: options.dynamicRoot === true,
+			dynamicRootSegments: options.dynamicRoot === true ?
+				normalizeCanonicalSegments( options.dynamicRootSegments || normalizedDeclarationSegments ) :
+				undefined,
 		};
 
 		aliasesByMember.set( memberName, entry );
@@ -1396,6 +1426,8 @@ class StoreSelectorCollector {
 			if ( this.babel.types.isIdentifier( value ) ) {
 				this.registerAlias( value.name, propertySegments, path, {
 					declarationSegments: propertyDeclarationSegments,
+					dynamicRoot: options.dynamicRoot,
+					dynamicRootSegments: options.dynamicRootSegments,
 				} );
 				return;
 			}
@@ -1403,6 +1435,8 @@ class StoreSelectorCollector {
 			if ( this.babel.types.isObjectPattern( value ) ) {
 				this.registerPatternAliases( value, propertySegments, path, {
 					declarationSegments: propertyDeclarationSegments,
+					dynamicRoot: options.dynamicRoot,
+					dynamicRootSegments: options.dynamicRootSegments,
 				} );
 			}
 		} );
@@ -1478,6 +1512,19 @@ class StoreSelectorCollector {
 		const propsByComponent = this.config.storeSelectorDynamicRootPropsByComponent || {};
 		const props = propsByComponent[ componentName ];
 		return Array.isArray( props ) && props.includes( propName );
+	}
+
+	isPotentialDynamicRootBoundary( componentName, propName, selectorSources ) {
+		if ( selectorSources.length === 0 ) {
+			return false;
+		}
+
+		const componentPath = this.config.storeSelectorComponentPaths?.get?.( componentName );
+		if ( ! componentPath ) {
+			return false;
+		}
+
+		return childPropHasObjectRootUsage( componentPath, propName, this.babel );
 	}
 
 	getChildSeedDeclarationSegments( expressionInfo ) {
@@ -1575,6 +1622,7 @@ class StoreSelectorCollector {
 				segments: [ ...objectInfo.segments, expression.property.name ],
 				declarationSegments: [ ...objectInfo.declarationSegments, expression.property.name ],
 				dynamicRoot: objectInfo.dynamicRoot,
+				dynamicRootSegments: objectInfo.dynamicRootSegments,
 			} : null;
 		}
 
@@ -1604,6 +1652,7 @@ class StoreSelectorCollector {
 			segments: alias.segments,
 			declarationSegments: alias.declarationSegments || alias.segments,
 			dynamicRoot: alias.dynamicRoot,
+			dynamicRootSegments: alias.dynamicRootSegments,
 		} : null;
 	}
 
@@ -1623,6 +1672,7 @@ class StoreSelectorCollector {
 			segments: alias.segments,
 			declarationSegments: alias.declarationSegments || alias.segments,
 			dynamicRoot: alias.dynamicRoot,
+			dynamicRootSegments: alias.dynamicRootSegments,
 		} : null;
 	}
 
@@ -1630,6 +1680,13 @@ class StoreSelectorCollector {
 		const info = this.resolveExpressionInfo( path.node, path );
 		if ( ! info || ! isSelectorDerivedPath( info.segments ) ) {
 			return;
+		}
+
+		if ( info.dynamicRoot && isBareDynamicRootUsage( info ) ) {
+			diagnostics.error(
+				path,
+				`Store selector dynamic root "${ stringifySegments( info.segments ) }" cannot be rendered directly. Use a member path such as "${ stringifySegments( [ ...info.segments, 'title' ] ) }" or keep the value inside a traceable child prop.`
+			);
 		}
 
 		const declaration = stringifySegments( info.declarationSegments );
@@ -1992,6 +2049,14 @@ function stringifySegments( segments ) {
 
 function isSelectorDerivedPath( segments ) {
 	return Array.isArray( segments ) && segments.length > 0;
+}
+
+function isBareDynamicRootUsage( info ) {
+	const declarationSegments = normalizeCanonicalSegments( info.declarationSegments || info.segments || [] );
+	const dynamicRootSegments = normalizeCanonicalSegments( info.dynamicRootSegments || [] );
+	return dynamicRootSegments.length > 0 &&
+		declarationSegments.length === dynamicRootSegments.length &&
+		declarationSegments.every( ( segment, index ) => segment === dynamicRootSegments[ index ] );
 }
 
 module.exports = {

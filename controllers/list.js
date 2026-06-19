@@ -26,7 +26,7 @@ class ListController {
 		this.listMetadataByPath = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.listMetadataBySourceKey = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.sourceKey, meta ] ) );
 		this.scalarMetadataByPath = new Map( ( vars.scalarMetadata || [] ).map( meta => [ meta.path, meta ] ) );
-		this.dynamicRootPaths = new Set( ( config.storeSelectorDynamicRootAliases || [] )
+		this.dynamicRootPaths = new Set( ( config.dynamicRootAliases || [] )
 			.map( alias => [ alias.localName, alias.memberName ].filter( Boolean ).join( '.' ) )
 			.filter( Boolean ) );
 		this.pathAliasesByBinding = new WeakMap();
