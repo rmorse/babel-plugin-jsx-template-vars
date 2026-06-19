@@ -447,7 +447,18 @@ function isBindingObjectRootUsage( referencePath, babel ) {
 	if (
 		babel.types.isVariableDeclarator( parentPath.node ) &&
 		parentPath.node.init === referencePath.node &&
-		babel.types.isObjectPattern( parentPath.node.id )
+		(
+			babel.types.isObjectPattern( parentPath.node.id ) ||
+			babel.types.isIdentifier( parentPath.node.id )
+		)
+	) {
+		return true;
+	}
+
+	if (
+		babel.types.isAssignmentExpression( parentPath.node ) &&
+		parentPath.node.right === referencePath.node &&
+		babel.types.isIdentifier( parentPath.node.left )
 	) {
 		return true;
 	}
@@ -753,6 +764,7 @@ class StoreSelectorCollector {
 				if ( this.babel.types.isIdentifier( id ) ) {
 					this.registerAlias( id.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
+						dynamicRoot: sourceInfo.dynamicRoot,
 					} );
 					if ( this.isSafeListChainCall( init ) ) {
 						this.registerSafeListChainCallbackAliases(
@@ -767,6 +779,7 @@ class StoreSelectorCollector {
 				if ( this.babel.types.isObjectPattern( id ) ) {
 					this.registerPatternAliases( id, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
+						dynamicRoot: sourceInfo.dynamicRoot,
 					} );
 				}
 			},
@@ -784,6 +797,7 @@ class StoreSelectorCollector {
 				if ( sourceInfo ) {
 					this.registerAlias( left.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
+						dynamicRoot: sourceInfo.dynamicRoot,
 					} );
 					return;
 				}
@@ -987,6 +1001,13 @@ class StoreSelectorCollector {
 
 				const expressionInfo = this.resolveExpressionInfo( value.expression, path );
 				if ( ! expressionInfo || ! isSelectorDerivedPath( expressionInfo.segments ) ) {
+					if ( this.isDynamicRootChildProp( elementName, path.node.name.name ) ) {
+						diagnostics.error(
+							path,
+							`Store selector dynamic root prop "${ path.node.name.name }" for child component "${ elementName }" must receive a selector-derived or descriptor-derived value.`
+						);
+					}
+
 					const selectorSources = this.collectSelectorDerivedSegments( expressionPath );
 					if ( selectorSources.length === 0 ) {
 						return;

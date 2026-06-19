@@ -43,6 +43,7 @@ class ListController {
 		this.trackMapAliases = this.trackMapAliases.bind( this );
 		this.getContainingListContextOffset = this.getContainingListContextOffset.bind( this );
 		this.resolveTemplateArg = this.resolveTemplateArg.bind( this );
+		this.resolveAliasedExpressionSegments = this.resolveAliasedExpressionSegments.bind( this );
 		this.resolveRenderedListMeta = this.resolveRenderedListMeta.bind( this );
 		this.registerExternalPathAliases = this.registerExternalPathAliases.bind( this );
 	}
@@ -886,6 +887,51 @@ class ListController {
 		}
 
 		return null;
+	}
+
+	resolveAliasedExpressionSegments( expression, path ) {
+		const { types } = this.babel;
+		if ( types.isIdentifier( expression ) ) {
+			return this.resolveAliasedIdentifierSegments( expression.name, path );
+		}
+
+		if ( this.isStaticMemberExpression( expression ) && types.isIdentifier( expression.property ) ) {
+			const memberSegments = this.resolveAliasedMemberExpressionSegments( expression, path );
+			if ( memberSegments ) {
+				return memberSegments;
+			}
+
+			const objectSegments = this.resolveAliasedExpressionSegments( expression.object, path );
+			return objectSegments ? [ ...objectSegments, expression.property.name ] : null;
+		}
+
+		if ( this.isSafeListChainCall( expression ) ) {
+			return this.resolveAliasedExpressionSegments( expression.callee.object, path );
+		}
+
+		return null;
+	}
+
+	resolveAliasedIdentifierSegments( name, path ) {
+		const binding = path?.scope?.getBinding( name );
+		if ( ! binding || ! this.pathAliasesByBinding.has( binding.identifier ) ) {
+			return null;
+		}
+
+		const alias = this.pathAliasesByBinding.get( binding.identifier );
+		return alias.segments;
+	}
+
+	resolveAliasedMemberExpressionSegments( expression, path ) {
+		const { types } = this.babel;
+		if ( ! types.isIdentifier( expression.object ) || ! types.isIdentifier( expression.property ) ) {
+			return null;
+		}
+
+		const binding = path?.scope?.getBinding( expression.object.name );
+		const aliasesByMember = binding ? this.memberPathAliasesByBinding.get( binding.identifier ) : null;
+		const alias = aliasesByMember?.get( expression.property.name );
+		return alias ? alias.segments : null;
 	}
 
 	resolvePathSegments( segments, path ) {

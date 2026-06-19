@@ -2006,6 +2006,91 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 
+	it('imports descriptor helpers for generated dynamic root descriptors', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code } = transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		}, {
+			filename: path.resolve(process.cwd(), '..', 'descriptor-helper-import.jsx'),
+		});
+
+		expect(code).toMatch(/import\s+\{[^}]*createTemplateRootDescriptor[^}]*getTemplateRootPathArg[^}]*\}/);
+	});
+
+	it('does not descriptor-wrap ordinary runtime props for dynamic-root child props', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = ({ runtimeHero }) => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+						<Header hero={ runtimeHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			...selectorOptions,
+		})).toThrow(/must receive a selector-derived or descriptor-derived value/);
+	});
+
+	it('renders multi-source object roots through local aliases in child components', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				const item = hero;
+				return <h1>{ item.title }</h1>;
+			};
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{home.hero.title}}</h1><h1>{{article.hero.title}}</h1></main>');
+	});
+
 	it('renders multi-source object roots through a renamed props-object parameter', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';

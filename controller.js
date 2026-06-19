@@ -8,6 +8,7 @@ const {
 const { ReplaceController } = require('./controllers/replace');
 const { ListController } = require('./controllers/list');
 const { ControlController } = require('./controllers/control');
+const diagnostics = require('./diagnostics');
 /**
  * Generate new uids for the provided scope.
  * 
@@ -373,10 +374,12 @@ function injectStoreSelectorRootDescriptors(path, listController, config, types)
 			return;
 		}
 
-		const segments = listController.resolveExpressionSegments(expressionPath.node, expressionPath) ||
-			getExpressionSegmentsForDescriptor(expressionPath.node, types);
+		const segments = listController.resolveAliasedExpressionSegments(expressionPath.node, expressionPath);
 		if (!segments) {
-			return;
+			diagnostics.error(
+				expressionPath,
+				`Store selector dynamic root prop "${propName}" for child component "${elementName}" must receive a selector-derived or descriptor-derived value.`
+			);
 		}
 
 		const descriptorSegments = segments;
