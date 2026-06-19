@@ -114,8 +114,20 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 		const declarations = [];
 		groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
 			const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+			const componentName = propTraces[ 0 ]?.componentName || 'child component';
+			if ( isConfiguredDynamicRootProp( config, componentName, propName ) ) {
+				return;
+			}
+
+			if (
+				sourcePaths.size > 1 &&
+				childPropHasObjectRootUsage( componentPath, propName, babel )
+			) {
+				reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+				return;
+			}
+
 			if ( propTraces.some( trace => trace.unsupported || trace.seedOnly ) || sourcePaths.size > 1 ) {
-				const componentName = propTraces[ 0 ]?.componentName || 'child component';
 				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 				const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
 				diagnostics.unsupported( componentPath, message, config );
@@ -151,12 +163,24 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 	const declarations = [];
 	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
 		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		const componentName = propTraces[ 0 ]?.componentName || 'child component';
+		if ( isConfiguredDynamicRootProp( config, componentName, propName ) ) {
+			return;
+		}
+
 		if ( propTraces.every( trace => trace.seedOnly ) ) {
 			return;
 		}
 
+		if (
+			sourcePaths.size > 1 &&
+			childPropHasObjectRootUsage( componentPath, propName, babel )
+		) {
+			reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+			return;
+		}
+
 		if ( propTraces.some( trace => trace.unsupported || trace.seedOnly ) || sourcePaths.size > 1 ) {
-			const componentName = propTraces[ 0 ]?.componentName || 'child component';
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
 			diagnostics.unsupported( componentPath, message, config );
@@ -208,8 +232,17 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 		groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
 			const validationTraces = relatedTracesByProp.get( propName ) || propTraces;
 			const sourcePaths = new Set( validationTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+			const componentName = propTraces[ 0 ]?.componentName || 'child component';
+			if ( isConfiguredDynamicRootProp( config, componentName, propName ) ) {
+				return;
+			}
+
+			if ( isObjectRootMultiSourceSeedAmbiguity( validationTraces, sourcePaths ) ) {
+				reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+				return;
+			}
+
 			if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
-				const componentName = propTraces[ 0 ]?.componentName || 'child component';
 				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 				const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
 				diagnostics.unsupported( componentPath, message, config );
@@ -221,6 +254,8 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 				memberName: propName,
 				segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
 				declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
+				dynamicRoot: propTraces[ 0 ].dynamicRoot === true,
+				propName,
 			} );
 		} );
 
@@ -237,8 +272,17 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
 		const validationTraces = relatedTracesByProp.get( propName ) || propTraces;
 		const sourcePaths = new Set( validationTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		const componentName = propTraces[ 0 ]?.componentName || 'child component';
+		if ( isConfiguredDynamicRootProp( config, componentName, propName ) ) {
+			return;
+		}
+
+		if ( isObjectRootMultiSourceSeedAmbiguity( validationTraces, sourcePaths ) ) {
+			reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+			return;
+		}
+
 		if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
-			const componentName = propTraces[ 0 ]?.componentName || 'child component';
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
 			diagnostics.unsupported( componentPath, message, config );
@@ -254,10 +298,169 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 			localName: bindingPath.node.name,
 			segments: normalizeCanonicalSegments( propTraces[ 0 ].segments ),
 			declarationSegments: normalizeCanonicalSegments( propTraces[ 0 ].declarationSegments || propTraces[ 0 ].segments ),
+			dynamicRoot: propTraces[ 0 ].dynamicRoot === true,
+			propName,
 		} );
 	} );
 
 	return seedAliases;
+}
+
+function createStoreSelectorDynamicRootAliases( componentPath, traces = [], babel ) {
+	if ( traces.length === 0 ) {
+		return [];
+	}
+
+	const functionPath = componentPath.get( 'declarations.0.init' );
+	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParam = firstParamPath?.node;
+	if ( ! firstParam || ( ! babel.types.isObjectPattern( firstParam ) && ! babel.types.isIdentifier( firstParam ) ) ) {
+		return [];
+	}
+
+	const aliases = [];
+	groupChildPropTraces( traces ).forEach( ( propTraces, propName ) => {
+		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
+		if (
+			( sourcePaths.size <= 1 && ! propTraces.some( trace => trace.dynamicRoot ) ) ||
+			propTraces.some( trace => trace.unsupported ) ||
+			! childPropHasObjectRootUsage( componentPath, propName, babel )
+		) {
+			return;
+		}
+
+		if ( babel.types.isIdentifier( firstParam ) ) {
+			aliases.push( {
+				localName: firstParam.name,
+				memberName: propName,
+				segments: [ firstParam.name, propName ],
+				declarationSegments: [ firstParam.name, propName ],
+				dynamicRoot: true,
+				propName,
+			} );
+			return;
+		}
+
+		const bindingPath = findObjectPatternBindingPath( firstParamPath, propName, babel );
+		if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
+			return;
+		}
+
+		aliases.push( {
+			localName: bindingPath.node.name,
+			segments: [ bindingPath.node.name ],
+			declarationSegments: [ bindingPath.node.name ],
+			dynamicRoot: true,
+			propName,
+		} );
+	} );
+
+	return aliases;
+}
+
+function isObjectRootMultiSourceSeedAmbiguity( traces, sourcePaths ) {
+	return sourcePaths.size > 1 &&
+		traces.length > 0 &&
+		traces.every( trace => trace.seedOnly && ! trace.unsupported && ! traceHasListContext( trace ) );
+}
+
+function traceHasListContext( trace ) {
+	const segments = normalizeCanonicalSegments( trace.declarationSegments || trace.segments || [] );
+	return segments.some( segment => String( segment ).endsWith( '[]' ) );
+}
+
+function reportObjectRootMultiSourceAmbiguity( componentPath, propName, traces, sourcePaths ) {
+	const componentName = traces[ 0 ]?.componentName || getStoreSelectorComponentName( componentPath );
+	const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+	const message = `Store selector object-root-multi-source-ambiguity: prop "${ propName }" for child component "${ componentName }" receives multiple object roots${ sourceList ? ` (${ sourceList })` : '' }. Selector object-root tracing cannot safely choose one source for every callsite yet.`;
+	diagnostics.error( componentPath, message );
+}
+
+function isConfiguredDynamicRootProp( config, componentName, propName ) {
+	const propsByComponent = config.storeSelectorDynamicRootPropsByComponent || {};
+	const props = propsByComponent[ componentName ];
+	return Array.isArray( props ) && props.includes( propName );
+}
+
+function childPropHasObjectRootUsage( componentPath, propName, babel ) {
+	const functionPath = componentPath.get( 'declarations.0.init' );
+	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParam = firstParamPath?.node;
+	if ( ! firstParam ) {
+		return false;
+	}
+
+	if ( babel.types.isIdentifier( firstParam ) ) {
+		const binding = firstParamPath.scope.getBinding( firstParam.name );
+		if ( ! binding ) {
+			return false;
+		}
+
+		return binding.referencePaths.some( referencePath => isPropsObjectMemberRootUsage( referencePath, propName, babel ) );
+	}
+
+	if ( ! babel.types.isObjectPattern( firstParam ) ) {
+		return false;
+	}
+
+	const bindingPath = findObjectPatternBindingPath( firstParamPath, propName, babel );
+	if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
+		return false;
+	}
+
+	const binding = bindingPath.scope.getBinding( bindingPath.node.name );
+	if ( ! binding ) {
+		return false;
+	}
+
+	return binding.referencePaths.some( referencePath => isBindingObjectRootUsage( referencePath, babel ) );
+}
+
+function isPropsObjectMemberRootUsage( referencePath, propName, babel ) {
+	const memberPath = referencePath.parentPath;
+	if (
+		! memberPath ||
+		! babel.types.isMemberExpression( memberPath.node ) ||
+		memberPath.node.object !== referencePath.node ||
+		memberPath.node.computed ||
+		! babel.types.isIdentifier( memberPath.node.property, { name: propName } )
+	) {
+		return false;
+	}
+
+	return isBindingObjectRootUsage( memberPath, babel );
+}
+
+function isBindingObjectRootUsage( referencePath, babel ) {
+	const parentPath = referencePath.parentPath;
+	if ( ! parentPath ) {
+		return false;
+	}
+
+	if (
+		babel.types.isMemberExpression( parentPath.node ) &&
+		parentPath.node.object === referencePath.node
+	) {
+		return true;
+	}
+
+	if (
+		babel.types.isVariableDeclarator( parentPath.node ) &&
+		parentPath.node.init === referencePath.node &&
+		babel.types.isObjectPattern( parentPath.node.id )
+	) {
+		return true;
+	}
+
+	if (
+		babel.types.isJSXExpressionContainer( parentPath.node ) &&
+		babel.types.isJSXAttribute( parentPath.parentPath?.node ) &&
+		parentPath.node.expression === referencePath.node
+	) {
+		return true;
+	}
+
+	return false;
 }
 
 function warnUnsupportedChildParamShape( componentPath, traces, config ) {
@@ -809,6 +1012,18 @@ class StoreSelectorCollector {
 				}
 
 				const segments = expressionInfo.segments;
+				if ( this.isDynamicRootChildProp( elementName, path.node.name.name ) ) {
+					this.childPropTraces.push( {
+						componentName: elementName,
+						propName: path.node.name.name,
+						path: stringifySegments( segments ),
+						segments: normalizeSegments( segments ),
+						dynamicRoot: true,
+					} );
+					this.unsupportedChildPropExpressions.add( value.expression );
+					return;
+				}
+
 				if ( this.canTraceChildProp( elementName, segments ) ) {
 					this.childPropTraces.push( {
 						componentName: elementName,
@@ -827,6 +1042,7 @@ class StoreSelectorCollector {
 						path: stringifySegments( segments ),
 						segments: normalizeSegments( segments ),
 						declarationSegments: this.getChildSeedDeclarationSegments( expressionInfo ),
+						dynamicRoot: expressionInfo.dynamicRoot,
 					} );
 					this.unsupportedChildPropExpressions.add( value.expression );
 					return;
@@ -1049,6 +1265,7 @@ class StoreSelectorCollector {
 				this.registerMemberAlias( seedAlias.localName, seedAlias.memberName, seedAlias.segments, this.componentFunctionPath, {
 					declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
 					source: 'seed',
+					dynamicRoot: seedAlias.dynamicRoot,
 				} );
 				return;
 			}
@@ -1056,6 +1273,7 @@ class StoreSelectorCollector {
 			this.registerBindingAlias( binding, seedAlias.localName, seedAlias.segments, {
 				declarationSegments: Array.isArray( seedAlias.declarationSegments ) ? seedAlias.declarationSegments : seedAlias.segments,
 				source: 'seed',
+				dynamicRoot: seedAlias.dynamicRoot,
 			} );
 		} );
 	}
@@ -1098,6 +1316,7 @@ class StoreSelectorCollector {
 			segments: normalizedSegments,
 			declarationSegments: normalizedDeclarationSegments,
 			source: options.source || 'local',
+			dynamicRoot: options.dynamicRoot === true,
 		};
 
 		this.aliasesByBinding.set( binding.identifier, entry );
@@ -1131,6 +1350,7 @@ class StoreSelectorCollector {
 			segments: normalizedSegments,
 			declarationSegments: normalizedDeclarationSegments,
 			source: options.source || 'local',
+			dynamicRoot: options.dynamicRoot === true,
 		};
 
 		aliasesByMember.set( memberName, entry );
@@ -1233,6 +1453,12 @@ class StoreSelectorCollector {
 		return normalizedSegments.length === 1 || normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) );
 	}
 
+	isDynamicRootChildProp( componentName, propName ) {
+		const propsByComponent = this.config.storeSelectorDynamicRootPropsByComponent || {};
+		const props = propsByComponent[ componentName ];
+		return Array.isArray( props ) && props.includes( propName );
+	}
+
 	getChildSeedDeclarationSegments( expressionInfo ) {
 		const declarationSegments = normalizeCanonicalSegments( expressionInfo.declarationSegments || expressionInfo.segments );
 		const lastListIndex = declarationSegments.reduce( ( match, segment, index ) => (
@@ -1327,6 +1553,7 @@ class StoreSelectorCollector {
 			return objectInfo ? {
 				segments: [ ...objectInfo.segments, expression.property.name ],
 				declarationSegments: [ ...objectInfo.declarationSegments, expression.property.name ],
+				dynamicRoot: objectInfo.dynamicRoot,
 			} : null;
 		}
 
@@ -1355,6 +1582,7 @@ class StoreSelectorCollector {
 		return alias ? {
 			segments: alias.segments,
 			declarationSegments: alias.declarationSegments || alias.segments,
+			dynamicRoot: alias.dynamicRoot,
 		} : null;
 	}
 
@@ -1373,6 +1601,7 @@ class StoreSelectorCollector {
 		return alias ? {
 			segments: alias.segments,
 			declarationSegments: alias.declarationSegments || alias.segments,
+			dynamicRoot: alias.dynamicRoot,
 		} : null;
 	}
 
@@ -1753,6 +1982,7 @@ module.exports = {
 	collectStoreSelectorTemplateVars,
 	createStoreSelectorPropAliases,
 	createStoreSelectorSeedAliases,
+	createStoreSelectorDynamicRootAliases,
 	createAliasResolver,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,

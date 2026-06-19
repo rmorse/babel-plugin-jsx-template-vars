@@ -2,7 +2,33 @@
 
 ## Status
 
-Step-by-step implementation plan for the next store-selector experiment stream.
+Active implementation plan for the next store-selector experiment stream.
+
+Current implementation status:
+
+- **Completed in the first implementation slice:**
+  - Phase 0 safety baseline for same-file object-root ambiguity now routes
+    covered path-polymorphic object-root cases into descriptor composition
+    instead of warning and rendering empty output.
+  - Phase 0.5 descriptor composition is proven with focused Handlebars and PHP
+    tests for replacement, control, one-hop relay, and descriptor containment.
+  - Phase 1 same-file object-root path-polymorphism is implemented for
+    destructured child props and renamed props-object parameters.
+  - A narrow Phase 2 same-file hardening slice is implemented for multi-hop
+    relay and intermediate components that both consume and forward an object
+    root.
+- **Still pending:**
+  - Cross-file relative object contexts through a manifest callsite-context
+    model.
+  - List-relative multi-source variants.
+  - Full debug metadata for callsite contexts and compiled paths.
+  - Shape-polymorphic specialization research.
+
+The completed slice uses internal template-root descriptors. Parent callsites
+pass descriptors for traced object-root props, and child components compose
+replacement/control paths from those descriptors at template render time. This
+keeps one authored child component and avoids component cloning for the covered
+same-file path-polymorphic cases.
 
 Background research:
 [store-selector-multi-source-path-research.md](./store-selector-multi-source-path-research.md).

@@ -52,6 +52,9 @@ export async function renderTemplateFixture(language, source, exportName, props 
 			'getLanguageReplace',
 			'getLanguageList',
 			'getLanguageControl',
+			'createTemplateRootDescriptor',
+			'getTemplateRootPathArg',
+			'isTemplateRootDescriptor',
 			`${ result.code }\nreturn module.exports;`
 		);
 
@@ -64,7 +67,10 @@ export async function renderTemplateFixture(language, source, exportName, props 
 			runtime.getLanguageString,
 			runtime.getLanguageReplace,
 			runtime.getLanguageList,
-			runtime.getLanguageControl
+			runtime.getLanguageControl,
+			runtime.createTemplateRootDescriptor,
+			runtime.getTemplateRootPathArg,
+			runtime.isTemplateRootDescriptor
 		);
 
 		return {
@@ -121,6 +127,9 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 				'getLanguageReplace',
 				'getLanguageList',
 				'getLanguageControl',
+				'createTemplateRootDescriptor',
+				'getTemplateRootPathArg',
+				'isTemplateRootDescriptor',
 				'loadModule',
 				`${ rewriteRelativeImportsForExecution(code, normalizedFilename) }\nreturn module.exports;`
 			);
@@ -135,6 +144,9 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 				runtime.getLanguageReplace,
 				runtime.getLanguageList,
 				runtime.getLanguageControl,
+				runtime.createTemplateRootDescriptor,
+				runtime.getTemplateRootPathArg,
+				runtime.isTemplateRootDescriptor,
 				loadModule
 			);
 			modules.set(normalizedFilename, exports);
@@ -220,6 +232,9 @@ function renderAttributes(props) {
 	return Object.entries(props)
 		.filter(([ name, value ]) => name !== 'children' && value !== false && value !== null && typeof value !== 'undefined')
 		.map(([ name, value ]) => {
+			if (isTemplateRootDescriptorValue(value)) {
+				throw new Error('Template root descriptor escaped into rendered attributes.');
+			}
 			if (value === true) {
 				return ` ${ name }`;
 			}
@@ -233,6 +248,17 @@ function renderChildren(children) {
 		if (child === false || child === true || child === null || typeof child === 'undefined') {
 			return '';
 		}
+		if (isTemplateRootDescriptorValue(child)) {
+			throw new Error('Template root descriptor escaped into rendered children.');
+		}
 		return String(child);
 	}).join('');
+}
+
+function isTemplateRootDescriptorValue(value) {
+	return Boolean(
+		value &&
+		typeof value === 'object' &&
+		value.__jsxTemplateVarsTemplateRoot === true
+	);
 }

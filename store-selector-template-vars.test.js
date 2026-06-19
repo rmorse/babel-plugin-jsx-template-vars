@@ -1963,8 +1963,82 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it('fails closed when relay props have ambiguous selector sources', async () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	it.each([
+		[
+			'handlebars',
+			"<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>",
+		],
+		[
+			'php',
+			"<main><header><h1><?php echo $data['home']['hero']['title']; ?></h1><?php if ( $data['home']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></header><header><h1><?php echo $data['article']['hero']['title']; ?></h1><?php if ( $data['article']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></header></main>",
+		],
+	])('renders one object-root child prop from multiple selector sources for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return (
+					<header>
+						<h1>{ hero.title }</h1>
+						{ hero.status === 'published' && <span>Published</span> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useStoreSelector');
+		expect(code).not.toContain('hero: _uid');
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it('renders multi-source object roots through a renamed props-object parameter', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (anything) => {
+				return (
+					<header>
+						<h1>{ anything.hero.title }</h1>
+						{ anything.hero.status === 'published' && <span>Published</span> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>");
+	});
+
+	it('renders relay props with multiple object-root selector sources', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
@@ -1973,7 +2047,12 @@ describe('experimental store selectors', () => {
 			};
 
 			const Shell = ({ hero }) => {
-				return <section><Header hero={ hero } /></section>;
+				return (
+					<section>
+						<p>{ hero.subtitle }</p>
+						<Header hero={ hero } />
+					</section>
+				);
 			};
 
 			const App = () => {
@@ -1992,8 +2071,78 @@ describe('experimental store selectors', () => {
 
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
-		expect(normalizeTemplateOutput(output)).toBe('<main><section><h1></h1></section><section><h1></h1></section></main>');
-		expect(warn).toHaveBeenCalledWith(expect.stringContaining('has ambiguous or unsupported sources'));
+		expect(normalizeTemplateOutput(output)).toBe('<main><section><p>{{primaryHero.subtitle}}</p><h1>{{primaryHero.title}}</h1></section><section><p>{{secondaryHero.subtitle}}</p><h1>{{secondaryHero.title}}</h1></section></main>');
+	});
+
+	it.each([
+		[
+			'handlebars',
+			"<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>",
+		],
+		[
+			'php',
+			"<main><header><h1><?php echo $data['home']['hero']['title']; ?></h1><?php if ( $data['home']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></header><header><h1><?php echo $data['article']['hero']['title']; ?></h1><?php if ( $data['article']['hero']['status'] === 'published' ) { ?><span>Published</span><?php } ?></header></main>",
+		],
+	])('spikes descriptor-composed replacement, control, and relay output for %s', async (language, expected) => {
+		const source = `
+			const templateReplace = (arg, context = 0) => (
+				getLanguageString(['language', 'open'], [], context) +
+				getLanguageReplace('format', arg, context) +
+				getLanguageString(['language', 'close'], [], context)
+			);
+
+			const templateControl = (target, args, body, context = 0) => (
+				getLanguageString(['language', 'open'], [], context) +
+				getLanguageControl([target, 'open'], args, context) +
+				getLanguageString(['language', 'close'], [], context) +
+				body +
+				getLanguageString(['language', 'open'], [], context) +
+				getLanguageControl([target, 'close'], args, context) +
+				getLanguageString(['language', 'close'], [], context)
+			);
+
+			const Header = ({ hero, __context__ = 0 }) => {
+				const title = getTemplateRootPathArg(hero, ['title']);
+				const status = getTemplateRootPathArg(hero, ['status']);
+				return (
+					<header>
+						<h1>{ templateReplace(title, __context__) }</h1>
+						{ templateControl('ifEqual', [status, { type: 'value', value: "'published'" }], <span>Published</span>, __context__) }
+					</header>
+				);
+			};
+
+			const Shell = ({ hero }) => <Header hero={ hero } />;
+
+			const App = () => (
+				<main>
+					<Shell hero={ createTemplateRootDescriptor(['home', 'hero']) } />
+					<Shell hero={ createTemplateRootDescriptor(['article', 'hero']) } />
+				</main>
+			);
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture(language, source, 'App');
+
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it('throws when a template root descriptor reaches rendered output', async () => {
+		const source = `
+			const Header = ({ hero }) => <h1>{ hero }</h1>;
+
+			const App = () => (
+				<Header hero={ createTemplateRootDescriptor(['home', 'hero']) } />
+			);
+
+			module.exports = { App };
+		`;
+
+		await expect(
+			renderTemplateFixture('handlebars', source, 'App')
+		).rejects.toThrow(/Template root descriptor escaped into rendered children/);
 	});
 
 	it('traces same-file selector props into child component replacements', async () => {

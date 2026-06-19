@@ -53,6 +53,7 @@ const {
 	createAliasResolver,
 	createStoreSelectorPropAliases,
 	createStoreSelectorSeedAliases,
+	createStoreSelectorDynamicRootAliases,
 	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
@@ -201,6 +202,21 @@ function templateVarsVisitor( babel, config ) {
 				} );
 
 				let addedSeed = false;
+				childPropTracesByComponent.forEach( ( propTraces, componentName ) => {
+					const componentPath = componentPaths.get( componentName );
+					if ( ! componentPath ) {
+						return;
+					}
+
+					const dynamicRootAliases = createStoreSelectorDynamicRootAliases( componentPath, propTraces, babel );
+					dynamicRootAliases.forEach( ( seedAlias ) => {
+						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
+							addedSeed = true;
+						}
+					} );
+				} );
+
+				const dynamicRootPropsForPass = createDynamicRootPropsByComponent( seedAliasesByComponent );
 				childSeedTracesByComponent.forEach( ( seedTraces, componentName ) => {
 					const componentPath = componentPaths.get( componentName );
 					if ( ! componentPath ) {
@@ -208,7 +224,10 @@ function templateVarsVisitor( babel, config ) {
 					}
 
 					const relatedFlows = childPropTracesByComponent.get( componentName ) || [];
-					const seedAliases = createStoreSelectorSeedAliases( componentPath, seedTraces, babel, config, relatedFlows );
+					const seedAliases = createStoreSelectorSeedAliases( componentPath, seedTraces, babel, {
+						...config,
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForPass,
+					}, relatedFlows );
 					seedAliases.forEach( ( seedAlias ) => {
 						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
 							addedSeed = true;
@@ -221,6 +240,8 @@ function templateVarsVisitor( babel, config ) {
 				}
 			}
 
+			const dynamicRootPropsByComponent = createDynamicRootPropsByComponent( seedAliasesByComponent );
+
 			selectorResults.clear();
 			childPropTracesByComponent.clear();
 			componentPaths.forEach( ( componentPath, componentName ) => {
@@ -228,6 +249,7 @@ function templateVarsVisitor( babel, config ) {
 					...config,
 					storeSelectorComponentNames: componentNames,
 					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
+					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 				} );
 				selectorResults.set( componentName, selectorResult );
 
@@ -241,7 +263,10 @@ function templateVarsVisitor( babel, config ) {
 					componentPath,
 					childPropTracesByComponent.get( componentName ) || [],
 					babel,
-					config
+					{
+						...config,
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
+					}
 				);
 				const aliases = [
 					...selectorResult.aliases,
@@ -304,6 +329,8 @@ function templateVarsVisitor( babel, config ) {
 				templateVarsController.init( templateVars, componentName, componentPath, babel, {
 					...config,
 					storeSelectorAliases: aliases,
+					storeSelectorDynamicRootAliases: ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot ),
+					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 				} );
 				processedComponents.add( componentName );
 			} );
@@ -423,12 +450,29 @@ function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedA
 	return true;
 }
 
+function createDynamicRootPropsByComponent( seedAliasesByComponent ) {
+	const entries = {};
+	seedAliasesByComponent.forEach( ( seedAliases, componentName ) => {
+		const props = Array.from( new Set(
+			seedAliases
+				.filter( alias => alias.dynamicRoot && alias.propName )
+				.map( alias => alias.propName )
+		) );
+		if ( props.length > 0 ) {
+			entries[ componentName ] = props;
+		}
+	} );
+	return entries;
+}
+
 function createStoreSelectorSeedAliasKey( seedAlias ) {
 	return [
 		seedAlias.localName,
 		seedAlias.memberName || '',
 		( seedAlias.segments || [] ).join( '.' ),
 		( seedAlias.declarationSegments || [] ).join( '.' ),
+		seedAlias.dynamicRoot ? 'dynamic-root' : '',
+		seedAlias.propName || '',
 	].join( '|' );
 }
 

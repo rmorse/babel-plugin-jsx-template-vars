@@ -5,13 +5,14 @@ const {
 	getMemberExpressionSegments,
 } = require( '../utils' );
 
-function createTemplateArg( varName, varConfig, types ) {
+function createTemplateArg( varName, varConfig, pathResolver = null ) {
 	const segments = Array.isArray( varConfig.segments ) ? varConfig.segments : null;
-	return {
+	const arg = {
 		type: segments && segments.length > 1 ? 'path' : 'identifier',
 		value: varName,
 		segments,
 	};
+	return pathResolver ? pathResolver.resolveTemplateArg( arg, null ) : arg;
 }
 
 function isPartialMemberExpression( path, types ) {
@@ -45,7 +46,7 @@ class ReplaceController {
 				types.identifier( 'getLanguageReplace' ),
 				[
 					types.stringLiteral( 'format' ),
-					getArgObjectExpression( createTemplateArg( varName, varConfig, types ), types ),
+					getArgObjectExpression( createTemplateArg( varName, varConfig, self.pathResolver ), types ),
 					types.identifier( self.contextName ),
 				]
 			);

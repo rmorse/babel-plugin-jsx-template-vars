@@ -6,6 +6,39 @@
 // const language = ...;
 // Which will be injected above here by the template vars plugin.
 
+const TEMPLATE_ROOT_DESCRIPTOR = '__jsxTemplateVarsTemplateRoot';
+
+export function createTemplateRootDescriptor( segments, declarationSegments = segments ) {
+	return {
+		[ TEMPLATE_ROOT_DESCRIPTOR ]: true,
+		kind: 'templateRoot',
+		segments: [ ...segments ],
+		declarationSegments: [ ...declarationSegments ],
+	};
+}
+
+export function isTemplateRootDescriptor( value ) {
+	return Boolean(
+		value &&
+		typeof value === 'object' &&
+		value[ TEMPLATE_ROOT_DESCRIPTOR ] === true &&
+		Array.isArray( value.segments )
+	);
+}
+
+export function getTemplateRootPathArg( descriptor, suffixSegments = [] ) {
+	if ( ! isTemplateRootDescriptor( descriptor ) ) {
+		throw new Error( 'Template root descriptor expected for path composition.' );
+	}
+
+	const segments = [ ...descriptor.segments, ...suffixSegments ];
+	return {
+		type: segments.length > 1 ? 'path' : 'identifier',
+		value: segments.join( '.' ),
+		segments,
+	};
+}
+
 /**
  * Detering if a arg is an identifier or string, by checking the first
  * and last character to see if they are single quotes.

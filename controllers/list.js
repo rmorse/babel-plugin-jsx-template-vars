@@ -26,6 +26,9 @@ class ListController {
 		this.listMetadataByPath = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.path, meta ] ) );
 		this.listMetadataBySourceKey = new Map( ( vars.listMetadata || [] ).map( meta => [ meta.sourceKey, meta ] ) );
 		this.scalarMetadataByPath = new Map( ( vars.scalarMetadata || [] ).map( meta => [ meta.path, meta ] ) );
+		this.dynamicRootPaths = new Set( ( config.storeSelectorDynamicRootAliases || [] )
+			.map( alias => [ alias.localName, alias.memberName ].filter( Boolean ).join( '.' ) )
+			.filter( Boolean ) );
 		this.pathAliasesByBinding = new WeakMap();
 		this.memberPathAliasesByBinding = new WeakMap();
 		this.renderedListAliasesByBinding = new WeakMap();
@@ -713,6 +716,11 @@ class ListController {
 			return arg;
 		}
 
+		const dynamicRootArg = this.resolveDynamicRootTemplateArg( arg );
+		if ( dynamicRootArg ) {
+			return dynamicRootArg;
+		}
+
 		const segmentCandidates = this.resolvePathSegmentCandidates( arg.segments || [ arg.value ], path );
 		for ( const segments of segmentCandidates ) {
 			const scalarMetadata = this.resolveScalarMetaFromSegments( segments, path );
@@ -739,6 +747,34 @@ class ListController {
 		}
 
 		return arg;
+	}
+
+	resolveDynamicRootTemplateArg( arg ) {
+		const segments = this.normalizeCanonicalSegments( arg.segments || [ arg.value ] );
+		const rootLength = this.getDynamicRootPrefixLength( segments );
+		if ( rootLength <= 0 || segments.length <= rootLength ) {
+			return null;
+		}
+
+		return {
+			type: 'path',
+			value: segments.join( '.' ),
+			segments,
+			dynamicRootName: segments[ 0 ],
+			dynamicRootSegments: segments.slice( 0, rootLength ),
+			suffixSegments: segments.slice( rootLength ),
+			matchedTemplatePath: segments.join( '.' ),
+		};
+	}
+
+	getDynamicRootPrefixLength( segments ) {
+		for ( let index = segments.length; index > 0; index-- ) {
+			const candidate = segments.slice( 0, index ).join( '.' );
+			if ( this.dynamicRootPaths.has( candidate ) ) {
+				return index;
+			}
+		}
+		return 0;
 	}
 
 	resolveScalarMetaFromSegments( segments, path ) {

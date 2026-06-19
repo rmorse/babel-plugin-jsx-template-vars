@@ -2,6 +2,7 @@
 const {
 	isJSXElementComponent,
 	isJSXElementInput,
+	getMemberExpressionSegments,
 } = require('./utils');
 
 const { ReplaceController } = require('./controllers/replace');
@@ -190,6 +191,8 @@ const templateVarsController = {
 					// Add config attribute
 					const configAttribute = types.jSXAttribute(types.jSXIdentifier('__config__'), types.jSXExpressionContainer(types.identifier(self.recursionIdentifier.name)));
 					subPath.node.openingElement.attributes.push(configAttribute);
+
+					injectStoreSelectorRootDescriptors(subPath, listController, config, types);
 				}
 
 				/**
@@ -350,3 +353,66 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 
 
 module.exports = templateVarsController;
+
+function injectStoreSelectorRootDescriptors(path, listController, config, types) {
+	const elementName = path.node.openingElement?.name?.name;
+	const rootProps = getDynamicRootPropsForComponent(config, elementName);
+	if (rootProps.size === 0) {
+		return;
+	}
+
+	path.get('openingElement.attributes').forEach((attributePath) => {
+		const attribute = attributePath.node;
+		const propName = attribute.name?.name;
+		if (!rootProps.has(propName) || !types.isJSXExpressionContainer(attribute.value)) {
+			return;
+		}
+
+		const expressionPath = attributePath.get('value.expression');
+		if (isLocalDynamicRootExpression(expressionPath.node, config, types)) {
+			return;
+		}
+
+		const segments = listController.resolveExpressionSegments(expressionPath.node, expressionPath) ||
+			getExpressionSegmentsForDescriptor(expressionPath.node, types);
+		if (!segments) {
+			return;
+		}
+
+		const descriptorSegments = segments;
+		expressionPath.replaceWith(types.callExpression(
+			types.identifier('createTemplateRootDescriptor'),
+			[
+				types.arrayExpression(descriptorSegments.map(segment => types.stringLiteral(segment))),
+				types.arrayExpression(descriptorSegments.map(segment => types.stringLiteral(segment))),
+			]
+		));
+	});
+}
+
+function getDynamicRootPropsForComponent(config, componentName) {
+	const propsByComponent = config.storeSelectorDynamicRootPropsByComponent || {};
+	const props = propsByComponent[componentName];
+	return new Set(Array.isArray(props) ? props : []);
+}
+
+function getExpressionSegmentsForDescriptor(expression, types) {
+	if (types.isIdentifier(expression)) {
+		return [expression.name];
+	}
+
+	return getMemberExpressionSegments(expression, types);
+}
+
+function isLocalDynamicRootExpression(expression, config, types) {
+	const segments = getExpressionSegmentsForDescriptor(expression, types);
+	if (!segments) {
+		return false;
+	}
+
+	return (config.storeSelectorDynamicRootAliases || []).some((alias) => {
+		const rootSegments = [alias.localName, alias.memberName].filter(Boolean);
+		return rootSegments.length === segments.length &&
+			rootSegments.every((segment, index) => segment === segments[index]);
+	});
+}

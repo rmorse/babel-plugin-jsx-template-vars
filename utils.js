@@ -151,6 +151,16 @@ function getLanguageListCallExpression( action, name, context, types ) {
 }
 
 function getArgObjectExpression( arg, types ) {
+	if ( arg.dynamicRootName ) {
+		return types.callExpression(
+			types.identifier( 'getTemplateRootPathArg' ),
+			[
+				createMemberExpressionFromSegments( arg.dynamicRootSegments || [ arg.dynamicRootName ], types ),
+				types.arrayExpression( ( arg.suffixSegments || [] ).map( segment => types.stringLiteral( segment ) ) ),
+			]
+		);
+	}
+
 	const props = [
 		types.objectProperty( types.identifier('type'), types.stringLiteral( arg.type ) ),
 		types.objectProperty( types.identifier('value'), types.stringLiteral( arg.value ) ),
@@ -175,6 +185,13 @@ function getArgObjectExpression( arg, types ) {
 	}
 
 	return types.objectExpression( props );
+}
+
+function createMemberExpressionFromSegments( segments, types ) {
+	return segments.slice( 1 ).reduce(
+		( expression, segment ) => types.memberExpression( expression, types.identifier( segment ) ),
+		types.identifier( segments[ 0 ] )
+	);
 }
 
 function getContextExpression( context, types ) {
