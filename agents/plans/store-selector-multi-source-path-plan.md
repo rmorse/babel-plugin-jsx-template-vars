@@ -221,7 +221,7 @@ because the child receives a rendered string, not path metadata.
 The intended mechanic is:
 
 ```txt
-parent passes descriptor: hero -> { segments: ['home', 'hero'] }
+parent passes descriptor: hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 child composes:           hero.title -> ['home', 'hero', 'title']
 ```
 
@@ -229,6 +229,15 @@ This is not pure build-time string rewriting. It is template-render-time
 descriptor composition: the child function remains singular, but its prop value
 is a compiler-internal descriptor that the transform/runtime helpers can use to
 resolve replacement and control paths.
+
+This means Phase 1 must explicitly prevent the current fallback shape:
+
+```txt
+hero={{home.hero}}
+```
+
+from being used for traced object-root props. A rendered replacement string does
+not contain the path metadata needed by the child.
 
 ### Spike Scope
 
@@ -256,6 +265,7 @@ The spike should prove:
 - child replacement paths can compose from descriptor segments
 - child control paths can compose from descriptor segments
 - descriptors can relay through one intermediate component
+- the parent does not materialize traced object-root props as replacement strings
 - bare descriptor rendering fails closed:
 
 ```jsx
@@ -270,6 +280,17 @@ should not produce `[object Object]`, `{{home.hero}}`, or silent empty output.
   wiring.
 - Do not add final public API or broad transform behavior in this phase.
 - Keep descriptors internal and unobservable in user-authored output.
+- Define the exact descriptor shape before writing production transform code.
+  Initial candidate:
+
+```js
+{
+	kind: 'templateRoot',
+	segments: ['home', 'hero'],
+	declarationSegments: ['home', 'hero'],
+}
+```
+
 - Confirm `getLanguageReplace` and `getLanguageControl` can already consume the
   composed segment arrays for Handlebars and PHP.
 - If descriptor composition requires controller changes, those changes must be
@@ -282,6 +303,8 @@ should not produce `[object Object]`, `{{home.hero}}`, or silent empty output.
 - Descriptor control composition works for Handlebars.
 - Descriptor control composition works for PHP.
 - One-hop relay preserves descriptor segments.
+- A traced object-root prop is not materialized as a replacement string before
+  entering the child.
 - Bare descriptor rendering fails closed.
 
 ### Gate
@@ -341,7 +364,7 @@ The parent passes an internal root descriptor instead of materializing the objec
 prop as a rendered replacement string:
 
 ```txt
-hero -> { segments: ['home', 'hero'] }
+hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 ```
 
 Child discovery records local relative usage:
@@ -495,8 +518,21 @@ const Header = (hero) => <h1>{ hero.title }</h1>;
 ### Implementation Guidance
 
 - Reuse the existing bounded fixed-point pass where possible.
-- Track context through relay components without creating global per-component
-  aliases.
+- Do not rely on a global `seedAliasesByComponent` entry for multi-source
+  object-root context. That is the model that loses callsite identity.
+- Track a callsite-edge environment through each JSX component edge:
+
+```txt
+App -> Shell:    hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
+Shell -> Header: hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
+```
+
+- Treat each edge environment as the unit of propagation. A component can be
+  visited multiple times with different incoming environments without collapsing
+  them into one global component binding.
+- Deduplicate only identical environments: same target component, same prop
+  bundle, same canonical segments, same declaration segments, and same inherited
+  context metadata.
 - Distinguish confirmed callsite contexts from unsupported boundary metadata.
 - Record unsupported metadata even when warnings are suppressed.
 - Keep collision rules deterministic and documented.
@@ -512,6 +548,7 @@ Suggested collision policy:
 
 - Two-hop object-root propagation.
 - Three-hop object-root propagation or a focused fixed-point depth test.
+- Same relay component used with two different object roots in one parent.
 - Intermediate consumes and forwards.
 - Props-object child param replacement and control.
 - Conditional prop source diagnostic.
@@ -562,8 +599,28 @@ ArticlePage Header -> article.hero.title
 
 ### Implementation Guidance
 
-- Extend the manifest to record callsite object contexts, not one global seed
+- Extend the manifest to record callsite edge environments, not one global seed
   per child prop.
+- Parent-side manifest records should include:
+  - source file
+  - source component
+  - target file
+  - target component/export
+  - JSX local tag/import name
+  - prop name
+  - descriptor shape
+  - canonical segments
+  - declaration segments
+  - unsupported reason, if the edge is skipped
+- Child-side manifest input should expose incoming environments so the child can
+  discover relative usage against each environment without guessing a global
+  component seed.
+- Debug metadata should connect:
+
+```txt
+import edge -> JSX callsite edge -> incoming descriptor -> child local path -> compiled path
+```
+
 - Keep current unsupported import diagnostics.
 - Do not add default import or namespace import support.
 - Do not rewrite imports in this phase unless relative object context proves
@@ -578,6 +635,7 @@ ArticlePage Header -> article.hero.title
 - Cross-file child replacement through object root.
 - Cross-file child control through object root.
 - Cross-file two-hop relay if feasible with current manifest.
+- Manifest debug metadata includes parent edge and child incoming environment.
 - Cross-file diagnostic for conditional prop source.
 - Cross-file debug metadata includes both parent callsites.
 - Existing split `full-template-surface` fixture remains green.
@@ -600,42 +658,85 @@ Extend path-polymorphic handling beyond object roots into list-relative contexts
 This is still path-polymorphism, not shape-polymorphism. The local child shape is
 stable, but the list root differs by callsite.
 
-### Required Behavior
+### Sub-Phase 4A - List Item Props From Different List Roots
 
-Support cases like:
+Support the same child component under two different list roots when both
+callsites are list-item contexts:
+
+```jsx
+homeProducts.map((product) => <ProductCard product={ product } />)
+articleProducts.map((product) => <ProductCard product={ product } />)
+```
+
+Expected behavior:
+
+- each callsite preserves its own list root
+- child fields such as `product.name` render relative to the active list item
+- Handlebars and PHP maintain correct list depth
+
+### Sub-Phase 4B - Same Child Inside And Outside `.map()`
+
+Handle or deliberately reject mixed contexts:
 
 ```jsx
 <ProductCard product={ featuredProduct } />
 { products.map((product) => <ProductCard product={ product } />) }
 ```
 
-and:
+Intended first behavior: fail closed unless descriptor composition can prove
+both the object-root callsite and list-item callsite render correctly without
+partial output. Do not allow the non-list source to leak into the list callsite,
+and do not allow empty list cards without a hard diagnostic.
+
+### Sub-Phase 4C - Nested List Object Fields
+
+Support list-context object-field props:
 
 ```jsx
-<ProductCard product={ homeProduct } />
-<ProductCard product={ articleProduct } />
+products.map((product) => (
+	<ProductCard badges={ product.badges } />
+))
 ```
 
-where `ProductCard` may read:
+where `ProductCard` may render:
 
 ```jsx
-product.name
-product.badges.map((badge) => badge.label)
+badges.map((badge) => <Badge badge={ badge } />)
 ```
+
+Expected behavior:
+
+- `product.badges` becomes a list-relative descriptor
+- nested `badge.label` uses the nested list context
+- PHP output uses the correct `$data_1` / `$data_2` depth
+
+### Sub-Phase 4D - Primitive List Rendering Remains Deferred
+
+Do not infer primitive list output from bare render:
+
+```jsx
+const Tags = ({ tags }) => <div>{ tags }</div>;
+```
+
+This is shape-polymorphism unless there is explicit shape evidence. It belongs
+to Phase 6.
 
 ### Implementation Guidance
 
 - Reuse the existing declaration relativity model from list children.
 - Keep canonical source segments and declaration segments distinct.
-- Test same child inside and outside `.map()`.
-- Test same child used under two different list roots.
+- Implement 4A before 4B.
+- Treat mixed list/non-list contexts as hard errors until correct rendering is
+  proven.
+- Test same child used under two different list roots before nested list fields.
 - Preserve PHP context depth.
 - Do not infer primitive list rendering from bare `{ value }`.
 
 ### Required Tests
 
 - Same child with list-item object props from different list roots.
-- Same child inside and outside `.map()` fails closed or renders correctly.
+- Same child inside and outside `.map()` hard-errors until supported, or renders
+  correctly with no partial output.
 - Nested list object-field prop such as `badges={ product.badges }`.
 - Handlebars nested list output.
 - PHP `$data_1` / `$data_2` output.

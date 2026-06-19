@@ -274,10 +274,14 @@ relative-context strategy where a parent passes an internal descriptor for the
 object root and the child composes member paths from that descriptor:
 
 ```txt
-parent descriptor: hero -> ['home', 'hero']
+parent descriptor: hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 child usage:       hero.title
 compiled path:     home.hero.title
 ```
+
+This is effectively a dynamic path-prefix context passed through the component
+prop during the template render pass. It is not build-time prefix composition
+unless the component is inlined or specialized.
 
 Keep the current ambiguous-seed suppression in place, but do not describe it as
 safe unless the ambiguity hard-errors. The current default warning-only behavior
@@ -337,7 +341,7 @@ const Header = ({ hero }) => <h1>{ hero.title }</h1>;
 should first be evaluated as descriptor composition:
 
 ```txt
-parent passes descriptor: hero -> ['home', 'hero']
+parent passes descriptor: hero -> { kind: 'templateRoot', segments: ['home', 'hero'] }
 child composes:           hero.title -> home.hero.title
 ```
 
