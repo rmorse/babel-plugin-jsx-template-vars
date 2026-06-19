@@ -19,6 +19,8 @@ registry/controller boundary:
 - Phase A tracing supports same-file direct scalar child props
 - same-file top-level multi-hop tracing is intentionally supported by the
   bounded auto-seeding pass; cross-file tracing remains out of scope
+- focused multi-hop and cycle-safety tests cover the bounded fixed-point pass
+- non-object-pattern child params now warn by default and throw in strict mode
 
 Phase A scope is deliberately narrow:
 
@@ -688,11 +690,11 @@ before broader cross-file tracing or context tracing work starts.
 
 ## Recommended Next Step
 
-Send the completed full-surface parity gate through review. If reviewers agree
-the same-file hierarchy story is stable, choose the next slice from the remaining
-documented boundaries: non-object-pattern child parameter diagnostics,
-cross-file tracing exploration, or broader unsupported-boundary/debug metadata
-hardening.
+Send the completed full-surface parity and hardening gate through review. If
+reviewers agree the same-file hierarchy story is stable, choose the next slice
+from the remaining documented boundaries: non-object-pattern child parameter
+support, cross-file tracing exploration, or broader unsupported-boundary/debug
+metadata hardening.
 
 Historical refactor pass/fail gates, now completed:
 

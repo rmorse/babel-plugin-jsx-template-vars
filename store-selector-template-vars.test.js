@@ -640,6 +640,79 @@ describe('experimental store selectors', () => {
 
 	it.each([
 		[
+			'handlebars',
+			'<main>{{#products}}<article>{{#badges}}<span data-tone="{{tone}}">{{label}}</span>{{/badges}}</article>{{/products}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><?php foreach ( $data_1['badges'] as $data_2 ) { ?><span data-tone=\"<?php echo $data_2['tone']; ?>\"><?php echo $data_2['label']; ?></span><?php } ?></article><?php } ?></main>",
+		],
+	])('auto-seeds object-field list props through focused multi-hop components for %s', async (language, expected) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Badge = ({ badge }) => <span data-tone={ badge.tone }>{ badge.label }</span>;
+
+			const ProductCard = ({ badges }) => (
+				<article>
+					{ badges.map((badge) => (
+						<Badge badge={ badge } />
+					)) }
+				</article>
+			);
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard badges={ product.badges } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expectNoOrphanedTemplateReplacements(code, [ 'badge.label', 'badge.tone' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('bounds same-file auto-seeding cycles during discovery', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Leaf = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const A = ({ hero }) => (
+				<section>
+					<Leaf hero={ hero } />
+					<B hero={ hero } />
+				</section>
+			);
+
+			const B = ({ hero }) => <A hero={ hero } />;
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <A hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, selectorOptions);
+
+		expect(result.code).not.toContain('useStoreSelector');
+		expect(result.code).toContain('hero.title');
+	});
+
+	it.each([
+		[
 			{ localName: 'hero' },
 			/seed aliases must include a localName string and segments array/,
 		],
@@ -1021,6 +1094,51 @@ describe('experimental store selectors', () => {
 
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('warns and fails closed when traced child params are not destructured', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (props) => {
+				return <h1>{ props.hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1></h1>');
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('requires a destructured object parameter'));
+	});
+
+	it('throws for non-destructured traced child params in strict mode', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (props) => {
+				return <h1>{ props.hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/requires a destructured object parameter/);
 	});
 
 	it('auto-seeds object root props across same-file relay components', async () => {

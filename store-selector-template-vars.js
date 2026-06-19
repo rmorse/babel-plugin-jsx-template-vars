@@ -91,10 +91,18 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 		};
 	}
 
+	if ( traces.every( trace => trace.seedOnly ) ) {
+		return {
+			aliases: [],
+			declarations: [],
+		};
+	}
+
 	const functionPath = componentPath.get( 'declarations.0.init' );
 	const firstParamPath = functionPath.get( 'params.0' );
 	const firstParam = firstParamPath?.node;
 	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
+		warnUnsupportedChildParamShape( componentPath, traces, config );
 		return {
 			aliases: [],
 			declarations: [],
@@ -152,6 +160,7 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 	const firstParamPath = functionPath.get( 'params.0' );
 	const firstParam = firstParamPath?.node;
 	if ( ! firstParam || ! babel.types.isObjectPattern( firstParam ) ) {
+		warnUnsupportedChildParamShape( componentPath, traces, config );
 		return [];
 	}
 
@@ -181,6 +190,20 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 	} );
 
 	return seedAliases;
+}
+
+function warnUnsupportedChildParamShape( componentPath, traces, config ) {
+	const componentName = getStoreSelectorComponentName( componentPath );
+	const propNames = Array.from( new Set( traces.map( trace => trace.propName ).filter( Boolean ) ) );
+	const propList = propNames.length > 0 ? ` for prop${ propNames.length === 1 ? '' : 's' } "${ propNames.join( ', ' ) }"` : '';
+	const exampleProp = propNames[ 0 ] || 'value';
+	const message = `Store selector tracing for child component "${ componentName }" requires a destructured object parameter, for example ({ ${ exampleProp } }) => ...; tracing is disabled${ propList }.`;
+	diagnostics.unsupported( componentPath, message, config );
+}
+
+function getStoreSelectorComponentName( componentPath ) {
+	const declaration = componentPath.node?.declarations?.[ 0 ];
+	return declaration?.id?.name || 'child component';
 }
 
 function groupChildPropTraces( traces ) {
