@@ -1,17 +1,21 @@
-# Store Selector Callsite Specialization Research
+# Store Selector Multi-Source Path Research
 
 ## Status
 
 Research and investigation note for reviewer feedback.
 
 This document is not an implementation plan yet. It explores a limitation in
-the current experimental store-selector hierarchy tracing model and proposes a
-possible next architecture direction.
+the current experimental store-selector hierarchy tracing model and compares
+possible next architecture directions.
 
 The immediate problem is multiple parent callsites using the same child
-component with different canonical data paths. A related, harder problem is
-shape-polymorphic props, where the same child prop name may receive a scalar in
-one callsite and a list or object in another.
+component with different canonical data paths. The first version of this note
+recommended callsite-specific component specialization. Reviewer feedback
+identified a lighter option that better matches the existing list-context
+machinery: root-relative child emission with a per-callsite object context.
+
+A related, harder problem is shape-polymorphic props, where the same child prop
+name may receive a scalar in one callsite and a list or object in another.
 
 Both problems matter because the long-term goal of the store-selector
 experiment is to let authors write ordinary React component trees while the
@@ -53,13 +57,21 @@ The current implementation supports:
 - list-context object-field props such as `badges={ product.badges }`
 - nested list output for Handlebars and PHP
 - no-child-`templateVars` parity with `full-template-surface`
-- fail-closed diagnostics for unsupported import and child-boundary shapes
+- diagnostics for unsupported import and child-boundary shapes
 
 The cross-file manifest currently suppresses ambiguous seeds. If two different
 parent files try to seed the same child component prop with different canonical
 paths, the manifest records ambiguity and does not emit a seed for that child
 binding. This prevents last-wins output bugs, but it is too conservative for a
 valid reusable-component pattern.
+
+Important current-state correction: unsupported selector flows are not always
+hard failures. `diagnostics.unsupported()` warns by default and throws only when
+`strict: true` is enabled. In some ambiguous same-file cases, the transform can
+therefore continue and produce degraded empty output rather than fail closed.
+That behavior should not be described as safe. The safe interim policy should be
+to make this specific multi-source ambiguity a hard error until a correct
+architecture lands, or require `strict: true` for this experiment in CI.
 
 ## The Current Ambiguity
 
@@ -108,8 +120,9 @@ ArticlePage: Header.hero -> article.hero
 
 The current single-seed model tries to describe `Header.hero` with one
 canonical source. That cannot safely represent both callsites. Picking one would
-be a last-wins bug; suppressing both is safe but blocks an important authoring
-pattern.
+be a last-wins bug. Suppressing the seed avoids that particular bug, but warning
+and continuing can still produce empty child output. This is a degraded-output
+failure, not a fully safe fail-closed state.
 
 ## Important Distinction: Path Difference Vs Shape Difference
 
@@ -172,7 +185,7 @@ title -> scalar/string
 items -> list/array
 ```
 
-This is shape-polymorphism. It is not solved by path specialization alone,
+This is shape-polymorphism. It is not solved by path-polymorphic handling alone,
 because the generated output form may differ:
 
 ```hbs
@@ -194,24 +207,167 @@ explicit signal.
 
 ## Current Recommendation
 
-Keep the current ambiguous-seed suppression as the safe interim behavior.
+Do not start with component cloning.
 
-Investigate callsite-specific specialization as the next architecture direction
-for valid multi-source reuse. Treat shape-polymorphic specialization as a
-separate, later extension unless reviewers find a simpler way to prove shape
-safely.
+First evaluate root-relative object emission with a per-callsite object context.
+This is closer to how list-item children already work:
+
+```txt
+parent supplies context root -> child emits relative paths inside that context
+```
+
+Keep the current ambiguous-seed suppression in place, but do not describe it as
+safe unless the ambiguity hard-errors. The current default warning-only behavior
+can produce empty output, so this ambiguity should become a hard error by
+default or require `strict: true` until relative object-context handling is
+implemented.
+
+Callsite-specific specialization remains a candidate, but it should not be the
+first path-polymorphism implementation unless the lighter relative-context model
+fails. Specialization is more clearly load-bearing for shape-polymorphism, where
+the child output structure itself may differ between callsites.
 
 In short:
 
 ```txt
-path-polymorphic reuse:   should be supported next
-shape-polymorphic reuse:  possible later, but needs stricter proof
+path-polymorphic reuse:   evaluate relative object contexts first
+shape-polymorphic reuse:  likely needs specialization or hard failure
 ```
 
-## Proposed Direction: Callsite-Specific Component Specialization
+## Candidate Direction A: Relative Object-Root Emission
 
-The most promising architecture is to compile a child component separately for
-each unique incoming trace context.
+The lighter architecture is to keep the child root-agnostic and let the parent
+callsite supply the object root as context.
+
+For lists, the project already emits child-relative paths under a parent list
+context. A child such as:
+
+```jsx
+const Badge = ({ badge }) => <span>{ badge.label }</span>;
+```
+
+inside:
+
+```jsx
+product.badges.map((badge) => <Badge badge={ badge } />)
+```
+
+can output relative fields inside the list context:
+
+```hbs
+{{#badges}}<span>{{label}}</span>{{/badges}}
+```
+
+The same idea may apply to object roots:
+
+```jsx
+<Header hero={ homeHero } />
+<Header hero={ articleHero } />
+```
+
+where:
+
+```jsx
+const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+```
+
+could compile as object-context-wrapped callsites:
+
+```hbs
+{{#with home.hero}}<h1>{{title}}</h1>{{/with}}
+{{#with article.hero}}<h1>{{title}}</h1>{{/with}}
+```
+
+or through equivalent build-time path-prefix composition:
+
+```txt
+Header local hero.title + callsite root home.hero -> home.hero.title
+Header local hero.title + callsite root article.hero -> article.hero.title
+```
+
+The important difference from specialization is that the child source does not
+need to be cloned for path-polymorphism. The child can emit relative paths, and
+the parent callsite supplies the root context.
+
+### Why This Fits The Existing Architecture
+
+This direction is consistent with the existing list machinery:
+
+- list output already distinguishes canonical source paths from relative child
+  declarations
+- PHP output already tracks context depth through `$data_1`, `$data_2`, and so
+  on
+- nested list child components already prove that one authored child can render
+  correctly under different inherited list contexts
+- the registry already carries structured path metadata, not only strings
+
+The new work would be object-context support rather than full component cloning.
+
+### Possible Output Models
+
+There are two possible implementation models.
+
+#### Context Block Wrapping
+
+The parent wraps the child output in an object context:
+
+```hbs
+{{#with home.hero}}<h1>{{title}}</h1>{{/with}}
+```
+
+Open questions:
+
+- Which Handlebars helper should provide strict object context behavior?
+- Does `#with` introduce unwanted truthy/falsy behavior when the object is
+  absent?
+- Do we need a project-provided helper for object context, similar to the
+  planned strict equality helper?
+- What is the exact PHP equivalent?
+- Can object context nesting compose cleanly with list context nesting?
+
+#### Build-Time Prefix Composition
+
+The child continues to discover relative usage:
+
+```txt
+hero.title -> title relative to incoming hero root
+```
+
+The parent/callsite metadata composes that relative path with each canonical
+root:
+
+```txt
+home.hero + title -> home.hero.title
+article.hero + title -> article.hero.title
+```
+
+Open questions:
+
+- Can this be implemented without leaking selector-specific behavior into
+  controllers?
+- Does it work when the child uses the prop in control expressions?
+- Does it work when the child passes the object onward to another child?
+- Does it work for nested object fields inside list contexts?
+- How does it interact with explicit child `templateVars`?
+
+### Immediate Interim Policy
+
+Until this is implemented, multi-source object-root ambiguity should fail
+loudly. Warning-only degraded output is not good enough for this case because it
+looks like a successful template build.
+
+Recommended interim:
+
+- hard-error on ambiguous same-file or cross-file object-root seed groups
+- keep current last-wins prevention
+- keep debug metadata explaining the competing sources
+- allow warning-only mode only for explicitly non-authoritative exploratory
+  runs, not for review/CI gates
+
+## Candidate Direction B: Callsite-Specific Component Specialization
+
+Component specialization remains a valid candidate, especially if relative
+object contexts cannot support all required path-polymorphic cases.
 
 Conceptually:
 
@@ -220,13 +376,13 @@ Conceptually:
 <Header hero={ articleHero } />
 ```
 
-would behave as though the transform created internal specializations:
+would behave as though the transform created internal variants:
 
 ```txt
-Header__homeHero:
+Header__jsxTemplateVars_a1b2c3:
   local hero.title -> canonical home.hero.title
 
-Header__articleHero:
+Header__jsxTemplateVars_d4e5f6:
   local hero.title -> canonical article.hero.title
 ```
 
@@ -239,58 +395,79 @@ This is a compiler specialization model:
 one authored component + multiple incoming trace contexts -> multiple compiled variants
 ```
 
-## Why A Single Child Transform Cannot Represent This
+### When Specialization Is Actually Load-Bearing
 
-A transformed `Header` body cannot emit both:
+Specialization may still be necessary when the component's output structure
+differs by callsite shape.
 
-```hbs
-{{home.hero.title}}
-```
-
-and:
-
-```hbs
-{{article.hero.title}}
-```
-
-from the same JSX usage:
+For example:
 
 ```jsx
-<h1>{ hero.title }</h1>
+const Output = ({ value }) => <div>{ value }</div>;
 ```
 
-without knowing which parent callsite invoked it. That context is not available
-inside a single global child transform. Therefore either:
+where one callsite passes a scalar and another passes a primitive list. A
+relative object context does not decide whether the child should emit:
 
-- the child must be cloned/specialized per trace context
-- the parent must render or bind the child differently per callsite
-- a runtime/template binding map must be introduced
+```hbs
+{{value}}
+```
 
-The first option appears most consistent with the existing architecture.
+or:
+
+```hbs
+{{#value}}{{.}}{{/value}}
+```
+
+That is shape-polymorphism, not merely path-polymorphism.
 
 ## Alternative Architectures Considered
 
-### 1. Keep Failing Closed On Ambiguity
+### 1. Keep Suppressing Ambiguous Seeds
 
-This is the current behavior.
+This is the current cross-file manifest behavior, but same-file ambiguity can
+still degrade to warning-only empty output unless `strict: true` is enabled.
 
 Benefits:
 
 - simple
-- safe
 - prevents last-wins bugs
 - preserves current registry/controller assumptions
 
 Costs:
 
+- not fully safe unless it hard-errors
 - blocks valid reusable child components
 - limits cross-file tracing usefulness
 - pushes authors back toward manual child declarations or duplicated components
 
-Recommendation: keep this until specialization is proven, but do not treat it as
-the final design.
+Recommendation: keep suppression but make this ambiguity fail loudly until a
+correct path-polymorphism model lands.
 
-### 2. Runtime Or Template Binding Maps
+### 2. Relative Object Contexts
+
+The child emits relative paths and the parent supplies an object root per
+callsite.
+
+Benefits:
+
+- directly analogous to current list-context output
+- avoids component cloning
+- avoids cross-file generated exports/import rewrites for path-polymorphism
+- can keep authored components unchanged
+- may preserve the registry/controller boundary better than specialization
+
+Costs:
+
+- object context semantics need careful language support
+- Handlebars may need a helper if `#with` truthiness is not acceptable
+- PHP context-depth behavior must be proven
+- controls, nested lists, and multi-hop object context need explicit tests
+- may not solve shape-polymorphism
+
+Recommendation: prototype this before specialization.
+
+### 3. Runtime Or Template Binding Maps
 
 The transform could pass a binding map into the child:
 
@@ -305,18 +482,20 @@ Benefits:
 
 - avoids cloning components
 - can represent different callsite paths dynamically
+- can be resolved at build time if the binding map is known during template
+  rendering
 
 Costs:
 
 - more invasive than current architecture
-- likely leaks selector-specific concepts into output generation
-- harder for static PHP and Handlebars output
+- may leak selector-specific concepts into output generation
 - complicates debugging
 - risks making controllers aware of store-selector semantics
 
-Recommendation: avoid unless specialization proves unworkable.
+Recommendation: keep as a fallback idea. If the map is resolved at build time,
+static PHP/Handlebars output is not the main blocker; boundary cleanliness is.
 
-### 3. Parent-Side Materialization
+### 4. Parent-Side Materialization
 
 The parent could pre-render scalar values before passing them to the child.
 
@@ -342,7 +521,7 @@ Costs:
 
 Recommendation: keep as a fallback, not the main architecture.
 
-### 4. Callsite-Specific Specialization
+### 5. Callsite-Specific Specialization
 
 Benefits:
 
@@ -362,22 +541,63 @@ Costs:
 - cross-file specialization needs coordination between manifest and per-file
   transform
 
-Recommendation: investigate this first.
+Recommendation: do not start here for path-polymorphism. Keep it as the heavier
+option if relative object contexts are insufficient, and as the likely model for
+shape-polymorphism.
+
+## Specialization Pipeline Requirements
+
+If specialization survives the relative-context comparison, the implementation
+must define a concrete phase order before any coding.
+
+The important point is that callsite identity must exist before traces are
+grouped by component/prop. Cloning a component after ambiguity has already been
+collapsed does not solve the problem.
+
+Required pipeline shape:
+
+```txt
+collect callsite trace contexts
+-> assign callsite/specialization IDs
+-> build specialization records from complete alias environments
+-> expose each specialization as a virtual component instance
+-> run discovery and registry/controller processing per virtual instance
+-> rewrite callsites to the selected instance before final output
+```
+
+This should be treated as a virtual component model, not as late AST cloning.
+
+Cross-file specialization also needs a module-boundary rule before coding. A
+reasonable first rule, if needed, is:
+
+- child files emit generated/exported variants
+- parent files rewrite imports and JSX callsites to those variants
+- bundler integration remains deferred
+
+This rule is intentionally heavier than relative object contexts, which is why
+relative object contexts should be evaluated first.
 
 ## What The Specialization Key Must Include
 
 A specialization should not be keyed only by component name.
 
-The key probably needs to include:
+The key should be a stable hash over the complete incoming alias environment,
+with a readable prefix only for debugging. It should not use readable source-path
+names such as `Header__homeHero` as identity.
+
+The hashed identity needs to include:
 
 - target component file
 - target component export/local name
-- incoming prop name
-- incoming canonical source path
-- incoming declaration path, especially for list-relative child contexts
-- whether the prop is object-root, scalar, list-item, or list-context object-field
+- every incoming prop name
+- every incoming canonical source path
+- every incoming declaration path, especially for list-relative child contexts
+- whether each prop is object-root, scalar, list-item, or list-context
+  object-field
 - inherited list context depth
 - any shape information that affects output role
+- explicit child `templateVars` that coexist with the trace context
+- role-affecting metadata, if shape inference starts depending on it
 
 For example:
 
@@ -414,9 +634,11 @@ For list-item contexts:
 The `declarationPath` distinction matters because a list-item child should emit
 relative declarations such as `name`, not re-wrap `catalog.products[].name`.
 
-## Same-File Specialization Sketch
+## Same-File Relative Object-Context Proof
 
-First investigation slice:
+The first implementation proof should not be specialization. It should test
+whether relative object-root emission can solve the same motivating case without
+clones.
 
 ```jsx
 const Header = ({ hero }) => <h1>{ hero.title }</h1>;
@@ -440,6 +662,12 @@ Expected Handlebars output:
 <main><h1>{{home.hero.title}}</h1><h1>{{article.hero.title}}</h1></main>
 ```
 
+or, if the implementation uses explicit object context blocks:
+
+```hbs
+<main>{{#with home.hero}}<h1>{{title}}</h1>{{/with}}{{#with article.hero}}<h1>{{title}}</h1>{{/with}}</main>
+```
+
 Expected PHP output should similarly render:
 
 ```php
@@ -450,12 +678,30 @@ $data['article']['hero']['title']
 High-level transform idea:
 
 1. Discover both callsite contexts.
-2. Generate two internal child variants.
-3. Seed each variant with one unambiguous incoming trace context.
-4. Rewrite each `<Header />` callsite to the matching variant.
-5. Run normal registry/controller output through each variant.
+2. Keep the child root-agnostic.
+3. Discover child-relative usage such as `title`.
+4. Compose or wrap each callsite with its canonical root.
+5. Preserve correct Handlebars and PHP output.
 
 The child source code should remain the same from the author's perspective.
+
+If this cannot support controls, nested objects, list contexts, or multi-hop
+propagation, document the exact reason and reconsider specialization.
+
+## Same-File Specialization Sketch
+
+If specialization is still needed after the relative object-context proof, the
+same example would become a virtual-component test:
+
+```txt
+Header + { hero -> home.hero }    -> Header__jsxTemplateVars_<hashA>
+Header + { hero -> article.hero } -> Header__jsxTemplateVars_<hashB>
+```
+
+The parent callsites would be rewritten to the matching virtual component
+instances before the final controller pass.
+
+This sketch is deliberately second in priority.
 
 ## Cross-File Specialization Sketch
 
@@ -469,7 +715,7 @@ The manifest may need to emit:
   "specializationsByFile": {
     "Header.jsx": [
       {
-        "id": "Header__homeHero",
+        "id": "Header__jsxTemplateVars_a1b2c3",
         "baseComponent": "Header",
         "incomingAliases": [
           {
@@ -480,7 +726,7 @@ The manifest may need to emit:
         ]
       },
       {
-        "id": "Header__articleHero",
+        "id": "Header__jsxTemplateVars_d4e5f6",
         "baseComponent": "Header",
         "incomingAliases": [
           {
@@ -496,14 +742,14 @@ The manifest may need to emit:
     "HomePage.jsx": [
       {
         "from": "Header",
-        "to": "Header__homeHero",
+        "to": "Header__jsxTemplateVars_a1b2c3",
         "sourcePath": "home.hero"
       }
     ],
     "ArticlePage.jsx": [
       {
         "from": "Header",
-        "to": "Header__articleHero",
+        "to": "Header__jsxTemplateVars_d4e5f6",
         "sourcePath": "article.hero"
       }
     ]
@@ -511,7 +757,8 @@ The manifest may need to emit:
 }
 ```
 
-Open questions:
+This should not be implemented until the same-file relative object-context proof
+has been evaluated. If specialization is still needed, open questions include:
 
 - Should specialized variants be emitted in the child file or parent file?
 - Should specialized variants be exported?
@@ -523,11 +770,30 @@ Open questions:
 For the current test harness, child-file variants plus parent callsite rewrites
 may be enough. For real package use, this likely needs more thought.
 
+## Recursion And Cycle Policy
+
+Any specialization model needs an explicit recursion policy before
+implementation.
+
+Recommended first-slice policy:
+
+- recursive components are unsupported for specialization
+- cyclic component graphs must fail closed or skip specialization with a clear
+  diagnostic
+- variant expansion must have a hard cap
+- a specialized component should not recursively create a new specialization of
+  itself unless the incoming alias environment is exactly identical and the
+  behavior is explicitly tested
+- debug metadata must record the cycle or recursion reason
+
+Relative object-context output may avoid some cloning-specific recursion
+problems, but it still needs cycle tests for any fixed-point graph discovery.
+
 ## Shape-Polymorphic Specialization
 
-Path specialization maps the same child shape to different canonical paths.
-Shape-polymorphic specialization maps the same child prop name to different data
-shapes.
+Path-polymorphic handling maps the same child shape to different canonical
+paths. Shape-polymorphic specialization maps the same child prop name to
+different data shapes.
 
 Example:
 
@@ -592,7 +858,7 @@ Without evidence, scalar replacement should remain the conservative default.
 
 For now:
 
-- support path specialization only when the local child usage shape is stable
+- support path-polymorphic reuse only when the local child usage shape is stable
 - do not infer primitive-list rendering from bare `{ value }` alone
 - allow shape-polymorphic specialization only when shape is proven by explicit
   evidence
@@ -604,7 +870,7 @@ Longer term:
 - model each specialization as a combination of incoming path and inferred shape
 - require debug metadata to show why a value was treated as scalar, object, list
   item, or primitive list
-- add a dedicated shape-polymorphism gate after path specialization works
+- add a dedicated shape-polymorphism gate after path-polymorphism works
 
 ## User/Data Architecture Errors
 
@@ -649,18 +915,19 @@ This distinction should remain explicit in docs and diagnostics.
 
 ## Debug Metadata Requirements
 
-Specialization will be very hard to review without detailed debug metadata.
+Either relative object contexts or specialization will be very hard to review
+without detailed debug metadata.
 
 A useful debug payload should include:
 
 ```json
 {
-  "specializations": [
+  "callsiteContexts": [
     {
-      "id": "Header__homeHero",
       "component": "Header",
       "file": "Header.jsx",
       "sourceCallsite": "HomePage.jsx:<Header hero={hero} />",
+      "strategy": "relative-object-context",
       "incomingProps": [
         {
           "propName": "hero",
@@ -676,13 +943,17 @@ A useful debug payload should include:
 }
 ```
 
+If specialization is used, debug metadata should additionally include the
+generated variant ID and specialization key hash.
+
 For multi-hop traces, reviewers likely need hop-by-hop provenance:
 
 ```txt
 HomePage.hero -> Shell.hero -> Header.hero -> hero.title
 ```
 
-Debug output should also record why a potential specialization was skipped:
+Debug output should also record why a potential context or specialization was
+skipped:
 
 - unsupported boundary
 - ambiguous shape
@@ -693,29 +964,59 @@ Debug output should also record why a potential specialization was skipped:
 - unresolved import
 - unsupported import shape
 
-## Acceptance Gates For Path Specialization
+## Acceptance Gates For Path-Polymorphism
 
-Before treating path specialization as viable, require tests for:
+Before treating path-polymorphic reuse as viable, require tests for the relative
+object-context model:
 
 1. Same child used twice in one parent with different object roots.
 2. Same child used from two parent files with different object roots.
 3. Same child used from multiple parents with the same canonical source, deduped
-   to one specialization where possible.
-4. Same child used with scalar props in different canonical paths.
-5. Same child used with list-item object props from different list roots.
-6. Nested list object-field prop, such as `badges={ product.badges }`.
-7. Multi-hop specialization through an intermediate component.
-8. Handlebars and PHP output parity.
-9. No last-wins behavior.
-10. No orphaned replace/list/control declarations.
-11. Debug metadata mapping callsite -> specialization -> compiled paths.
+   where possible.
+4. Object-root child control, such as `hero.status === 'published'`.
+5. Object-root child replacement and control in the same component.
+6. Same child used with list-item object props from different list roots.
+7. Nested list object-field prop, such as `badges={ product.badges }`.
+8. Multi-hop propagation through an intermediate component.
+9. Explicit child `templateVars` coexistence.
+10. Mixed list/non-list contexts fail closed or render correctly without partial
+    output.
+11. Handlebars and PHP output parity.
+12. No last-wins behavior.
+13. No orphaned replace/list/control declarations.
+14. Debug metadata mapping callsite -> context root -> compiled paths.
+15. Existing ambiguous warning-only degraded output is replaced by a hard error
+    or a correct transform.
+16. Existing flat API behavior remains unchanged.
+17. Existing non-specialized selector fixtures remain unchanged.
+
+Scalar prop reuse should remain a regression test, but it is not the motivating
+hard case because parent-side materialization already handles many scalar leaf
+flows.
+
+## Acceptance Gates If Specialization Is Needed
+
+If relative object contexts cannot support the path-polymorphic cases, then
+specialization needs additional gates:
+
+1. Callsite identity exists before traces are grouped by component/prop.
+2. Specialization records are built from complete incoming alias environments.
+3. Generated variant names use a readable prefix plus stable hash, not readable
+   source-path names as identity.
+4. Parent callsites are rewritten before the final controller pass.
+5. Cross-file mode has an explicit import/export strategy.
+6. Multi-prop specializations are covered.
+7. Transitive multi-hop closure is bounded and tested.
+8. Recursive/cyclic component graphs fail closed or use a tested fixed-point
+   policy.
+9. Variant count has a hard bound and debug metadata reports generated variants.
+10. No orphaned generated variants or imports.
+11. Handlebars and PHP output parity.
 12. Existing ambiguous fail-closed behavior remains for unsupported flows.
-13. Existing flat API behavior remains unchanged.
-14. Existing non-specialized selector fixtures remain unchanged.
 
 ## Acceptance Gates For Shape-Polymorphism
 
-Do not combine this with the first path-specialization proof unless reviewers
+Do not combine this with the first path-polymorphism proof unless reviewers
 strongly recommend it.
 
 Shape-polymorphism needs its own tests:
@@ -734,37 +1035,41 @@ Shape-polymorphism needs its own tests:
 
 ## Open Questions For Reviewers
 
-1. Is callsite-specific specialization the right architecture for multiple
-   canonical sources?
-2. Is there a simpler model that supports this without cloning or specializing
-   components?
-3. Should specialization be generated in the child file, the parent file, or
-   entirely through manifest metadata?
-4. How should parent import/callsite rewriting work in cross-file mode?
-5. What should determine a stable specialization key?
-6. How aggressively should specializations be deduped?
-7. How much generated code growth is acceptable?
-8. Does specialization preserve the registry/controller boundary, or does it
-   risk leaking selector-specific concepts into output generation?
-9. What additional PHP context-depth risks should be tested?
-10. Should shape-polymorphic specialization be considered now, or explicitly
-    deferred until path specialization is proven?
-11. What evidence should be required before treating bare `{ value }` as a
+1. Can relative object-root emission solve the same-shape/different-root problem
+   without component specialization?
+2. Should the implementation use explicit object context blocks, build-time
+   prefix composition, or another relative-context model?
+3. What Handlebars helper or convention should represent object context?
+4. What PHP context-depth risks does object-root context introduce?
+5. Can object contexts compose cleanly with nested list contexts?
+6. Can object-root controls be emitted correctly without cloning?
+7. Does relative object context preserve the registry/controller boundary, or
+   does it require invasive output changes?
+8. Should ambiguous object-root tracing hard-error by default until this is
+   solved?
+9. If specialization is still needed, should variants be generated in the child
+   file, the parent file, or entirely through manifest metadata?
+10. If specialization is used, what should determine the stable hash key?
+11. If specialization is used, how should transitive multi-hop variant closure
+    and cycle handling be bounded?
+12. Should shape-polymorphic specialization be considered now, or explicitly
+    deferred until path-polymorphism is proven?
+13. What evidence should be required before treating bare `{ value }` as a
     primitive list rather than scalar replacement?
-12. Are there cases where supporting multiple canonical sources would hide real
+14. Are there cases where supporting multiple canonical sources would hide real
     user/component architecture errors?
-13. Should ambiguous cross-file seeds remain fail-closed until specialization
-    lands?
-14. What is the smallest safe first implementation slice?
+15. What is the smallest safe first implementation slice?
 
 ## Recommended Next Step
 
-Keep the current ambiguous-seed suppression in place.
+Keep the current ambiguous-seed suppression in place, but do not rely on
+warning-only degraded output as a safe interim. This ambiguity should become a
+hard error by default or require `strict: true` in review/CI mode.
 
 Ask reviewers to evaluate this document before implementation.
 
-If the architecture is accepted, the first implementation slice should be a
-narrow same-file path-specialization proof:
+If the revised direction is accepted, the first implementation slice should be a
+narrow same-file relative object-context proof:
 
 - one child component
 - two parent callsites
@@ -772,9 +1077,12 @@ narrow same-file path-specialization proof:
 - different canonical source paths
 - Handlebars and PHP assertions
 - no cross-file rewriting yet
-- full debug metadata for both specializations
+- object-root control coverage
+- full debug metadata for both callsite contexts
 
 Only after that should we extend the model to cross-file manifest output.
 
-Shape-polymorphic specialization should remain a follow-up research gate unless
-reviewers identify a low-risk way to prove source shape at each callsite.
+Component specialization should remain conditional until relative object
+contexts are proven insufficient. Shape-polymorphic specialization should remain
+a follow-up research gate unless reviewers identify a low-risk way to prove
+source shape at each callsite.
