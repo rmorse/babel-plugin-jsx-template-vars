@@ -1066,6 +1066,20 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				if ( this.shouldSeedObjectRootChildProp( elementName, path.node.name.name, segments ) ) {
+					this.childPropSeedTraces.push( {
+						componentName: elementName,
+						propName: path.node.name.name,
+						path: stringifySegments( segments ),
+						segments: normalizeSegments( segments ),
+						declarationSegments: normalizeSegments( segments ),
+						dynamicRoot: expressionInfo.dynamicRoot,
+						dynamicRootSegments: expressionInfo.dynamicRootSegments,
+					} );
+					this.unsupportedChildPropExpressions.add( value.expression );
+					return;
+				}
+
 				if ( this.canTraceChildProp( elementName, segments ) ) {
 					this.childPropTraces.push( {
 						componentName: elementName,
@@ -1512,6 +1526,24 @@ class StoreSelectorCollector {
 		const propsByComponent = this.config.storeSelectorDynamicRootPropsByComponent || {};
 		const props = propsByComponent[ componentName ];
 		return Array.isArray( props ) && props.includes( propName );
+	}
+
+	shouldSeedObjectRootChildProp( componentName, propName, segments ) {
+		const componentNames = this.config.storeSelectorComponentNames;
+		if ( ! componentNames || ! componentNames.has( componentName ) ) {
+			return false;
+		}
+
+		const normalizedSegments = normalizeSegments( segments );
+		if ( normalizedSegments.length === 0 ) {
+			return false;
+		}
+
+		if ( normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) ) ) {
+			return false;
+		}
+
+		return this.isPotentialDynamicRootBoundary( componentName, propName, [ normalizedSegments ] );
 	}
 
 	isPotentialDynamicRootBoundary( componentName, propName, selectorSources ) {

@@ -1699,6 +1699,41 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		[
+			'handlebars',
+			'<h1>{{home.hero.title}}</h1>',
+		],
+		[
+			'php',
+			"<h1><?php echo $data['home']['hero']['title']; ?></h1>",
+		],
+	])('auto-seeds nested object root props into child component usage for %s', async (language, expected) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.home.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+		expect(code).not.toContain('return h("h1", null, hero.title)');
+		expect(code).not.toContain('value: "home.hero"');
+		expectNoOrphanedTemplateReplacements(code);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('auto-seeds renamed selector locals into renamed child props', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -1749,6 +1784,33 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it('auto-seeds nested object root props into child component controls', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return (
+					<header>
+						{ hero.status === 'published' && <aside>Published</aside> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.home.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<header>{{#if_equal home.hero.status 'published'}}<aside>Published</aside>{{/if_equal}}</header>");
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('auto-seeds object root props into props-object child params', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -1769,6 +1831,29 @@ describe('experimental store selectors', () => {
 		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('auto-seeds nested object root props into props-object child params', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = (props) => {
+				return <h1>{ props.hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.home.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{home.hero.title}}</h1>');
 		expect(warn).not.toHaveBeenCalled();
 	});
 
@@ -2034,6 +2119,17 @@ describe('experimental store selectors', () => {
 		});
 
 		expect(code).toMatch(/import\s+\{[^}]*createTemplateRootDescriptor[^}]*getTemplateRootPathArg[^}]*\}/);
+		const importMatch = code.match(/import\s+\{([^}]+)\}\s+from\s+["'][^"']+\/language\/index\.js["']/);
+		expect(importMatch).not.toBeNull();
+		const languageSource = fs.readFileSync(path.resolve(process.cwd(), 'language/index.js'), 'utf8');
+		const exportedNames = new Set(Array.from(languageSource.matchAll(/export function\s+([A-Za-z_$][\w$]*)/g)).map(match => match[1]));
+		const importedNames = importMatch[1].split(',').map(name => name.trim()).filter(Boolean);
+
+		expect(importedNames).toContain('createTemplateRootDescriptor');
+		expect(importedNames).toContain('getTemplateRootPathArg');
+		importedNames.forEach((name) => {
+			expect(exportedNames.has(name)).toBe(true);
+		});
 	});
 
 	it('does not descriptor-wrap ordinary runtime props for dynamic-root child props', () => {
@@ -2508,6 +2604,30 @@ describe('experimental store selectors', () => {
 		});
 
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('auto-seeds nested object root props in strict mode', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return <h1>{ hero.title }</h1>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.home.hero);
+				return <Header hero={ hero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+			...selectorOptions,
+			strict: true,
+		});
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{home.hero.title}}</h1>');
 	});
 
 	it('auto-seeds object root props when unsupported warnings are suppressed', async () => {
