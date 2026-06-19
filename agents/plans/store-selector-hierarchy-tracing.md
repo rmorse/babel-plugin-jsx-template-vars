@@ -511,6 +511,8 @@ Validated behavior:
 - parent and child split across two files with a direct named relative import
 - three-file `App -> ProductCard -> Badge` list propagation
 - nested list context depth for Handlebars and PHP
+- split-file version of `full-template-surface` byte-matches the existing
+  Handlebars and PHP expectations
 - named exported variable components
 - unresolved imports, non-relative imports, and barrel/re-export targets do not
   invent seeds and report diagnostics
@@ -528,6 +530,7 @@ Validated behavior:
 
 - parent and child in two files with named import: implemented.
 - nested list child chain across three files: implemented.
+- split-file `full-template-surface` byte parity: implemented.
 - PHP nested context depth across files: implemented.
 - unresolved import diagnostic: implemented.
 - barrel/re-export unsupported diagnostic: implemented.
