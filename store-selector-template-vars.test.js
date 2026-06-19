@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import crossFileSelectors from './store-selector-cross-file.js';
 import {
 	normalizeTemplateOutput,
 	renderTemplateFixture,
+	renderTemplateModules,
 	transformTemplateVars,
 } from './test-utils/transform.js';
+
+const { createStoreSelectorCrossFileManifest } = crossFileSelectors;
 
 const selectorOptions = {
 	experimentalStoreSelectors: true,
@@ -26,6 +31,24 @@ function expectNoOrphanedTemplateReplacements(code, rawAccesses = []) {
 		const usages = code.match(new RegExp(`\\b${ escapeRegExp(variableName) }\\b`, 'g')) || [];
 		expect(usages.length).toBeGreaterThan(1);
 	});
+}
+
+function crossFileFixtureFiles(sources) {
+	const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+	return Object.fromEntries(Object.entries(sources).map(([ filename, source ]) => [
+		path.join(root, filename),
+		source,
+	]));
+}
+
+function createCrossFileOptions(manifest) {
+	return {
+		experimentalStoreSelectors: {
+			crossFile: true,
+			__crossFileManifest: manifest,
+		},
+		warnOnUnsupported: false,
+	};
 }
 
 describe('experimental store selectors', () => {
@@ -728,6 +751,201 @@ describe('experimental store selectors', () => {
 		expectNoOrphanedTemplateReplacements(code, [ 'badge.label', 'badge.tone' ]);
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('builds a cross-file manifest for direct relative named imports', async () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(process.cwd(), '__cross_file_store_selector_tests__', 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				segments: [ 'hero' ],
+				declarationSegments: [ 'hero' ],
+			}),
+		]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
+	it.each([
+		[
+			'handlebars',
+			'<main>{{#products}}<article><h2>{{name}}</h2>{{#badges}}<span>{{label}}</span>{{/badges}}</article>{{/products}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><h2><?php echo $data_1['name']; ?></h2><?php foreach ( $data_1['badges'] as $data_2 ) { ?><span><?php echo $data_2['label']; ?></span><?php } ?></article><?php } ?></main>",
+		],
+	])('traces cross-file list item and nested list props for %s', async (language, expected) => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Badge.jsx': `
+				export const Badge = ({ badge }) => <span>{ badge.label }</span>;
+			`,
+			'ProductCard.jsx': `
+				import { Badge } from './Badge.jsx';
+
+				export const ProductCard = ({ product }) => (
+					<article>
+						<h2>{ product.name }</h2>
+						{ product.badges.map((badge) => (
+							<Badge badge={ badge } />
+						)) }
+					</article>
+				);
+			`,
+			'App.jsx': `
+				import { ProductCard } from './ProductCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const products = useStoreSelector((state) => state.products);
+					return (
+						<main>
+							{ products.map((product) => (
+								<ProductCard product={ product } />
+							)) }
+						</main>
+					);
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { codeByFile, output } = await renderTemplateModules(
+			language,
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+		const combinedCode = Object.values(codeByFile).join('\n');
+
+		expect(manifest.diagnostics).toEqual([]);
+		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name', 'product.badges', 'badge.label' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it('reports unresolved cross-file imports without inventing component seeds', () => {
+		const files = crossFileFixtureFiles({
+			'App.jsx': `
+				import { Header } from './Missing.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unresolved-import',
+				source: './Missing.jsx',
+				localName: 'Header',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('does not trace non-relative cross-file imports', () => {
+		const files = crossFileFixtureFiles({
+			'App.jsx': `
+				import { Header } from '@components/Header';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-import-source',
+				source: '@components/Header',
+				localName: 'Header',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('reports re-export barrels as unsupported cross-file targets', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'index.jsx': `
+				export { Header } from './Header.jsx';
+			`,
+			'App.jsx': `
+				import { Header } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-reexport',
+				source: './index.jsx',
+				localName: 'Header',
+				importedName: 'Header',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
 	it('bounds same-file auto-seeding cycles during discovery', () => {

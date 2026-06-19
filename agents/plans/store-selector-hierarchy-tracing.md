@@ -17,9 +17,11 @@ registry/controller boundary:
   list-context object-field props such as `badges={ product.badges }`
 - debug metadata is available through `metadata.storeSelectorTemplateVars`
 - debug metadata includes declaration provenance and props-object member aliases
+- cross-file tracing has an explicit in-memory manifest/prepass prototype for
+  direct relative named imports
 - Phase A tracing supports same-file direct scalar child props
 - same-file top-level multi-hop tracing is intentionally supported by the
-  bounded auto-seeding pass; cross-file tracing remains out of scope
+  bounded auto-seeding pass
 - focused multi-hop and cycle-safety tests cover the bounded fixed-point pass
 - simple props-object child params such as `(props) => props.hero.title` are
   supported for replacement, control, and list-context child usage
@@ -490,21 +492,48 @@ hero.title
 Explore whether component graph tracing can cross file boundaries in a way that
 is reliable enough to ship.
 
+### Current Prototype
+
+The first cross-file gate is implemented as an explicit manifest/prepass rather
+than implicit per-file build-order state:
+
+- `createStoreSelectorCrossFileManifest(files)` accepts a filename-to-source map.
+- It parses each file once, resolves direct relative named component imports, and
+  runs the same bounded seed discovery model across the file graph.
+- The manifest exposes `seedAliasesByFile` and `componentNamesByFile`.
+- The normal plugin consumes that manifest through
+  `experimentalStoreSelectors.__crossFileManifest`.
+- The transform remains per-file; the manifest is the handoff that makes child
+  seeds available regardless of transform order.
+
+Validated behavior:
+
+- parent and child split across two files with a direct named relative import
+- three-file `App -> ProductCard -> Badge` list propagation
+- nested list context depth for Handlebars and PHP
+- named exported variable components
+- unresolved imports, non-relative imports, and barrel/re-export targets do not
+  invent seeds and report diagnostics
+
 ### Required Behavior
 
-- Start with explicit opt-in only.
+- Keep cross-file tracing explicit opt-in only.
 - Resolve direct named imports from relative files.
 - Avoid barrel files and re-exports in the first slice.
 - Cache parsed files to avoid repeated work.
 - Emit diagnostics when the graph cannot be resolved.
+- Keep the manifest shape internal until the experiment is reviewed.
 
 ### Tests
 
-- parent and child in two files with named import.
-- default import if supported.
-- unresolved import diagnostic.
-- barrel/re-export unsupported diagnostic.
-- no tracing through `node_modules`.
+- parent and child in two files with named import: implemented.
+- nested list child chain across three files: implemented.
+- PHP nested context depth across files: implemented.
+- unresolved import diagnostic: implemented.
+- barrel/re-export unsupported diagnostic: implemented.
+- no tracing through non-relative/package imports: implemented.
+- default import: not supported in this slice unless a later review decides to
+  add a strict default-export contract.
 
 ### Risks
 
@@ -512,6 +541,9 @@ is reliable enough to ship.
 - Bundler aliases, TS path aliases, and build systems complicate resolution.
 - Cross-file tracing may be better handled by a separate prepass or explicit
   manifest rather than inside the transform.
+- The current helper accepts in-memory sources. A production integration still
+  needs a file-system/project wrapper that controls included files and cache
+  invalidation.
 
 ## Phase G - Opt-In Context Tracing
 
@@ -703,15 +735,15 @@ The parity fixture verifies:
 - no orphaned template declarations or leaked runtime selector calls
 
 This proves the no-explicit-child-`templateVars` version of the hard fixture
-before broader cross-file tracing or context tracing work starts.
+before broader context tracing work starts.
 
 ## Recommended Next Step
 
-Send the completed full-surface parity and hardening gate through review. If
-reviewers agree the same-file hierarchy story is stable, choose the next slice
-from the remaining documented boundaries: bare param-as-prop diagnostics,
-cross-file tracing exploration, or broader unsupported-boundary/debug metadata
-hardening.
+Send the completed cross-file manifest gate through review. If reviewers agree
+the explicit prepass shape is sound, choose the next slice from the remaining
+documented boundaries: a production file-system wrapper for the manifest,
+bare param-as-prop diagnostics, broader unsupported-boundary/debug metadata
+hardening, marker coexistence, or context tracing.
 
 Historical refactor pass/fail gates, now completed:
 

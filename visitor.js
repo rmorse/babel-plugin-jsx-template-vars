@@ -42,6 +42,7 @@
 const {
 	getArrayFromExpression,
 } = require( './utils' );
+const path = require( 'path' );
 
 const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
@@ -172,10 +173,14 @@ function templateVarsVisitor( babel, config ) {
 			const processedComponents = new Set();
 			const debugEntries = [];
 			const unsupportedEntries = [];
-			const componentNames = new Set( componentPaths.keys() );
+			const filename = normalizeStoreSelectorFilename( state.file.opts.filename );
+			const componentNames = new Set( [
+				...componentPaths.keys(),
+				...getCrossFileComponentNames( storeSelectorOptions, filename ),
+			] );
 			const selectorResults = new Map();
 			const childPropTracesByComponent = new Map();
-			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions );
+			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename );
 
 			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
 				selectorResults.clear();
@@ -350,15 +355,48 @@ function getComponentPath( path, componentName ) {
 	return componentPath;
 }
 
-function createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions ) {
+function createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename ) {
 	const seedAliasesByComponent = new Map();
 	componentPaths.forEach( ( _componentPath, componentName ) => {
-		const seedAliases = storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [];
+		const seedAliases = [
+			...( storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [] ),
+			...getCrossFileSeedAliases( storeSelectorOptions, filename, componentName ),
+		];
 		if ( seedAliases.length > 0 ) {
 			seedAliasesByComponent.set( componentName, [ ...seedAliases ] );
 		}
 	} );
 	return seedAliasesByComponent;
+}
+
+function getCrossFileComponentNames( storeSelectorOptions, filename ) {
+	const componentNamesByFile = storeSelectorOptions.__crossFileManifest?.componentNamesByFile || {};
+	const componentNames = getCrossFileManifestEntry( componentNamesByFile, filename );
+	return Array.isArray( componentNames ) ? componentNames : [];
+}
+
+function getCrossFileSeedAliases( storeSelectorOptions, filename, componentName ) {
+	const seedAliasesByFile = storeSelectorOptions.__crossFileManifest?.seedAliasesByFile || {};
+	const seedAliasesByComponent = getCrossFileManifestEntry( seedAliasesByFile, filename );
+	const seedAliases = seedAliasesByComponent?.[ componentName ];
+	return Array.isArray( seedAliases ) ? seedAliases : [];
+}
+
+function getCrossFileManifestEntry( manifestByFile, filename ) {
+	if ( ! manifestByFile || ! filename ) {
+		return null;
+	}
+
+	const normalizedFilename = normalizeStoreSelectorFilename( filename );
+	return manifestByFile[ filename ] ||
+		manifestByFile[ normalizedFilename ] ||
+		manifestByFile[ filename.replace( /\\/g, '/' ) ] ||
+		manifestByFile[ normalizedFilename.replace( /\\/g, '/' ) ] ||
+		null;
+}
+
+function normalizeStoreSelectorFilename( filename ) {
+	return path.normalize( path.resolve( filename ) );
 }
 
 function collectChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent ) {
@@ -432,11 +470,12 @@ function createStoreSelectorSeedAliasKey( seedAlias ) {
 function getTopLevelComponentPaths( programPath, types ) {
 	const components = new Map();
 	programPath.get( 'body' ).forEach( ( childPath ) => {
-		if ( ! types.isVariableDeclaration( childPath.node ) || childPath.node.declarations.length !== 1 ) {
+		const declarationPath = getVariableDeclarationPath( childPath, types );
+		if ( ! declarationPath || declarationPath.node.declarations.length !== 1 ) {
 			return;
 		}
 
-		const declaration = childPath.node.declarations[ 0 ];
+		const declaration = declarationPath.node.declarations[ 0 ];
 		if ( ! types.isIdentifier( declaration.id ) || ! isComponentName( declaration.id.name ) ) {
 			return;
 		}
@@ -448,9 +487,24 @@ function getTopLevelComponentPaths( programPath, types ) {
 			return;
 		}
 
-		components.set( declaration.id.name, childPath );
+		components.set( declaration.id.name, declarationPath );
 	} );
 	return components;
+}
+
+function getVariableDeclarationPath( childPath, types ) {
+	if ( types.isVariableDeclaration( childPath.node ) ) {
+		return childPath;
+	}
+
+	if (
+		types.isExportNamedDeclaration( childPath.node ) &&
+		types.isVariableDeclaration( childPath.node.declaration )
+	) {
+		return childPath.get( 'declaration' );
+	}
+
+	return null;
 }
 
 function isComponentName( name ) {

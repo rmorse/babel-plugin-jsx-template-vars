@@ -80,6 +80,81 @@ export async function renderTemplateFixture(language, source, exportName, props 
 	}
 }
 
+export async function renderTemplateModules(language, sources, entryFilename, exportName, props = {}, pluginOptions = {}) {
+	const runtime = await import('../language/index.js');
+	const normalizedSources = new Map(Object.entries(sources).map(([ filename, source ]) => [
+		path.normalize(path.resolve(filename)),
+		source,
+	]));
+	const transformed = new Map();
+	normalizedSources.forEach((source, filename) => {
+		transformed.set(filename, transformTemplateVars(source, { language, ...pluginOptions }, { filename }).code);
+	});
+
+	const modules = new Map();
+	const previousWindow = globalThis.window;
+	const windowObject = {};
+
+	globalThis.window = windowObject;
+
+	try {
+		const loadModule = (filename) => {
+			const normalizedFilename = path.normalize(path.resolve(filename));
+			if (modules.has(normalizedFilename)) {
+				return modules.get(normalizedFilename);
+			}
+
+			const code = transformed.get(normalizedFilename);
+			if (!code) {
+				throw new Error(`No transformed module found for ${ normalizedFilename }`);
+			}
+
+			const module = { exports: {} };
+			modules.set(normalizedFilename, module.exports);
+			const execute = new Function(
+				'module',
+				'exports',
+				'h',
+				'Fragment',
+				'window',
+				'getLanguageString',
+				'getLanguageReplace',
+				'getLanguageList',
+				'getLanguageControl',
+				'loadModule',
+				`${ rewriteRelativeImportsForExecution(code, normalizedFilename) }\nreturn module.exports;`
+			);
+
+			const exports = execute(
+				module,
+				module.exports,
+				h,
+				Fragment,
+				windowObject,
+				runtime.getLanguageString,
+				runtime.getLanguageReplace,
+				runtime.getLanguageList,
+				runtime.getLanguageControl,
+				loadModule
+			);
+			modules.set(normalizedFilename, exports);
+			return exports;
+		};
+
+		const entryExports = loadModule(entryFilename);
+		return {
+			codeByFile: Object.fromEntries(transformed),
+			output: entryExports[ exportName ](props),
+		};
+	} finally {
+		if (typeof previousWindow === 'undefined') {
+			delete globalThis.window;
+		} else {
+			globalThis.window = previousWindow;
+		}
+	}
+}
+
 export function normalizeTemplateOutput(value) {
 	return String(value).replace(/\r\n/g, '\n').trim();
 }
@@ -107,6 +182,38 @@ function h(type, props, ...children) {
 	}
 
 	return `<${ type }${ attrs }>${ renderedChildren }</${ type }>`;
+}
+
+function rewriteRelativeImportsForExecution(code, filename) {
+	const exportedNames = [];
+	const nextCode = code
+		.replace(/import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, imports, source) => {
+			const resolved = resolveRelativeModuleForExecution(filename, source);
+			return `const { ${ imports.trim() } } = loadModule(${ JSON.stringify(resolved) });\n`;
+		})
+		.replace(/export\s+const\s+([A-Za-z_$][\w$]*)\s*=/g, (_match, name) => {
+			exportedNames.push(name);
+			return `const ${ name } =`;
+		})
+		.replace(/module\.exports\s*=\s*\{\s*([^}]+?)\s*\};?/g, (_match, exportsList) => {
+			return `module.exports = { ${ exportsList.trim() } };`;
+		});
+
+	if (exportedNames.length === 0) {
+		return nextCode;
+	}
+
+	return `${ nextCode }\nObject.assign(module.exports, { ${ exportedNames.join(', ') } });`;
+}
+
+function resolveRelativeModuleForExecution(filename, source) {
+	if (!source.startsWith('.')) {
+		return source;
+	}
+
+	const base = path.resolve(path.dirname(filename), source);
+	const extension = path.extname(base);
+	return path.normalize(extension ? base : `${ base }.jsx`);
 }
 
 function renderAttributes(props) {
