@@ -242,7 +242,10 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 				return;
 			}
 
-			if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
+			if (
+				validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) ||
+				( sourcePaths.size > 1 && ! isListRelativeMultiSourceSeed( validationTraces, sourcePaths ) )
+			) {
 				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 				const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
 				diagnostics.unsupported( componentPath, message, config );
@@ -285,7 +288,10 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 			return;
 		}
 
-		if ( validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) || sourcePaths.size > 1 ) {
+		if (
+			validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) ||
+			( sourcePaths.size > 1 && ! isListRelativeMultiSourceSeed( validationTraces, sourcePaths ) )
+		) {
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
 			diagnostics.unsupported( componentPath, message, config );
@@ -329,6 +335,7 @@ function createStoreSelectorDynamicRootAliases( componentPath, traces = [], babe
 		const sourcePaths = new Set( propTraces.map( trace => trace.path || stringifySegments( trace.segments || [] ) ) );
 		if (
 			( sourcePaths.size <= 1 && ! propTraces.some( trace => trace.dynamicRoot ) ) ||
+			propTraces.some( trace => traceHasListContext( trace ) ) ||
 			propTraces.some( trace => trace.unsupported ) ||
 			! childPropHasObjectRootUsage( componentPath, propName, babel )
 		) {
@@ -373,8 +380,26 @@ function isObjectRootMultiSourceSeedAmbiguity( traces, sourcePaths ) {
 }
 
 function traceHasListContext( trace ) {
-	const segments = normalizeCanonicalSegments( trace.declarationSegments || trace.segments || [] );
+	const segments = [
+		...normalizeCanonicalSegments( trace.segments || [] ),
+		...normalizeCanonicalSegments( trace.declarationSegments || [] ),
+	];
 	return segments.some( segment => String( segment ).endsWith( '[]' ) );
+}
+
+function isListRelativeMultiSourceSeed( traces, sourcePaths ) {
+	if (
+		sourcePaths.size <= 1 ||
+		traces.length === 0 ||
+		! traces.every( trace => trace.seedOnly && ! trace.unsupported && traceHasListContext( trace ) )
+	) {
+		return false;
+	}
+
+	const declarationKeys = new Set( traces.map( trace => normalizeCanonicalSegments(
+		trace.declarationSegments || trace.segments || []
+	).join( '.' ) ) );
+	return declarationKeys.size === 1;
 }
 
 function reportObjectRootMultiSourceAmbiguity( componentPath, propName, traces, sourcePaths ) {

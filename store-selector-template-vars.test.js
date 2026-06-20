@@ -804,6 +804,60 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		[
+			'handlebars',
+			'<main>{{#products}}<article><h2>{{name}}</h2><ul>{{#badges}}<li>{{label}}</li>{{/badges}}</ul></article>{{/products}}{{#saleProducts}}<article><h2>{{name}}</h2><ul>{{#badges}}<li>{{label}}</li>{{/badges}}</ul></article>{{/saleProducts}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><h2><?php echo $data_1['name']; ?></h2><ul><?php foreach ( $data_1['badges'] as $data_2 ) { ?><li><?php echo $data_2['label']; ?></li><?php } ?></ul></article><?php } ?><?php foreach ( $data['saleProducts'] as $data_1 ) { ?><article><h2><?php echo $data_1['name']; ?></h2><ul><?php foreach ( $data_1['badges'] as $data_2 ) { ?><li><?php echo $data_2['label']; ?></li><?php } ?></ul></article><?php } ?></main>",
+		],
+	])('auto-seeds same-file list-relative children from multiple list roots for %s', async (language, expected) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ProductCard = ({ product, badges }) => (
+				<article>
+					<h2>{ product.name }</h2>
+					<ul>
+						{ badges.map((badge) => (
+							<li>{ badge.label }</li>
+						)) }
+					</ul>
+				</article>
+			);
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				const saleProducts = useStoreSelector((state) => state.saleProducts);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard product={ product } badges={ product.badges } />
+						)) }
+						{ saleProducts.map((product) => (
+							<ProductCard product={ product } badges={ product.badges } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, {
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		});
+
+		expectNoOrphanedTemplateReplacements(code, [ 'product.name' ]);
+		expect(code).not.toContain('{{#products}}{{#products}}');
+		expect(code).not.toContain("data_1['products']");
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it('builds a cross-file manifest for direct relative named imports', async () => {
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
@@ -963,6 +1017,115 @@ describe('experimental store selectors', () => {
 
 		expect(manifest.diagnostics).toEqual([]);
 		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name', 'product.badges', 'badge.label' ]);
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
+			'handlebars',
+			'ProductsPage',
+			'<main>{{#products}}<article><h2>{{name}}</h2><ul>{{#badges}}<li>{{label}}</li>{{/badges}}</ul></article>{{/products}}</main>',
+		],
+		[
+			'handlebars',
+			'SalePage',
+			'<main>{{#saleProducts}}<article><h2>{{name}}</h2><ul>{{#badges}}<li>{{label}}</li>{{/badges}}</ul></article>{{/saleProducts}}</main>',
+		],
+		[
+			'php',
+			'ProductsPage',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><h2><?php echo $data_1['name']; ?></h2><ul><?php foreach ( $data_1['badges'] as $data_2 ) { ?><li><?php echo $data_2['label']; ?></li><?php } ?></ul></article><?php } ?></main>",
+		],
+		[
+			'php',
+			'SalePage',
+			"<main><?php foreach ( $data['saleProducts'] as $data_1 ) { ?><article><h2><?php echo $data_1['name']; ?></h2><ul><?php foreach ( $data_1['badges'] as $data_2 ) { ?><li><?php echo $data_2['label']; ?></li><?php } ?></ul></article><?php } ?></main>",
+		],
+	])('traces cross-file list-relative children from multiple list roots for %s %s', async (language, exportName, expected) => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'ProductCard.jsx': `
+				export const ProductCard = ({ product, badges }) => (
+					<article>
+						<h2>{ product.name }</h2>
+						<ul>
+							{ badges.map((badge) => (
+								<li>{ badge.label }</li>
+							)) }
+						</ul>
+					</article>
+				);
+			`,
+			'ProductsPage.jsx': `
+				import { ProductCard } from './ProductCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const ProductsPage = () => {
+					const products = useStoreSelector((state) => state.products);
+					return (
+						<main>
+							{ products.map((product) => (
+								<ProductCard product={ product } badges={ product.badges } />
+							)) }
+						</main>
+					);
+				};
+
+				module.exports = { ProductsPage };
+			`,
+			'SalePage.jsx': `
+				import { ProductCard } from './ProductCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const SalePage = () => {
+					const saleProducts = useStoreSelector((state) => state.saleProducts);
+					return (
+						<main>
+							{ saleProducts.map((product) => (
+								<ProductCard product={ product } badges={ product.badges } />
+							)) }
+						</main>
+					);
+				};
+
+				module.exports = { SalePage };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+		const { codeByFile, output } = await renderTemplateModules(
+			language,
+			files,
+			path.join(root, `${ exportName }.jsx`),
+			exportName,
+			{},
+			options
+		);
+		const combinedCode = Object.values(codeByFile).join('\n');
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'ProductCard.jsx')].ProductCard).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'product',
+				segments: [ 'products[]' ],
+				declarationSegments: [],
+			}),
+			expect.objectContaining({
+				localName: 'badges',
+				segments: [ 'products[]', 'badges' ],
+				declarationSegments: [ 'badges' ],
+			}),
+		]));
+		expect(manifest.debug.seedEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				sourceComponentName: 'SalePage',
+				sourcePath: 'saleProducts[]',
+				declarationPath: '',
+				strategy: 'list-relative-shared',
+			}),
+		]));
+		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name' ]);
+		expect(combinedCode).not.toContain("data_1['products']");
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 

@@ -556,6 +556,22 @@ function addManifestSeedAlias(
 	}
 
 	if ( existingState && existingState.sourceKey !== sourceKey ) {
+		if ( isListRelativeSeedAliasConflict( existingState.seedAlias, seedAlias ) ) {
+			debug.seedEdges.push( {
+				sourceFilename: source.sourceFilename,
+				sourceComponentName: source.sourceComponentName,
+				sourceChildComponentName: source.sourceChildComponentName,
+				targetFilename: normalizedFilename,
+				targetComponentName: componentName,
+				localName: existingState.seedAlias.localName,
+				memberName: existingState.seedAlias.memberName,
+				sourcePath: stringifySegments( seedAlias.segments || [] ),
+				declarationPath: stringifySegments( seedAlias.declarationSegments || [] ),
+				strategy: 'list-relative-shared',
+			} );
+			return false;
+		}
+
 		const dynamicRootAlias = createDynamicRootAliasForSeedConflict(
 			componentPath,
 			componentName,
@@ -858,6 +874,19 @@ function seedAliasHasListContext( seedAlias ) {
 		...( seedAlias?.segments || [] ),
 		...( seedAlias?.declarationSegments || [] ),
 	].some( segment => String( segment ).endsWith( '[]' ) );
+}
+
+function isListRelativeSeedAliasConflict( existingSeedAlias, seedAlias ) {
+	if (
+		getSeedAliasPropName( existingSeedAlias ) !== getSeedAliasPropName( seedAlias ) ||
+		! seedAliasHasListContext( existingSeedAlias ) ||
+		! seedAliasHasListContext( seedAlias )
+	) {
+		return false;
+	}
+
+	return stringifySegments( existingSeedAlias.declarationSegments || [] ) ===
+		stringifySegments( seedAlias.declarationSegments || [] );
 }
 
 function getTopLevelComponentPaths( programPath, types ) {

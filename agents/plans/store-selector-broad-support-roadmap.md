@@ -50,6 +50,13 @@ Already implemented and reviewed:
   parse errors diagnose instead of throwing, TS/TSX parse intentionally,
   extensionless/index resolution is locked down, unsupported component
   declarations diagnose, and import cycles fail closed.
+- Minimal mixed-context policy for list-relative work: scalar member
+  multi-source remains parent-materialized when possible, list/non-list reuse
+  fails closed unless safe, and explicit flat hint collision behavior remains
+  registry-validated.
+- Same-file and cross-file list-relative multi-source support for compatible
+  child-relative shapes, including whole item props and object-field list props
+  such as `badges={ product.badges }`.
 - Descriptor hardening:
   - generated runtime helper imports
   - transform-time containment for bare descriptors
