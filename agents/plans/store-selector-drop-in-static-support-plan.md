@@ -145,6 +145,10 @@ Required fixtures:
   hard errors with clear relevance
 - type-only imports/exports are ignored for runtime resolution and do not
   produce unsupported import diagnostics
+- partial barrel failure follows this same tiered model: an unresolved or
+  skipped barrel hop removes that import edge, but it hard-errors only when
+  selector-derived data crosses the skipped edge at a JSX callsite, unless
+  fail-all mode is enabled
 
 ## Definition Of Drop-In Static Support
 
@@ -281,6 +285,12 @@ Implementation guidance:
 
 - Treat a barrel as an edge, not as a component file.
 - Keep cycle detection on the export graph as well as the import graph.
+- Apply partial success per import edge. One bad re-export should not poison the
+  whole file if other import edges resolve cleanly and selector data does not
+  cross the skipped edge.
+- Hard-error at transform/callsite time when selector-derived data would cross
+  an unresolved, unsupported, or ambiguous barrel edge. Keep unrelated barrel
+  diagnostics as manifest/debug entries unless fail-all mode is enabled.
 - Store debug edges for each hop so reviewers can see:
 
   ```txt
@@ -350,12 +360,17 @@ Implementation guidance:
 - Store namespace imports in manifest import records instead of immediately
   diagnosing.
 - Resolve `Cards.Header` at callsite collection time to the target export.
+- Treat namespace support as a manifest schema change. Callsite contexts and
+  debug payloads must carry the original JSX tag and the namespace import edge
+  through any barrel hops.
 - Keep debug metadata readable:
 
   ```txt
   jsxTag: "Cards.Header"
   namespaceLocalName: "Cards"
   exportedName: "Header"
+  importEdgeId: "..."
+  exportHopIds: [ "..." ]
   targetFile: ...
   ```
 
@@ -726,6 +741,9 @@ Potential next support:
 
 Recommendation:
 
+- Treat this as orthogonal to import/export work. Inventory it in Phase 0 and
+  implement nested static optional chains as a parallel quick win if the current
+  collector does not already support them.
 - Treat static optional member chains as normal member chains.
 - Keep computed optional members hard-error:
 
@@ -852,6 +870,10 @@ Tasks:
 - Add a plan-specific fixture inventory.
 - Ensure every current import diagnostic has a stable `kind`.
 - Ensure e2e selector fixtures keep orphaned generated artifact checks.
+- Add at least one module e2e fixture that asserts cross-file debug metadata,
+  not only unit-level debug payloads.
+- Inventory current optional chaining coverage, including nested static chains
+  and dynamic-root/cross-file child usage.
 - Record current unsupported import/component shapes in debug metadata.
 - Add reviewer-facing docs for supported static subset vs dynamic subset.
 
@@ -859,6 +881,7 @@ Exit gates:
 
 - full suite passes
 - no existing broad-support fixture behavior changes
+- module e2e debug metadata assertion covers at least one cross-file edge
 - debug metadata for unsupported default/namespace/package/barrel imports remains
   stable
 
@@ -1034,12 +1057,17 @@ Exit gates:
 
 ### Phase 7: Children Composition Expansion
 
-Goal: support normal layout wrappers that pass children through unchanged.
+Goal: prove the net-new `children` gaps around layout wrappers. Direct scalar
+children passthrough and supported list-rendering children already exist; do not
+rebuild them as a new feature.
 
 Tasks:
 
-- Classify direct children passthrough wrappers.
+- Inventory existing direct `children` passthrough and JSX-element-in-children
+  behavior in Phase 0/e2e fixtures.
 - Support static layout passthrough with wrapper-owned markup.
+- Prove cross-file wrapper components preserve selector callsite contexts.
+- Prove nested wrappers preserve selector callsite contexts.
 - Ensure selector components inside children keep their own callsite contexts.
 - Keep children manipulation diagnostic-only.
 
