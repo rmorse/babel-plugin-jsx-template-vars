@@ -201,7 +201,7 @@ function rewriteRelativeImportsForExecution(code, filename) {
 	const nextCode = code
 		.replace(/import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, imports, source) => {
 			const resolved = resolveRelativeModuleForExecution(filename, source);
-			return `const { ${ imports.trim() } } = loadModule(${ JSON.stringify(resolved) });\n`;
+			return `const { ${ rewriteNamedImportsForExecution(imports) } } = loadModule(${ JSON.stringify(resolved) });\n`;
 		})
 		.replace(/export\s+const\s+([A-Za-z_$][\w$]*)\s*=/g, (_match, name) => {
 			exportedNames.push(name);
@@ -216,6 +216,18 @@ function rewriteRelativeImportsForExecution(code, filename) {
 	}
 
 	return `${ nextCode }\nObject.assign(module.exports, { ${ exportedNames.join(', ') } });`;
+}
+
+function rewriteNamedImportsForExecution(imports) {
+	return imports
+		.split(',')
+		.map((importName) => importName.trim())
+		.filter(Boolean)
+		.map((importName) => {
+			const aliasMatch = importName.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+			return aliasMatch ? `${ aliasMatch[1] }: ${ aliasMatch[2] }` : importName;
+		})
+		.join(', ');
 }
 
 function resolveRelativeModuleForExecution(filename, source) {

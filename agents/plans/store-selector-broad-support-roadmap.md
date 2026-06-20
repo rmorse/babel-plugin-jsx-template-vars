@@ -50,6 +50,12 @@ Already implemented and reviewed:
   parse errors diagnose instead of throwing, TS/TSX parse intentionally,
   extensionless/index resolution is locked down, unsupported component
   declarations diagnose, and import cycles fail closed.
+- Relative named import breadth:
+  - renamed named imports, such as `import { Header as PageHeader }`, trace
+    correctly
+  - multiple exports from one child file keep independent component/prop
+    decisions
+  - default, package, and namespace imports remain diagnostic-only
 - Minimal mixed-context policy for list-relative work: scalar member
   multi-source remains parent-materialized when possible, list/non-list reuse
   fails closed unless safe, and explicit flat hint collision behavior remains
@@ -393,6 +399,11 @@ Remain fail-closed:
 
 The initial cross-file support should remain narrow. Broaden only after the
 manifest shape and diagnostics are stable.
+
+Status: relative named import breadth is now covered for direct imports,
+renamed named imports, multiple exports from one child file, extensionless
+resolution, and index resolution. Default, namespace, package, and path-alias
+imports remain diagnostic-only or future gated support.
 
 Prioritized support or diagnostics:
 

@@ -920,6 +920,54 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
 	});
 
+	it('traces renamed relative named imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header as PageHeader } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><PageHeader hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'PageHeader' ]);
+		expect(manifest.debug.importEdges).toEqual([
+			expect.objectContaining({
+				localName: 'PageHeader',
+				importedName: 'Header',
+				targetComponentName: 'Header',
+			}),
+		]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				segments: [ 'hero' ],
+			}),
+		]);
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
 	it('does not consume a cross-file manifest unless crossFile is enabled', async () => {
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
@@ -1126,6 +1174,81 @@ describe('experimental store selectors', () => {
 		]));
 		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name' ]);
 		expect(combinedCode).not.toContain("data_1['products']");
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
+			'HomePage',
+			'<main><header><h1>{{home.hero.title}}</h1></header><aside>{{home.author.name}}</aside></main>',
+		],
+		[
+			'ArticlePage',
+			'<main><header><h1>{{article.hero.title}}</h1></header><aside>{{article.author.name}}</aside></main>',
+		],
+	])('tracks multiple exports from one child file independently for %s', async (exportName, expected) => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Panels.jsx': `
+				export const Header = ({ hero }) => <header><h1>{ hero.title }</h1></header>;
+				export const AuthorCard = ({ author }) => <aside>{ author.name }</aside>;
+			`,
+			'HomePage.jsx': `
+				import { Header, AuthorCard } from './Panels.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const HomePage = () => {
+					const hero = useStoreSelector((state) => state.home.hero);
+					const author = useStoreSelector((state) => state.home.author);
+					return <main><Header hero={ hero } /><AuthorCard author={ author } /></main>;
+				};
+
+				module.exports = { HomePage };
+			`,
+			'ArticlePage.jsx': `
+				import { Header, AuthorCard } from './Panels.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const ArticlePage = () => {
+					const hero = useStoreSelector((state) => state.article.hero);
+					const author = useStoreSelector((state) => state.article.author);
+					return <main><Header hero={ hero } /><AuthorCard author={ author } /></main>;
+				};
+
+				module.exports = { ArticlePage };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, `${ exportName }.jsx`),
+			exportName,
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Panels.jsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				dynamicRoot: true,
+			}),
+		]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Panels.jsx')].AuthorCard).toEqual([
+			expect.objectContaining({
+				localName: 'author',
+				dynamicRoot: true,
+			}),
+		]);
+		expect(manifest.childRelativeDiscoveryByFile[path.join(root, 'Panels.jsx')]).toEqual({
+			Header: [ expect.objectContaining({ propName: 'hero' }) ],
+			AuthorCard: [ expect.objectContaining({ propName: 'author' }) ],
+		});
+		expect(manifest.callsiteContextsByFile[path.join(root, 'HomePage.jsx')]).toHaveLength(2);
+		expect(manifest.callsiteContextsByFile[path.join(root, 'ArticlePage.jsx')]).toHaveLength(2);
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 
