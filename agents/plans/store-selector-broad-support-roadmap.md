@@ -46,6 +46,10 @@ Already implemented and reviewed:
 - Direct cross-file path-polymorphic object roots for relative named imports,
   with parent-side descriptor callsite contexts and child-side relative
   dynamic-root discovery.
+- Manifest parser/resolver/component-shape hardening for cross-file tracing:
+  parse errors diagnose instead of throwing, TS/TSX parse intentionally,
+  extensionless/index resolution is locked down, unsupported component
+  declarations diagnose, and import cycles fail closed.
 - Descriptor hardening:
   - generated runtime helper imports
   - transform-time containment for bare descriptors

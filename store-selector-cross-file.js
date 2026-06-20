@@ -9,16 +9,19 @@ const {
 } = require( './store-selector-template-vars' );
 
 function createStoreSelectorCrossFileManifest( files, options = {} ) {
-	const records = createFileRecords( files );
 	const diagnostics = [];
 	const debug = {
 		importEdges: [],
 		seedEdges: [],
 		callsiteContexts: [],
 		skippedImports: [],
+		skippedFiles: [],
+		importCycles: [],
 		ambiguousSeeds: [],
 	};
+	const records = createFileRecords( files, diagnostics, debug );
 	resolveRecordImports( records, diagnostics, debug );
+	detectImportCycles( records, diagnostics, debug );
 
 	const seedAliasesByFile = {};
 	const dynamicRootPropsByFile = {};
@@ -27,9 +30,12 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const seedAliasStates = new Map();
 	const totalComponents = Array.from( records.values() )
 		.reduce( ( count, record ) => count + record.componentPaths.size, 0 );
+	debug.maxPasses = Math.max( totalComponents, 1 );
+	debug.passCount = 0;
 
-	for ( let pass = 0; pass < Math.max( totalComponents, 1 ); pass++ ) {
+	for ( let pass = 0; pass < debug.maxPasses; pass++ ) {
 		let addedSeed = false;
+		debug.passCount = pass + 1;
 
 		records.forEach( ( record ) => {
 			const componentNames = getRecordComponentNames( record );
@@ -121,20 +127,32 @@ function annotateSelectorResultSource( selectorResult, sourceFilename, sourceCom
 	};
 }
 
-function createFileRecords( files ) {
+function createFileRecords( files, diagnostics, debug ) {
 	const normalizedFiles = normalizeFiles( files );
 	const records = new Map();
 
 	normalizedFiles.forEach( ( source, filename ) => {
-		const ast = babel.parseSync( source, {
-			filename,
-			babelrc: false,
-			configFile: false,
-			sourceType: 'unambiguous',
-			parserOpts: {
-				plugins: [ 'jsx' ],
-			},
-		} );
+		let ast;
+		try {
+			ast = babel.parseSync( source, {
+				filename,
+				babelrc: false,
+				configFile: false,
+				sourceType: 'unambiguous',
+				parserOpts: {
+					plugins: getParserPlugins( filename ),
+				},
+			} );
+		} catch ( error ) {
+			const diagnostic = {
+				kind: 'parse-error',
+				filename,
+				message: `Store selector cross-file tracing could not parse "${ filename }": ${ error.message }`,
+			};
+			diagnostics.push( diagnostic );
+			debug.skippedFiles.push( diagnostic );
+			return;
+		}
 		let programPath;
 		babel.traverse( ast, {
 			Program( path ) {
@@ -148,6 +166,7 @@ function createFileRecords( files ) {
 			source,
 			programPath,
 			componentPaths: getTopLevelComponentPaths( programPath, babel.types ),
+			unsupportedComponents: getUnsupportedComponentDeclarations( programPath, babel.types ),
 			selectorImports: collectStoreSelectorImports( programPath, babel ),
 			imports: new Map(),
 			rawImports: collectRawComponentImports( programPath, filename ),
@@ -155,6 +174,15 @@ function createFileRecords( files ) {
 	} );
 
 	return records;
+}
+
+function getParserPlugins( filename ) {
+	const extension = path.extname( filename ).toLowerCase();
+	const plugins = [ 'jsx' ];
+	if ( extension === '.ts' || extension === '.tsx' ) {
+		plugins.push( 'typescript' );
+	}
+	return plugins;
 }
 
 function normalizeFiles( files ) {
@@ -279,6 +307,23 @@ function resolveRecordImports( records, diagnostics, debug ) {
 			const targetComponentName = importInfo.importedName;
 
 			if ( ! targetComponentName || ! targetRecord.componentPaths.has( targetComponentName ) ) {
+				const unsupportedComponent = targetRecord.unsupportedComponents?.get( targetComponentName );
+				if ( unsupportedComponent ) {
+					diagnostics.push( {
+						kind: 'unsupported-component-declaration',
+						filename: record.filename,
+						source: importInfo.source,
+						localName: importInfo.localName,
+						importedName: importInfo.importedName,
+						targetFilename,
+						componentName: targetComponentName,
+						declarationKind: unsupportedComponent.kind,
+						message: `Store selector cross-file tracing does not support component declaration "${ targetComponentName }" in "${ targetFilename }" (${ unsupportedComponent.kind }).`,
+					} );
+					debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, targetFilename ) );
+					return;
+				}
+
 				diagnostics.push( {
 					kind: 'unsupported-reexport',
 					filename: record.filename,
@@ -306,6 +351,52 @@ function resolveRecordImports( records, diagnostics, debug ) {
 				targetComponentName,
 			} );
 		} );
+	} );
+}
+
+function detectImportCycles( records, diagnostics, debug ) {
+	const visiting = new Set();
+	const visited = new Set();
+	const cyclicFiles = new Set();
+
+	const visit = ( filename, stack ) => {
+		if ( cyclicFiles.has( filename ) ) {
+			return;
+		}
+		if ( visiting.has( filename ) ) {
+			const cycle = [ ...stack.slice( stack.indexOf( filename ) ), filename ];
+			const normalizedCycle = cycle.map( normalizeFilename );
+			normalizedCycle.forEach( file => cyclicFiles.add( file ) );
+			const diagnostic = {
+				kind: 'import-cycle',
+				filename,
+				files: normalizedCycle,
+				message: `Store selector cross-file tracing detected an import cycle: ${ normalizedCycle.join( ' -> ' ) }.`,
+			};
+			diagnostics.push( diagnostic );
+			debug.importCycles.push( diagnostic );
+			return;
+		}
+		if ( visited.has( filename ) ) {
+			return;
+		}
+
+		visiting.add( filename );
+		const record = records.get( filename );
+		record?.imports.forEach( imported => {
+			visit( normalizeFilename( imported.filename ), [ ...stack, filename ] );
+		} );
+		visiting.delete( filename );
+		visited.add( filename );
+	};
+
+	records.forEach( ( _record, filename ) => visit( filename, [] ) );
+
+	cyclicFiles.forEach( ( filename ) => {
+		const record = records.get( filename );
+		if ( record ) {
+			record.imports.clear();
+		}
 	} );
 }
 
@@ -792,6 +883,66 @@ function getTopLevelComponentPaths( programPath, types ) {
 		components.set( declaration.id.name, declarationPath );
 	} );
 	return components;
+}
+
+function getUnsupportedComponentDeclarations( programPath, types ) {
+	const unsupported = new Map();
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		const node = childPath.node;
+
+		if ( types.isFunctionDeclaration( node ) && node.id && isComponentName( node.id.name ) ) {
+			unsupported.set( node.id.name, {
+				kind: 'function-declaration',
+			} );
+			return;
+		}
+
+		if ( types.isExportNamedDeclaration( node ) && types.isFunctionDeclaration( node.declaration ) ) {
+			const name = node.declaration.id?.name;
+			if ( isComponentName( name ) ) {
+				unsupported.set( name, {
+					kind: 'export-function-declaration',
+				} );
+			}
+			return;
+		}
+
+		if ( types.isExportDefaultDeclaration( node ) ) {
+			const declaration = node.declaration;
+			if ( types.isIdentifier( declaration ) && isComponentName( declaration.name ) ) {
+				unsupported.set( declaration.name, {
+					kind: 'export-default-identifier',
+				} );
+				return;
+			}
+			if ( types.isFunctionDeclaration( declaration ) ) {
+				const name = declaration.id?.name || 'default';
+				if ( name === 'default' || isComponentName( name ) ) {
+					unsupported.set( name, {
+						kind: 'export-default-function',
+					} );
+				}
+			}
+			return;
+		}
+
+		const declarationPath = getVariableDeclarationPath( childPath, types );
+		if ( ! declarationPath || declarationPath.node.declarations.length !== 1 ) {
+			return;
+		}
+
+		const declaration = declarationPath.node.declarations[ 0 ];
+		if (
+			types.isIdentifier( declaration.id ) &&
+			isComponentName( declaration.id.name ) &&
+			types.isCallExpression( declaration.init )
+		) {
+			unsupported.set( declaration.id.name, {
+				kind: 'hoc-or-wrapper',
+			} );
+		}
+	} );
+	return unsupported;
 }
 
 function getVariableDeclarationPath( childPath, types ) {

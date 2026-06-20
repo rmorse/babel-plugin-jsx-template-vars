@@ -1226,6 +1226,175 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
+	it('records parser failures as manifest diagnostics without throwing', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				kind: 'parse-error',
+				filename: path.join(process.cwd(), '__cross_file_store_selector_tests__', 'Header.jsx'),
+			}),
+			expect.objectContaining({
+				kind: 'unresolved-import',
+				source: './Header.jsx',
+			}),
+		]));
+		expect(manifest.debug.skippedFiles).toEqual([
+			expect.objectContaining({
+				kind: 'parse-error',
+			}),
+		]);
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('parses TSX files intentionally during manifest discovery', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.tsx': `
+				type HeaderProps = { hero: { title: string } };
+				export const Header = ({ hero }: HeaderProps) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header } from './Header.tsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.tsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				segments: [ 'hero' ],
+				declarationSegments: [ 'hero' ],
+			}),
+		]);
+	});
+
+	it('diagnoses unsupported exported function components', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export function Header({ hero }) {
+					return <h1>{ hero.title }</h1>;
+				}
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-component-declaration',
+				componentName: 'Header',
+				declarationKind: 'export-function-declaration',
+			}),
+		]);
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('locks down extensionless and index relative import resolution', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'components/index.jsx': `
+				export const Footer = ({ hero }) => <footer>{ hero.title }</footer>;
+			`,
+			'App.jsx': `
+				import { Header } from './Header';
+				import { Footer } from './components';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /><Footer hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Footer', 'Header' ]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toHaveLength(1);
+		expect(manifest.seedAliasesByFile[path.join(root, 'components', 'index.jsx')].Footer).toHaveLength(1);
+	});
+
+	it('detects import cycles and skips tracing cyclic edges', () => {
+		const files = crossFileFixtureFiles({
+			'A.jsx': `
+				import { B } from './B.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				export const A = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <B hero={ hero } />;
+				};
+			`,
+			'B.jsx': `
+				import { A } from './A.jsx';
+
+				export const B = ({ hero }) => <A hero={ hero } />;
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'import-cycle',
+				files: expect.arrayContaining([
+					path.join(process.cwd(), '__cross_file_store_selector_tests__', 'A.jsx'),
+					path.join(process.cwd(), '__cross_file_store_selector_tests__', 'B.jsx'),
+				]),
+			}),
+		]);
+		expect(manifest.debug.importCycles).toHaveLength(1);
+		expect(manifest.debug.maxPasses).toBeGreaterThan(0);
+		expect(manifest.debug.passCount).toBeLessThanOrEqual(manifest.debug.maxPasses);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
 	it.each([
 		[
 			'handlebars',
