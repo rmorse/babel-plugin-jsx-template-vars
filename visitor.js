@@ -51,6 +51,7 @@ const {
 } = require( './component-adapter' );
 const {
 	collectStoreSelectorImports,
+	collectTransparentHookSummaries,
 	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
 	createAliasResolver,
@@ -60,6 +61,7 @@ const {
 	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
+	neutralizeTransparentHookSummaries,
 	removeUnusedImportSpecifiers,
 	removeStoreSelectorImportSpecifiers,
 } = require( './store-selector-template-vars' );
@@ -175,6 +177,7 @@ function templateVarsVisitor( babel, config ) {
 			}
 
 			const selectorImports = collectStoreSelectorImports( programPath, babel, config );
+			const hookSummaries = collectTransparentHookSummaries( programPath, selectorImports, babel );
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
 			const debugEntries = [];
@@ -208,6 +211,7 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
 						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
+						storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
 						storeSelectorNeutralizeSelectors: false,
 					} );
 					selectorResults.set( componentName, selectorResult );
@@ -273,6 +277,7 @@ function templateVarsVisitor( babel, config ) {
 					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
+					storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
 				} );
 				selectorResults.set( componentName, selectorResult );
 
@@ -382,6 +387,7 @@ function templateVarsVisitor( babel, config ) {
 				templateVarsController.init( templateVars, componentName, componentPath, babel, config );
 			} );
 
+			neutralizeTransparentHookSummaries( hookSummaries, babel );
 			assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel );
 			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
 			removeUnusedImportSpecifiers( selectorImports.reactHookImportSpecifiers );

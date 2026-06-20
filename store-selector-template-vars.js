@@ -219,6 +219,367 @@ function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, ba
 	return collector.collect();
 }
 
+function collectTransparentHookSummaries( programPath, selectorImports, babel ) {
+	const summariesByBinding = new WeakMap();
+	const summaries = [];
+	const summaryRecords = [];
+	const selectorLocalNames = selectorImports.localNames || new Set();
+
+	getTopLevelHookCandidates( programPath, babel ).forEach( ( candidate ) => {
+		const summary = createTransparentSourceHookSummary( candidate, selectorLocalNames, babel );
+		if ( ! summary ) {
+			return;
+		}
+
+		summariesByBinding.set( candidate.binding.identifier, summary );
+		summaryRecords.push( summary );
+		summaries.push( {
+			hookName: summary.hookName,
+			returnKind: 'source-selector',
+			segments: summary.segments,
+			declarationSegments: summary.declarationSegments,
+			strategy: summary.strategy,
+		} );
+	} );
+
+	return {
+		summariesByBinding,
+		summaryRecords,
+		summaries,
+	};
+}
+
+function getTopLevelHookCandidates( programPath, babel ) {
+	const { types } = babel;
+	const candidates = [];
+
+	const collectFromDeclarationPath = ( declarationPath ) => {
+		if ( ! declarationPath?.node ) {
+			return;
+		}
+
+		if ( types.isFunctionDeclaration( declarationPath.node ) ) {
+			const name = declarationPath.node.id?.name;
+			if ( ! isHookName( name ) ) {
+				return;
+			}
+			const binding = declarationPath.scope.getBinding( name );
+			if ( binding ) {
+				candidates.push( {
+					hookName: name,
+					binding,
+					functionPath: declarationPath,
+					declarationPath,
+				} );
+			}
+			return;
+		}
+
+		if ( types.isVariableDeclaration( declarationPath.node ) ) {
+			declarationPath.get( 'declarations' ).forEach( ( declaratorPath ) => {
+				const { id, init } = declaratorPath.node;
+				if ( ! types.isIdentifier( id ) || ! isHookName( id.name ) ) {
+					return;
+				}
+				if ( ! types.isArrowFunctionExpression( init ) && ! types.isFunctionExpression( init ) ) {
+					return;
+				}
+
+				const binding = declaratorPath.scope.getBinding( id.name );
+				if ( binding ) {
+					candidates.push( {
+						hookName: id.name,
+						binding,
+						functionPath: declaratorPath.get( 'init' ),
+						declarationPath,
+						declaratorPath,
+						constantDeclaration: declarationPath.node.kind === 'const',
+					} );
+				}
+			} );
+		}
+	};
+
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		if ( types.isExportNamedDeclaration( childPath.node ) && childPath.node.declaration ) {
+			collectFromDeclarationPath( childPath.get( 'declaration' ) );
+			return;
+		}
+
+		collectFromDeclarationPath( childPath );
+	} );
+
+	return candidates;
+}
+
+function createTransparentSourceHookSummary( candidate, selectorLocalNames, babel ) {
+	const { functionPath } = candidate;
+	const node = functionPath.node;
+	if ( node.async || node.generator || node.params.length > 0 ) {
+		if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
+			diagnostics.error( functionPath, `Store selector unsupported-hook-body: hook "${ candidate.hookName }" must be a synchronous zero-argument source hook before it can wrap store selectors.` );
+		}
+		return null;
+	}
+
+	if ( candidate.constantDeclaration === false && hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
+		diagnostics.error( functionPath, `Store selector unsupported-hook-reassignment: hook "${ candidate.hookName }" must be declared with const before it can wrap store selectors.` );
+	}
+
+	if ( hookBodyContainsDisallowedHookCall( functionPath, babel ) ) {
+		if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
+			diagnostics.error( functionPath, `Store selector unsupported-hook-state-in-body: hook "${ candidate.hookName }" contains runtime hook work and cannot be summarized as static selector data.` );
+		}
+		return null;
+	}
+
+	const summary = summarizeSourceHookReturn( candidate, selectorLocalNames, babel );
+	if ( summary ) {
+		return summary;
+	}
+
+	if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
+		diagnostics.error( functionPath, `Store selector unsupported-hook-body: hook "${ candidate.hookName }" contains store selector calls but does not have a supported single static return.` );
+	}
+	return null;
+}
+
+function summarizeSourceHookReturn( candidate, selectorLocalNames, babel ) {
+	const { types } = babel;
+	const functionPath = candidate.functionPath;
+	const node = functionPath.node;
+	const selectorAliases = new Map();
+
+	if ( types.isArrowFunctionExpression( node ) && ! types.isBlockStatement( node.body ) ) {
+		const bodyPath = functionPath.get( 'body' );
+		return summarizeHookReturnExpression( candidate, bodyPath, selectorAliases, selectorLocalNames, babel );
+	}
+
+	if ( ! types.isBlockStatement( node.body ) ) {
+		return null;
+	}
+
+	const statementPaths = functionPath.get( 'body.body' );
+	const returnStatements = statementPaths.filter( statementPath => types.isReturnStatement( statementPath.node ) );
+	if ( returnStatements.length !== 1 ) {
+		return null;
+	}
+
+	for ( const statementPath of statementPaths ) {
+		if ( statementPath.node === returnStatements[ 0 ].node ) {
+			continue;
+		}
+
+		if ( ! types.isVariableDeclaration( statementPath.node ) || statementPath.node.kind !== 'const' ) {
+			return null;
+		}
+
+		for ( const declaratorPath of statementPath.get( 'declarations' ) ) {
+			const { id, init } = declaratorPath.node;
+			if ( ! types.isIdentifier( id ) || ! isStoreSelectorCallNode( init, selectorLocalNames, babel ) ) {
+				return null;
+			}
+
+			const segments = parseStoreSelectorCall( init, declaratorPath, babel );
+			selectorAliases.set( id.name, {
+				segments,
+				declarationSegments: segments,
+				neutralizePath: declaratorPath.get( 'init' ),
+			} );
+		}
+	}
+
+	const returnArgumentPath = returnStatements[ 0 ].get( 'argument' );
+	if ( ! returnArgumentPath.node ) {
+		return null;
+	}
+
+	return summarizeHookReturnExpression( candidate, returnArgumentPath, selectorAliases, selectorLocalNames, babel );
+}
+
+function summarizeHookReturnExpression( candidate, expressionPath, selectorAliases, selectorLocalNames, babel ) {
+	const { types } = babel;
+	const expression = expressionPath.node;
+	if ( isStoreSelectorCallNode( expression, selectorLocalNames, babel ) ) {
+		const segments = parseStoreSelectorCall( expression, expressionPath, babel );
+		return {
+			hookName: candidate.hookName,
+			segments,
+			declarationSegments: segments,
+			neutralizePaths: [ expressionPath ],
+			strategy: 'same-file-source-hook',
+		};
+	}
+
+	if ( types.isIdentifier( expression ) && selectorAliases.has( expression.name ) ) {
+		const alias = selectorAliases.get( expression.name );
+		return {
+			hookName: candidate.hookName,
+			segments: alias.segments,
+			declarationSegments: alias.declarationSegments,
+			neutralizePaths: [ alias.neutralizePath ],
+			strategy: 'same-file-source-hook-alias',
+		};
+	}
+
+	return null;
+}
+
+function neutralizeTransparentHookSummaries( hookSummaries, babel ) {
+	if ( ! hookSummaries?.summaryRecords ) {
+		return;
+	}
+
+	const neutralized = new WeakSet();
+	( hookSummaries.summaryRecords || [] ).forEach( ( summary ) => {
+		( summary.neutralizePaths || [] ).forEach( ( neutralizePath ) => {
+			if ( ! neutralizePath?.node || neutralized.has( neutralizePath.node ) ) {
+				return;
+			}
+			neutralizePath.replaceWith( createNeutralExpressionNode( summary.segments, babel ) );
+			neutralized.add( neutralizePath.node );
+		} );
+	} );
+}
+
+function isHookName( name ) {
+	return typeof name === 'string' && /^use[A-Z]/.test( name );
+}
+
+function isStoreSelectorCallNode( node, selectorLocalNames, babel ) {
+	return Boolean(
+		node &&
+		babel.types.isCallExpression( node ) &&
+		babel.types.isIdentifier( node.callee ) &&
+		selectorLocalNames.has( node.callee.name )
+	);
+}
+
+function hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) {
+	let found = false;
+	functionPath.traverse( {
+		CallExpression( path ) {
+			if ( isStoreSelectorCallNode( path.node, selectorLocalNames, babel ) ) {
+				found = true;
+				path.stop();
+			}
+		},
+	} );
+	return found;
+}
+
+function hookBodyContainsDisallowedHookCall( functionPath, babel ) {
+	let found = false;
+	functionPath.traverse( {
+		CallExpression( path ) {
+			const calleeName = getStaticCalleeName( path.node.callee, babel );
+			if ( calleeName && REACT_STATEFUL_HOOKS.has( calleeName ) ) {
+				found = true;
+				path.stop();
+			}
+		},
+		AssignmentExpression( path ) {
+			found = true;
+			path.stop();
+		},
+		UpdateExpression( path ) {
+			found = true;
+			path.stop();
+		},
+	} );
+	return found;
+}
+
+function getStaticCalleeName( callee, babel ) {
+	if ( babel.types.isIdentifier( callee ) ) {
+		return callee.name;
+	}
+
+	if (
+		babel.types.isMemberExpression( callee ) &&
+		! callee.computed &&
+		babel.types.isIdentifier( callee.property )
+	) {
+		return callee.property.name;
+	}
+
+	return null;
+}
+
+function parseStoreSelectorCall( callExpression, path, babel ) {
+	const selector = callExpression.arguments[ 0 ];
+	if ( ! selector ) {
+		diagnostics.error( path, 'Store selector requires a selector function.' );
+	}
+
+	if (
+		! babel.types.isArrowFunctionExpression( selector ) &&
+		! babel.types.isFunctionExpression( selector )
+	) {
+		diagnostics.error( path, 'Store selector must be a function, for example useStoreSelector((state) => state.hero.title).' );
+	}
+
+	if ( selector.params.length !== 1 || ! babel.types.isIdentifier( selector.params[ 0 ] ) ) {
+		diagnostics.error( path, 'Store selector only supports one identifier parameter.' );
+	}
+
+	const paramName = selector.params[ 0 ].name;
+	let body = selector.body;
+	if ( babel.types.isBlockStatement( body ) ) {
+		const returnStatement = body.body.find( statement => babel.types.isReturnStatement( statement ) );
+		if ( ! returnStatement || ! returnStatement.argument ) {
+			diagnostics.error( path, 'Store selector block functions must return a static member path.' );
+		}
+		body = returnStatement.argument;
+	}
+
+	const segments = parseStoreSelectorExpression( body, paramName, path, babel );
+	if ( segments.length === 0 ) {
+		diagnostics.error( path, 'Store selector must select a child path from state.' );
+	}
+
+	return segments;
+}
+
+function parseStoreSelectorExpression( expression, paramName, path, babel ) {
+	const { types } = babel;
+	if ( types.isIdentifier( expression ) ) {
+		if ( expression.name !== paramName ) {
+			diagnostics.error( path, 'Store selector must read from its selector parameter.' );
+		}
+		return [];
+	}
+
+	const isMemberExpression = types.isMemberExpression( expression ) ||
+		( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
+		expression?.type === 'OptionalMemberExpression';
+	if ( ! isMemberExpression ) {
+		diagnostics.error( path, 'Store selector must be a static member path, for example useStoreSelector((state) => state.hero.title).' );
+	}
+
+	if ( expression.computed ) {
+		diagnostics.error( path, 'Store selector does not support computed properties yet.' );
+	}
+
+	if ( ! types.isIdentifier( expression.property ) ) {
+		diagnostics.error( path, 'Store selector only supports identifier properties.' );
+	}
+
+	return [
+		...parseStoreSelectorExpression( expression.object, paramName, path, babel ),
+		expression.property.name,
+	];
+}
+
+function createNeutralExpressionNode( segments, babel ) {
+	const { types } = babel;
+	const normalizedSegments = normalizeCanonicalSegments( segments || [] );
+	if ( normalizedSegments.some( segment => String( segment ).endsWith( '[]' ) ) ) {
+		return types.arrayExpression( [] );
+	}
+	return types.objectExpression( [] );
+}
+
 function createStoreSelectorPropAliases( componentPath, traces = [], babel, config = {} ) {
 	if ( traces.length === 0 ) {
 		return {
@@ -1100,18 +1461,26 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				if ( sourceInfo.transparentHook && path.parentPath?.node?.kind !== 'const' ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-reassignment: transparent hook result "${ id.name || '<pattern>' }" must be assigned with const before it can be used as static template data.`
+					);
+				}
+
+				if ( sourceInfo.transparentHook ) {
+					this.transparentHookDeclarations.push( {
+						path,
+						segments: sourceInfo.segments,
+					} );
+				}
+
 				if ( this.babel.types.isIdentifier( id ) ) {
 					this.registerAlias( id.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
 						dynamicRoot: sourceInfo.dynamicRoot,
 						dynamicRootSegments: sourceInfo.dynamicRootSegments,
 					} );
-					if ( this.isReactUseMemoCall( init, path.get( 'init' ) ) ) {
-						this.transparentHookDeclarations.push( {
-							path,
-							segments: sourceInfo.segments,
-						} );
-					}
 					if ( this.isSafeListChainCall( init ) ) {
 						this.registerSafeListChainCallbackAliases(
 							path.get( 'init' ),
@@ -1142,6 +1511,12 @@ class StoreSelectorCollector {
 
 				const sourceInfo = this.resolveExpressionInfo( right, path.get( 'right' ) );
 				if ( sourceInfo ) {
+					if ( sourceInfo.transparentHook ) {
+						diagnostics.error(
+							path,
+							`Store selector unsupported-hook-reassignment: transparent hook result "${ left.name }" must be assigned in a const declaration before it can be used as static template data.`
+						);
+					}
 					this.registerAlias( left.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
 						dynamicRoot: sourceInfo.dynamicRoot,
@@ -1903,77 +2278,15 @@ class StoreSelectorCollector {
 	}
 
 	parseSelectorCall( callExpression, path ) {
-		const selector = callExpression.arguments[ 0 ];
-		if ( ! selector ) {
-			diagnostics.error( path, 'Store selector requires a selector function.' );
-		}
-
-		if (
-			! this.babel.types.isArrowFunctionExpression( selector ) &&
-			! this.babel.types.isFunctionExpression( selector )
-		) {
-			diagnostics.error( path, 'Store selector must be a function, for example useStoreSelector((state) => state.hero.title).' );
-		}
-
-		if ( selector.params.length !== 1 || ! this.babel.types.isIdentifier( selector.params[ 0 ] ) ) {
-			diagnostics.error( path, 'Store selector only supports one identifier parameter.' );
-		}
-
-		const paramName = selector.params[ 0 ].name;
-		let body = selector.body;
-		if ( this.babel.types.isBlockStatement( body ) ) {
-			const returnStatement = body.body.find( statement => this.babel.types.isReturnStatement( statement ) );
-			if ( ! returnStatement || ! returnStatement.argument ) {
-				diagnostics.error( path, 'Store selector block functions must return a static member path.' );
-			}
-			body = returnStatement.argument;
-		}
-
-		const segments = this.parseSelectorExpression( body, paramName, path );
-		if ( segments.length === 0 ) {
-			diagnostics.error( path, 'Store selector must select a child path from state.' );
-		}
-
-		return segments;
+		return parseStoreSelectorCall( callExpression, path, this.babel );
 	}
 
 	parseSelectorExpression( expression, paramName, path ) {
-		const { types } = this.babel;
-		if ( types.isIdentifier( expression ) ) {
-			if ( expression.name !== paramName ) {
-				diagnostics.error( path, 'Store selector must read from its selector parameter.' );
-			}
-			return [];
-		}
-
-		const isMemberExpression = types.isMemberExpression( expression ) ||
-			( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
-			expression?.type === 'OptionalMemberExpression';
-		if ( ! isMemberExpression ) {
-			diagnostics.error( path, 'Store selector must be a static member path, for example useStoreSelector((state) => state.hero.title).' );
-		}
-
-		if ( expression.computed ) {
-			diagnostics.error( path, 'Store selector does not support computed properties yet.' );
-		}
-
-		if ( ! types.isIdentifier( expression.property ) ) {
-			diagnostics.error( path, 'Store selector only supports identifier properties.' );
-		}
-
-		return [
-			...this.parseSelectorExpression( expression.object, paramName, path ),
-			expression.property.name,
-		];
+		return parseStoreSelectorExpression( expression, paramName, path, this.babel );
 	}
 
 	isStoreSelectorCall( node ) {
-		return (
-			node &&
-			this.babel.types.isCallExpression( node ) &&
-			this.babel.types.isIdentifier( node.callee ) &&
-			this.selectorLocalNames.has( node.callee.name )
-		);
+		return isStoreSelectorCallNode( node, this.selectorLocalNames, this.babel );
 	}
 
 	registerSeedAliases() {
@@ -2468,8 +2781,15 @@ class StoreSelectorCollector {
 			return this.resolveIdentifierInfo( expression.name, path );
 		}
 
-		if ( types.isCallExpression( expression ) && this.isReactUseMemoCall( expression, path ) ) {
+		if ( path.node === expression && types.isCallExpression( expression ) && this.isReactUseMemoCall( expression, path ) ) {
 			return this.resolveUseMemoExpressionInfo( expression, path );
+		}
+
+		if ( path.node === expression && types.isCallExpression( expression ) ) {
+			const hookSummaryInfo = this.resolveTransparentHookSummaryInfo( expression, path );
+			if ( hookSummaryInfo ) {
+				return hookSummaryInfo;
+			}
 		}
 
 		if ( this.isStaticMemberExpressionNode( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
@@ -2527,11 +2847,48 @@ class StoreSelectorCollector {
 
 		const info = this.resolveExpressionInfo( callback.body, returnPath );
 		if ( info && isSelectorDerivedPath( info.segments ) ) {
-			return info;
+			return {
+				...info,
+				transparentHook: 'useMemo',
+			};
 		}
 
 		this.throwUnsupportedHookReturnIfSelectorDerived( path, [ returnPath ], 'useMemo return expressions must resolve to a selector-derived static path, object root, or list root.' );
 		return null;
+	}
+
+	resolveTransparentHookSummaryInfo( expression, path ) {
+		if (
+			! this.babel.types.isIdentifier( expression.callee ) ||
+			expression.arguments.length > 0
+		) {
+			const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) || [] );
+			if ( selectorSources.length > 0 && this.babel.types.isIdentifier( expression.callee ) ) {
+				const binding = path.scope.getBinding( expression.callee.name );
+				const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
+				if ( summary ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" is a source hook and cannot receive selector-derived arguments such as "${ stringifySegments( selectorSources[ 0 ] ) }".`
+					);
+				}
+			}
+			return null;
+		}
+
+		const binding = path.scope.getBinding( expression.callee.name );
+		const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
+		if ( ! summary ) {
+			return null;
+		}
+
+		return {
+			segments: summary.segments,
+			declarationSegments: summary.declarationSegments || summary.segments,
+			dynamicRoot: summary.dynamicRoot,
+			dynamicRootSegments: summary.dynamicRootSegments,
+			transparentHook: summary.hookName,
+		};
 	}
 
 	throwUnsupportedHookReturnIfSelectorDerived( path, expressionPaths, reason ) {
@@ -3048,6 +3405,7 @@ module.exports = {
 	STORE_SELECTOR_EXPORT,
 	assertNoUnprocessedStoreSelectorReferences,
 	collectStoreSelectorImports,
+	collectTransparentHookSummaries,
 	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
 	createStoreSelectorPropAliases,
@@ -3056,6 +3414,7 @@ module.exports = {
 	createAliasResolver,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
+	neutralizeTransparentHookSummaries,
 	removeUnusedImportSpecifiers,
 	removeStoreSelectorImportSpecifiers,
 };
