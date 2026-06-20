@@ -139,6 +139,11 @@ future work and should stay fail-closed.
 - Keep wrapper v1 limited to relative named imports if needed.
 - Do not bake in unstable manifest schema assumptions.
 
+Current status: a skeleton wrapper exists in `store-selector-project.js` for
+deterministic source discovery, manifest creation from filesystem sources, and
+Babel option handoff. Cache invalidation and bundler/watch integration remain
+future production-hardening work.
+
 ### 12. Diagnostics, Review Mode, And Stable API
 
 - Use stable diagnostic `kind` values for all skip/fail paths.

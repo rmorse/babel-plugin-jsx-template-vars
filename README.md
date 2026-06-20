@@ -248,6 +248,64 @@ I think I mentioned that there are **significant limitations** with the differen
 
 [More information is being added to the docs, currently on our github Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki).
 
+## Experimental store selectors
+
+The `experimentalStoreSelectors` option is an active experiment for deriving
+template variables from a statically traceable store selector instead of manual
+`templateVars` declarations. It is intended for review/CI use with
+`strict: true` so unsupported boundaries fail loudly.
+
+```jsx
+import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+const App = () => {
+    const hero = useStoreSelector((state) => state.hero);
+    return <Header hero={ hero } />;
+};
+```
+
+Same-file tracing is enabled directly:
+
+```js
+plugins: [
+    [ 'babel-plugin-jsx-template-vars', {
+        experimentalStoreSelectors: true,
+        strict: true,
+    } ],
+]
+```
+
+Cross-file tracing uses a prepass manifest. The filesystem wrapper is
+experimental, shape-agnostic, and currently targets relative named imports:
+
+```js
+const {
+    createStoreSelectorBabelOptions,
+    createStoreSelectorProjectManifest,
+} = require('babel-plugin-jsx-template-vars/store-selector-project');
+
+const manifest = createStoreSelectorProjectManifest({
+    rootDir: process.cwd(),
+});
+
+const pluginOptions = createStoreSelectorBabelOptions(manifest, {
+    language: 'handlebars',
+    strict: true,
+    experimentalStoreSelectors: {
+        debug: true,
+    },
+});
+```
+
+Supported static subsets include selector object roots, scalar/control paths,
+lists and nested lists, static optional member chains such as `hero?.title`,
+direct `children` passthrough, supported list children, and inline
+object-literal scalar spreads. Dynamic components, HOCs, render props,
+arbitrary spreads, generic context tracing, and shape-polymorphic output remain
+fail-closed boundaries.
+
 ## Caveats
 
 ### This is currently experimental
@@ -270,4 +328,3 @@ mixed object/list paths such as `catalog.sections[].products[].badges[].label`.
 
 Each component still owns its own `templateVars` contract; nested declarations
 are not inferred automatically across component boundaries.
-

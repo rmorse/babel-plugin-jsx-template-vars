@@ -81,6 +81,12 @@ Already implemented and reviewed:
 - PHP nested list depth coverage.
 - Minimal dynamic-root debug metadata in review mode, plus manifest-level
   callsite context records for the direct cross-file object-root slice.
+- Shape-agnostic filesystem wrapper skeleton:
+  - deterministic project source discovery
+  - manifest creation from filesystem sources
+  - Babel option handoff that hides `__crossFileManifest` behind an
+    experimental helper
+  - README documentation for strict/review mode and supported static subsets
 
 Current boundaries are documented in:
 
@@ -434,6 +440,12 @@ Recommended order:
 The current manifest is explicit and test-oriented. Real project use needs a
 wrapper that can produce and consume it predictably, but the wrapper should not
 bake in an unstable manifest shape.
+
+Status: a first skeleton exists in `store-selector-project.js`. It discovers
+project source files deterministically, creates a manifest from filesystem
+sources, and returns Babel options for the cross-file manifest handoff. It does
+not yet provide cache invalidation, watch/bundler integration, or broad import
+semantics.
 
 Must provide:
 
