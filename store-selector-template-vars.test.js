@@ -137,6 +137,25 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
+	it('renders selector bindings in forwardRef-wrapped components', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const forwardRef = (component) => component;
+			const App = forwardRef(({ hero }, ref) => {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1 ref={ ref }>{ title }</h1>;
+			});
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
 	it('discovers list fields from map body children and JSX prop values', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -1103,6 +1122,90 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
 	});
 
+	it('traces cross-file forwardRef-wrapped components', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				const React = { forwardRef: (component) => component };
+				export const Header = React.forwardRef(({ hero }, ref) => <h1 ref={ ref }>{ hero.title }</h1>);
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
+	it('traces selector props through cross-file static children wrappers', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Panel.jsx': `
+				export const Panel = ({ title, children }) => (
+					<section>
+						<h2>{ title }</h2>
+						{ children }
+					</section>
+				);
+			`,
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Panel } from './Panel.jsx';
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return (
+						<Panel title={ hero.subtitle }>
+							<Header hero={ hero } />
+						</Panel>
+					);
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<section><h2>{{hero.subtitle}}</h2><h1>{{hero.title}}</h1></section>');
+	});
+
 	it('traces renamed relative named imports', async () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -1727,6 +1830,41 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
+	it('diagnoses default imports from anonymous default components', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export default function({ hero }) {
+					return <h1>{ hero.title }</h1>;
+				}
+			`,
+			'App.jsx': `
+				import Header from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-default-export',
+				source: './Header.jsx',
+				localName: 'Header',
+				importedName: 'default',
+				declarationKind: 'anonymous-default-function',
+			}),
+		]);
+		expect(manifest.componentNamesByFile).toEqual({});
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
 	it('traces default imports through named default re-exports', async () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -1813,7 +1951,8 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
-	it('does not trace namespace cross-file imports', () => {
+	it('traces namespace member cross-file imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Cards.jsx': `
 				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
@@ -1832,17 +1971,28 @@ describe('experimental store selectors', () => {
 		});
 
 		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
 
-		expect(manifest.diagnostics).toEqual([
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Cards.Header' ]);
+		expect(manifest.debug.importEdges).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-namespace-import',
-				source: './Cards.jsx',
-				localName: 'Cards',
-				importedName: '*',
+				strategy: 'namespace-member',
+				importSource: './Cards.jsx',
+				localName: 'Cards.Header',
+				namespaceLocalName: 'Cards',
+				importedName: 'Header',
+				targetComponentName: 'Header',
 			}),
 		]);
-		expect(manifest.componentNamesByFile).toEqual({});
-		expect(manifest.seedAliasesByFile).toEqual({});
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
 	it('traces named re-export barrels as cross-file targets', async () => {
@@ -1892,7 +2042,8 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
-	it('keeps star re-export barrels diagnostic-only', () => {
+	it('traces unique star re-export barrels', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
 				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
@@ -1914,10 +2065,59 @@ describe('experimental store selectors', () => {
 		});
 
 		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'Header',
+				importedName: 'Header',
+				targetFilename: path.join(root, 'Header.jsx'),
+				resolvedFromFilename: path.join(root, 'index.jsx'),
+				targetComponentName: 'Header',
+				exportKind: 'star-reexport',
+			})
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('diagnoses ambiguous star re-export barrels', () => {
+		const files = crossFileFixtureFiles({
+			'Primary.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'Secondary.jsx': `
+				export const Header = ({ hero }) => <h2>{ hero.title }</h2>;
+			`,
+			'index.jsx': `
+				export * from './Primary.jsx';
+				export * from './Secondary.jsx';
+			`,
+			'App.jsx': `
+				import { Header } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
 
 		expect(manifest.diagnostics).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-reexport',
+				kind: 'ambiguous-star-export',
 				source: './index.jsx',
 				localName: 'Header',
 				importedName: 'Header',
@@ -1984,6 +2184,61 @@ describe('experimental store selectors', () => {
 			}),
 		]));
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1>{{#products}}<article>{{name}}</article>{{/products}}</main>');
+	});
+
+	it('traces explicit resolver alias imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'components/Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header } from '@components/Header';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files, {
+			resolver: {
+				aliases: {
+					'@components': path.join(root, 'components'),
+				},
+			},
+		});
+		const resolver = {
+			aliases: {
+				'@components': path.join(root, 'components'),
+			},
+		};
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			{
+				...createCrossFileOptions(manifest),
+				resolver,
+			}
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				importSource: '@components/Header',
+				localName: 'Header',
+				targetFilename: path.join(root, 'components/Header.jsx'),
+				targetComponentName: 'Header',
+			})
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
 	it('records parser failures as manifest diagnostics without throwing', () => {
@@ -2484,7 +2739,7 @@ describe('experimental store selectors', () => {
 
 		expect(manifest.diagnostics).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-namespace-import',
+				kind: 'unresolved-import',
 				filename: appFilename,
 				source: './MissingNamespace.jsx',
 			}),
@@ -2507,14 +2762,14 @@ describe('experimental store selectors', () => {
 			],
 			skippedImports: [
 				expect.objectContaining({
-					kind: 'unsupported-namespace-import',
+					kind: 'unresolved-import',
 					localName: 'MissingNamespace',
 					source: './MissingNamespace.jsx',
 				}),
 			],
 			diagnostics: [
 				expect.objectContaining({
-					kind: 'unsupported-namespace-import',
+					kind: 'unresolved-import',
 					source: './MissingNamespace.jsx',
 				}),
 			],
@@ -2930,6 +3185,68 @@ describe('experimental store selectors', () => {
 
 		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
 		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported spread props'));
+	});
+
+	it('renders scalar selector fields from single-use const object spreads', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ title, kicker }) => {
+				return <header><p>{ kicker }</p><h1>{ title }</h1></header>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const headerProps = { title: hero.title, kicker: hero.kicker };
+				return <Header {...headerProps} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported spread props'));
+	});
+
+	it('records unsupported metadata for object-root const object spreads', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const headerProps = { hero };
+				return <Header {...headerProps} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		});
+
+		expect(result.metadata.storeSelectorTemplateVarsUnsupported).toEqual([
+			expect.objectContaining({
+				componentName: 'App',
+				unsupported: [
+					expect.objectContaining({
+						kind: 'child-prop-boundary',
+						boundary: 'JSXSpreadAttribute',
+						componentName: 'Header',
+						propName: 'hero',
+						target: 'Header.hero',
+						sourcePaths: [ 'hero' ],
+					}),
+				],
+			}),
+		]);
 	});
 
 	it('does not globally alias child props with multiple selector sources', async () => {

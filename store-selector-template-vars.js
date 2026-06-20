@@ -1141,7 +1141,8 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				const selectorSources = this.collectSelectorDerivedSegments( path.get( 'argument' ) );
+				const spreadObjectPath = this.getStaticObjectSpreadObjectPath( path, false );
+				const selectorSources = this.collectSelectorDerivedSegments( spreadObjectPath || path.get( 'argument' ) );
 				if ( selectorSources.length === 0 ) {
 					return;
 				}
@@ -1341,12 +1342,12 @@ class StoreSelectorCollector {
 
 	isSupportedStaticObjectSpread( path, elementName ) {
 		const { types } = this.babel;
-		const argumentPath = path.get( 'argument' );
-		if ( ! types.isObjectExpression( argumentPath.node ) ) {
+		const objectPath = this.getStaticObjectSpreadObjectPath( path, true );
+		if ( ! objectPath ) {
 			return false;
 		}
 
-		const properties = argumentPath.get( 'properties' );
+		const properties = objectPath.get( 'properties' );
 		for ( const propertyPath of properties ) {
 			const property = propertyPath.node;
 			if ( ! types.isObjectProperty( property ) || property.computed ) {
@@ -1381,6 +1382,40 @@ class StoreSelectorCollector {
 		}
 
 		return true;
+	}
+
+	getStaticObjectSpreadObjectPath( path, requireSafeBinding = true ) {
+		const { types } = this.babel;
+		const argumentPath = path.get( 'argument' );
+		if ( types.isObjectExpression( argumentPath.node ) ) {
+			return argumentPath;
+		}
+
+		if ( ! types.isIdentifier( argumentPath.node ) ) {
+			return null;
+		}
+
+		const binding = argumentPath.scope.getBinding( argumentPath.node.name );
+		if (
+			! binding ||
+			! binding.constant ||
+			! types.isVariableDeclarator( binding.path.node ) ||
+			! types.isObjectExpression( binding.path.node.init )
+		) {
+			return null;
+		}
+
+		if (
+			requireSafeBinding &&
+			(
+				binding.referencePaths.length !== 1 ||
+				binding.referencePaths[ 0 ].node !== argumentPath.node
+			)
+		) {
+			return null;
+		}
+
+		return binding.path.get( 'init' );
 	}
 
 	canPassThroughSelectorChildren( elementName ) {
@@ -1855,9 +1890,10 @@ class StoreSelectorCollector {
 
 		if ( this.babel.types.isJSXMemberExpression( name ) ) {
 			const rootName = elementName.split( '.' )[ 0 ];
+			const componentNames = this.config.storeSelectorComponentNames;
 			return /^[A-Z]/.test( rootName ) ? {
 				elementName,
-				traceable: false,
+				traceable: Boolean( componentNames && componentNames.has( elementName ) ),
 			} : null;
 		}
 

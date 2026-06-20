@@ -147,12 +147,15 @@ function isFunctionNode( node, types ) {
 
 function isTransparentWrapperCallee( callee, types ) {
 	if ( types.isIdentifier( callee ) ) {
-		return callee.name === 'memo';
+		return callee.name === 'memo' || callee.name === 'forwardRef';
 	}
 	return (
 		types.isMemberExpression( callee ) &&
 		! callee.computed &&
-		types.isIdentifier( callee.property, { name: 'memo' } )
+		(
+			types.isIdentifier( callee.property, { name: 'memo' } ) ||
+			types.isIdentifier( callee.property, { name: 'forwardRef' } )
+		)
 	);
 }
 

@@ -15,6 +15,7 @@ const {
 
 function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const diagnostics = [];
+	const resolver = normalizeResolverOptions( options );
 	const debug = {
 		importEdges: [],
 		seedEdges: [],
@@ -25,7 +26,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 		ambiguousSeeds: [],
 	};
 	const records = createFileRecords( files, diagnostics, debug );
-	resolveRecordImports( records, diagnostics, debug );
+	resolveRecordImports( records, diagnostics, debug, resolver );
 	detectImportCycles( records, diagnostics, debug );
 
 	const seedAliasesByFile = {};
@@ -353,9 +354,9 @@ function getFileExports( programPath, componentPaths, types ) {
 	return exports;
 }
 
-function resolveImportedComponent( importInfo, targetRecord, records ) {
+function resolveImportedComponent( importInfo, targetRecord, records, resolver ) {
 	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
-	const resolved = resolveExportedComponent( targetRecord, exportedName, records, new Set() );
+	const resolved = resolveExportedComponent( targetRecord, exportedName, records, resolver, new Set() );
 	if ( resolved.componentName ) {
 		return resolved;
 	}
@@ -376,7 +377,7 @@ function resolveImportedComponent( importInfo, targetRecord, records ) {
 	};
 }
 
-function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
+function resolveExportedComponent( targetRecord, exportedName, records, resolver, seen ) {
 	if ( ! targetRecord || ! exportedName ) {
 		return {
 			unsupported: true,
@@ -413,7 +414,7 @@ function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
 	}
 
 	if ( exportInfo?.source ) {
-		const reexportFilename = resolveImportFilename( targetRecord.filename, exportInfo.source, records );
+		const reexportFilename = resolveImportFilename( targetRecord.filename, exportInfo.source, records, resolver );
 		if ( ! reexportFilename ) {
 			return {
 				unsupported: true,
@@ -422,7 +423,7 @@ function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
 			};
 		}
 		const reexportRecord = records.get( reexportFilename );
-		const resolved = resolveExportedComponent( reexportRecord, exportInfo.importedName, records, seen );
+		const resolved = resolveExportedComponent( reexportRecord, exportInfo.importedName, records, resolver, seen );
 		if ( resolved.componentName ) {
 			return {
 				...resolved,
@@ -442,6 +443,13 @@ function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
 		return resolved;
 	}
 
+	if ( exportedName !== 'default' ) {
+		const starResolved = resolveStarExportedComponent( targetRecord, exportedName, records, resolver, seen );
+		if ( starResolved.componentName || starResolved.unsupported ) {
+			return starResolved;
+		}
+	}
+
 	if ( targetRecord.componentPaths.has( exportedName ) ) {
 		return {
 			componentName: exportedName,
@@ -455,6 +463,58 @@ function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
 		unsupported: true,
 		kind: 'unsupported-reexport',
 	};
+}
+
+function resolveStarExportedComponent( targetRecord, exportedName, records, resolver, seen ) {
+	const starExports = Array.from( targetRecord.exports?.values() || [] )
+		.filter( exportInfo => exportInfo.exportedName === '*' && exportInfo.source );
+	if ( starExports.length === 0 ) {
+		return {};
+	}
+
+	const matches = [];
+	for ( const starExport of starExports ) {
+		const reexportFilename = resolveImportFilename( targetRecord.filename, starExport.source, records, resolver );
+		if ( ! reexportFilename ) {
+			continue;
+		}
+		const reexportRecord = records.get( reexportFilename );
+		const resolved = resolveExportedComponent( reexportRecord, exportedName, records, resolver, new Set( seen ) );
+		if ( resolved.componentName ) {
+			matches.push( {
+				...resolved,
+				exportHops: [
+					{
+						filename: targetRecord.filename,
+						source: starExport.source,
+						importedName: exportedName,
+						exportedName,
+						targetFilename: reexportFilename,
+						star: true,
+					},
+					...( resolved.exportHops || [] ),
+				],
+			} );
+		}
+	}
+
+	const uniqueKeys = new Set( matches.map( match => `${ match.filename }::${ match.componentName }` ) );
+	if ( uniqueKeys.size > 1 ) {
+		return {
+			unsupported: true,
+			kind: 'ambiguous-star-export',
+			message: `Store selector cross-file tracing found ambiguous star exports for "${ exportedName }" in "${ targetRecord.filename }".`,
+		};
+	}
+
+	if ( matches.length >= 1 ) {
+		return {
+			...matches[ 0 ],
+			exportKind: 'star-reexport',
+		};
+	}
+
+	return {};
 }
 
 function getExportSpecifierName( specifierName ) {
@@ -477,10 +537,10 @@ function getDefaultExportDeclarationKind( declaration, types ) {
 	return declaration?.type || 'unknown';
 }
 
-function resolveRecordImports( records, diagnostics, debug ) {
+function resolveRecordImports( records, diagnostics, debug, resolver ) {
 	records.forEach( ( record ) => {
 		record.rawImports.forEach( ( importInfo ) => {
-			if ( ! isRelativeImport( importInfo.source ) ) {
+			if ( ! isRelativeImport( importInfo.source ) && ! resolveAliasedImportBase( importInfo.source, resolver ) ) {
 				diagnostics.push( {
 					kind: 'unsupported-import-source',
 					filename: record.filename,
@@ -493,19 +553,25 @@ function resolveRecordImports( records, diagnostics, debug ) {
 			}
 
 			if ( importInfo.kind === 'namespace' ) {
-				diagnostics.push( {
-					kind: 'unsupported-namespace-import',
-					filename: record.filename,
-					source: importInfo.source,
-					localName: importInfo.localName,
-					importedName: importInfo.importedName,
-					message: `Store selector cross-file tracing does not support namespace imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
-				} );
-				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
+				const targetFilename = resolveImportFilename( record.filename, importInfo.source, records, resolver );
+				if ( ! targetFilename ) {
+					diagnostics.push( {
+						kind: 'unresolved-import',
+						filename: record.filename,
+						source: importInfo.source,
+						localName: importInfo.localName,
+						message: `Store selector cross-file tracing could not resolve "${ importInfo.source }" from "${ record.filename }".`,
+					} );
+					debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
+					return;
+				}
+
+				const targetRecord = records.get( targetFilename );
+				addNamespaceComponentImports( record, importInfo, targetRecord, records, targetFilename, debug, resolver );
 				return;
 			}
 
-			const targetFilename = resolveImportFilename( record.filename, importInfo.source, records );
+			const targetFilename = resolveImportFilename( record.filename, importInfo.source, records, resolver );
 			if ( ! targetFilename ) {
 				diagnostics.push( {
 					kind: 'unresolved-import',
@@ -519,7 +585,7 @@ function resolveRecordImports( records, diagnostics, debug ) {
 			}
 
 			const targetRecord = records.get( targetFilename );
-			const resolvedImport = resolveImportedComponent( importInfo, targetRecord, records );
+			const resolvedImport = resolveImportedComponent( importInfo, targetRecord, records, resolver );
 			const targetComponentName = resolvedImport.componentName;
 			const resolvedFilename = resolvedImport.filename || targetFilename;
 			const resolvedRecord = records.get( resolvedFilename );
@@ -590,6 +656,40 @@ function resolveRecordImports( records, diagnostics, debug ) {
 	} );
 }
 
+function addNamespaceComponentImports( record, importInfo, targetRecord, records, targetFilename, debug, resolver ) {
+	const exportedNames = Array.from( targetRecord.exports?.keys() || [] )
+		.filter( exportedName => exportedName !== 'default' && ! String( exportedName ).startsWith( '*' ) )
+		.sort();
+
+	exportedNames.forEach( exportedName => {
+		const resolved = resolveExportedComponent( targetRecord, exportedName, records, resolver, new Set() );
+		if ( ! resolved.componentName ) {
+			return;
+		}
+
+		const localName = `${ importInfo.localName }.${ exportedName }`;
+		const resolvedFilename = resolved.filename || targetFilename;
+		record.imports.set( localName, {
+			localName,
+			componentName: resolved.componentName,
+			filename: resolvedFilename,
+		} );
+		debug.importEdges.push( {
+			sourceFilename: record.filename,
+			importSource: importInfo.source,
+			localName,
+			namespaceLocalName: importInfo.localName,
+			importedName: exportedName,
+			targetFilename: resolvedFilename,
+			resolvedFromFilename: targetFilename,
+			targetComponentName: resolved.componentName,
+			exportKind: resolved.exportKind,
+			exportHops: resolved.exportHops || [],
+			strategy: 'namespace-member',
+		} );
+	} );
+}
+
 function detectImportCycles( records, diagnostics, debug ) {
 	const visiting = new Set();
 	const visited = new Set();
@@ -655,8 +755,9 @@ function getImportSpecifierName( imported ) {
 	return imported?.value;
 }
 
-function resolveImportFilename( fromFilename, source, records ) {
-	const base = path.resolve( path.dirname( fromFilename ), source );
+function resolveImportFilename( fromFilename, source, records, resolver = {} ) {
+	const aliasBase = resolveAliasedImportBase( source, resolver );
+	const base = aliasBase || path.resolve( path.dirname( fromFilename ), source );
 	const candidates = [
 		base,
 		`${ base }.jsx`,
@@ -670,6 +771,30 @@ function resolveImportFilename( fromFilename, source, records ) {
 	].map( normalizeFilename );
 
 	return candidates.find( candidate => records.has( candidate ) ) || null;
+}
+
+function normalizeResolverOptions( options = {} ) {
+	const resolver = options.resolver || options.config?.resolver || {};
+	return {
+		aliases: resolver.aliases || {},
+	};
+}
+
+function resolveAliasedImportBase( source, resolver = {} ) {
+	const aliases = resolver.aliases || {};
+	const aliasEntries = Object.entries( aliases )
+		.filter( ( [ alias, target ] ) => alias && typeof target === 'string' )
+		.sort( ( [ left ], [ right ] ) => right.length - left.length );
+
+	for ( const [ alias, target ] of aliasEntries ) {
+		if ( source !== alias && ! source.startsWith( `${ alias }/` ) ) {
+			continue;
+		}
+		const rest = source === alias ? '' : source.slice( alias.length + 1 );
+		return path.resolve( target, rest );
+	}
+
+	return null;
 }
 
 function resolveChildComponent( record, localComponentName, records, diagnostics ) {

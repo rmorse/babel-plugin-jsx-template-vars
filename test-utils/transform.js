@@ -131,7 +131,7 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 				'getTemplateRootPathArg',
 				'isTemplateRootDescriptor',
 				'loadModule',
-				`${ rewriteRelativeImportsForExecution(result.code, normalizedFilename) }\nreturn module.exports;`
+				`${ rewriteRelativeImportsForExecution(result.code, normalizedFilename, pluginOptions.resolver) }\nreturn module.exports;`
 			);
 
 			const exports = execute(
@@ -197,22 +197,31 @@ function h(type, props, ...children) {
 	return `<${ type }${ attrs }>${ renderedChildren }</${ type }>`;
 }
 
-function rewriteRelativeImportsForExecution(code, filename) {
+function rewriteRelativeImportsForExecution(code, filename, resolver = {}) {
 	const exportedNames = [];
 	const defaultExportNames = [];
 	let reexportIndex = 0;
 	const nextCode = code
+		.replace(/export\s+\*\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, source) => {
+			const resolved = resolveRelativeModuleForExecution(filename, source, resolver);
+			const moduleName = `__reexport_${ reexportIndex++ }`;
+			return `const ${ moduleName } = loadModule(${ JSON.stringify(resolved) });\nObject.keys(${ moduleName }).forEach((name) => { if (name !== 'default') module.exports[name] = ${ moduleName }[name]; });\n`;
+		})
 		.replace(/export\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, exportsList, source) => {
-			const resolved = resolveRelativeModuleForExecution(filename, source);
+			const resolved = resolveRelativeModuleForExecution(filename, source, resolver);
 			const moduleName = `__reexport_${ reexportIndex++ }`;
 			return `const ${ moduleName } = loadModule(${ JSON.stringify(resolved) });\n${ rewriteReExportsForExecution(exportsList, moduleName) }\n`;
 		})
+		.replace(/import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, localName, source) => {
+			const resolved = resolveRelativeModuleForExecution(filename, source, resolver);
+			return `const ${ localName } = loadModule(${ JSON.stringify(resolved) });\n`;
+		})
 		.replace(/import\s+([A-Za-z_$][\w$]*)\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, localName, source) => {
-			const resolved = resolveRelativeModuleForExecution(filename, source);
+			const resolved = resolveRelativeModuleForExecution(filename, source, resolver);
 			return `const { default: ${ localName } } = loadModule(${ JSON.stringify(resolved) });\n`;
 		})
 		.replace(/import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, imports, source) => {
-			const resolved = resolveRelativeModuleForExecution(filename, source);
+			const resolved = resolveRelativeModuleForExecution(filename, source, resolver);
 			return `const { ${ rewriteNamedImportsForExecution(imports) } } = loadModule(${ JSON.stringify(resolved) });\n`;
 		})
 		.replace(/export\s+const\s+([A-Za-z_$][\w$]*)\s*=/g, (_match, name) => {
@@ -277,7 +286,12 @@ function rewriteReExportsForExecution(exportsList, moduleName) {
 		.join('\n');
 }
 
-function resolveRelativeModuleForExecution(filename, source) {
+function resolveRelativeModuleForExecution(filename, source, resolver = {}) {
+	const aliased = resolveAliasedModuleForExecution(source, resolver);
+	if (aliased) {
+		return aliased;
+	}
+
 	if (!source.startsWith('.')) {
 		return source;
 	}
@@ -285,6 +299,25 @@ function resolveRelativeModuleForExecution(filename, source) {
 	const base = path.resolve(path.dirname(filename), source);
 	const extension = path.extname(base);
 	return path.normalize(extension ? base : `${ base }.jsx`);
+}
+
+function resolveAliasedModuleForExecution(source, resolver = {}) {
+	const aliases = resolver.aliases || {};
+	const aliasEntries = Object.entries(aliases)
+		.filter(([ alias, target ]) => alias && typeof target === 'string')
+		.sort(([ left ], [ right ]) => right.length - left.length);
+
+	for (const [ alias, target ] of aliasEntries) {
+		if (source !== alias && !source.startsWith(`${ alias }/`)) {
+			continue;
+		}
+		const rest = source === alias ? '' : source.slice(alias.length + 1);
+		const base = path.resolve(target, rest);
+		const extension = path.extname(base);
+		return path.normalize(extension ? base : `${ base }.jsx`);
+	}
+
+	return null;
 }
 
 function renderAttributes(props) {

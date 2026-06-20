@@ -99,7 +99,22 @@ function injectContextToJSXElementComponents( path, contextVar, t ) {
 }
 
 function getJSXElementName( path ) {
-	return path.node.openingElement?.name?.name
+	return getJSXName( path.node.openingElement?.name );
+}
+
+function getJSXName( name ) {
+	if ( ! name ) {
+		return null;
+	}
+	if ( name.type === 'JSXIdentifier' ) {
+		return name.name;
+	}
+	if ( name.type === 'JSXMemberExpression' ) {
+		const objectName = getJSXName( name.object );
+		const propertyName = getJSXName( name.property );
+		return objectName && propertyName ? `${ objectName }.${ propertyName }` : null;
+	}
+	return null;
 }
 
 function isJSXElementComponent( path ) {

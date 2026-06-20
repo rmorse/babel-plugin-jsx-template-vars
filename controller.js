@@ -444,7 +444,7 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 module.exports = templateVarsController;
 
 function injectDynamicRootDescriptors(path, listController, config, types) {
-	const elementName = path.node.openingElement?.name?.name;
+	const elementName = getJSXElementName(path.node.openingElement?.name, types);
 	const rootProps = getDynamicRootPropsForComponent(config, elementName);
 	if (rootProps.size === 0) {
 		return;
@@ -479,6 +479,21 @@ function injectDynamicRootDescriptors(path, listController, config, types) {
 			]
 		));
 	});
+}
+
+function getJSXElementName(name, types) {
+	if (!name) {
+		return null;
+	}
+	if (types.isJSXIdentifier(name)) {
+		return name.name;
+	}
+	if (types.isJSXMemberExpression(name)) {
+		const objectName = getJSXElementName(name.object, types);
+		const propertyName = getJSXElementName(name.property, types);
+		return objectName && propertyName ? `${objectName}.${propertyName}` : null;
+	}
+	return null;
 }
 
 function getDynamicRootPropsForComponent(config, componentName) {
