@@ -278,7 +278,10 @@ plugins: [
 ```
 
 Cross-file tracing uses a prepass manifest. The filesystem wrapper is
-experimental, shape-agnostic, and currently targets relative named imports:
+experimental, shape-agnostic, and currently targets relative named imports. It
+walks and reads matching project files synchronously when the manifest is
+created; it does not provide caching, invalidation, watch mode, or bundler
+integration yet:
 
 ```js
 const {

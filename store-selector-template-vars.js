@@ -136,6 +136,16 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 				return;
 			}
 
+			if ( isMixedContextAmbiguity( propTraces, sourcePaths ) ) {
+				reportMixedContextAmbiguity( componentPath, propName, propTraces, sourcePaths );
+				return;
+			}
+
+			if ( isListRelativeMultiSourceAmbiguity( propTraces, sourcePaths ) ) {
+				reportListRelativeMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+				return;
+			}
+
 			if ( propTraces.some( trace => trace.unsupported || trace.seedOnly ) || sourcePaths.size > 1 ) {
 				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 				const message = `Store selector prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; prop tracing is disabled for this prop.`;
@@ -186,6 +196,16 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 			childPropHasObjectRootUsage( componentPath, propName, babel )
 		) {
 			reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+			return;
+		}
+
+		if ( isMixedContextAmbiguity( propTraces, sourcePaths ) ) {
+			reportMixedContextAmbiguity( componentPath, propName, propTraces, sourcePaths );
+			return;
+		}
+
+		if ( isListRelativeMultiSourceAmbiguity( propTraces, sourcePaths ) ) {
+			reportListRelativeMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
 			return;
 		}
 
@@ -251,6 +271,16 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 				return;
 			}
 
+			if ( isMixedContextAmbiguity( validationTraces, sourcePaths ) ) {
+				reportMixedContextAmbiguity( componentPath, propName, validationTraces, sourcePaths );
+				return;
+			}
+
+			if ( isListRelativeMultiSourceAmbiguity( validationTraces, sourcePaths ) ) {
+				reportListRelativeMultiSourceAmbiguity( componentPath, propName, validationTraces, sourcePaths );
+				return;
+			}
+
 			if (
 				validationTraces.some( trace => trace.unsupported || ! trace.seedOnly ) ||
 				( sourcePaths.size > 1 && ! isListRelativeMultiSourceSeed( validationTraces, sourcePaths ) )
@@ -295,6 +325,16 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 
 		if ( isObjectRootMultiSourceSeedAmbiguity( validationTraces, sourcePaths ) ) {
 			reportObjectRootMultiSourceAmbiguity( componentPath, propName, propTraces, sourcePaths );
+			return;
+		}
+
+		if ( isMixedContextAmbiguity( validationTraces, sourcePaths ) ) {
+			reportMixedContextAmbiguity( componentPath, propName, validationTraces, sourcePaths );
+			return;
+		}
+
+		if ( isListRelativeMultiSourceAmbiguity( validationTraces, sourcePaths ) ) {
+			reportListRelativeMultiSourceAmbiguity( componentPath, propName, validationTraces, sourcePaths );
 			return;
 		}
 
@@ -390,12 +430,26 @@ function isObjectRootMultiSourceSeedAmbiguity( traces, sourcePaths ) {
 		traces.every( trace => trace.seedOnly && ! trace.unsupported && ! traceHasListContext( trace ) );
 }
 
+function isMixedContextAmbiguity( traces, sourcePaths ) {
+	return sourcePaths.size > 1 &&
+		traces.length > 0 &&
+		traces.some( trace => traceHasListContext( trace ) ) &&
+		traces.some( trace => ! traceHasListContext( trace ) );
+}
+
 function traceHasListContext( trace ) {
 	const segments = [
 		...normalizeCanonicalSegments( trace.segments || [] ),
 		...normalizeCanonicalSegments( trace.declarationSegments || [] ),
 	];
 	return segments.some( segment => String( segment ).endsWith( '[]' ) );
+}
+
+function isListRelativeMultiSourceAmbiguity( traces, sourcePaths ) {
+	return sourcePaths.size > 1 &&
+		traces.length > 0 &&
+		traces.every( trace => trace.seedOnly && ! trace.unsupported && traceHasListContext( trace ) ) &&
+		! isListRelativeMultiSourceSeed( traces, sourcePaths );
 }
 
 function isListRelativeMultiSourceSeed( traces, sourcePaths ) {
@@ -439,6 +493,23 @@ function reportObjectRootMultiSourceAmbiguity( componentPath, propName, traces, 
 	const componentName = traces[ 0 ]?.componentName || getStoreSelectorComponentName( componentPath );
 	const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 	const message = `Store selector object-root-multi-source-ambiguity: prop "${ propName }" for child component "${ componentName }" receives multiple object roots${ sourceList ? ` (${ sourceList })` : '' }. Selector object-root tracing cannot safely choose one source for every callsite yet.`;
+	diagnostics.error( componentPath, message );
+}
+
+function reportMixedContextAmbiguity( componentPath, propName, traces, sourcePaths ) {
+	const componentName = traces[ 0 ]?.componentName || getStoreSelectorComponentName( componentPath );
+	const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+	const message = `Store selector mixed-context-ambiguity: prop "${ propName }" for child component "${ componentName }" is used across list and non-list selector contexts${ sourceList ? ` (${ sourceList })` : '' }. Split the component or use distinct props so the template output does not partially render.`;
+	diagnostics.error( componentPath, message );
+}
+
+function reportListRelativeMultiSourceAmbiguity( componentPath, propName, traces, sourcePaths ) {
+	const componentName = traces[ 0 ]?.componentName || getStoreSelectorComponentName( componentPath );
+	const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
+	const declarationPaths = Array.from( new Set(
+		traces.map( trace => stringifySegments( trace.declarationSegments || trace.segments || [] ) )
+	) ).filter( Boolean ).join( ', ' );
+	const message = `Store selector list-relative-multi-source-ambiguity: prop "${ propName }" for child component "${ componentName }" receives incompatible list-relative sources${ sourceList ? ` (${ sourceList })` : '' }${ declarationPaths ? ` with declaration paths (${ declarationPaths })` : '' }. Compatible list-relative reuse requires the same child-relative shape.`;
 	diagnostics.error( componentPath, message );
 }
 

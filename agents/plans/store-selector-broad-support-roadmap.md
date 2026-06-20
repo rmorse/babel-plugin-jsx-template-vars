@@ -463,7 +463,8 @@ bake in an unstable manifest shape.
 Status: a first skeleton exists in `store-selector-project.js`. It discovers
 project source files deterministically, creates a manifest from filesystem
 sources, and returns Babel options for the cross-file manifest handoff. It does
-not yet provide cache invalidation, watch/bundler integration, or broad import
+this synchronously with full file reads at manifest creation time. It does not
+yet provide cache invalidation, watch/bundler integration, or broad import
 semantics.
 
 Must provide:

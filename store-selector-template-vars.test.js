@@ -1764,6 +1764,7 @@ describe('experimental store selectors', () => {
 	});
 
 	it('detects import cycles and skips tracing cyclic edges', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'A.jsx': `
 				import { B } from './B.jsx';
@@ -1797,6 +1798,12 @@ describe('experimental store selectors', () => {
 		expect(manifest.debug.passCount).toBeLessThanOrEqual(manifest.debug.maxPasses);
 		expect(manifest.componentNamesByFile).toEqual({});
 		expect(manifest.seedAliasesByFile).toEqual({});
+		expect(() => transformTemplateVars(files[path.join(root, 'A.jsx')], {
+			...createCrossFileOptions(manifest),
+			strict: true,
+		}, {
+			filename: path.join(root, 'A.jsx'),
+		})).toThrow(/prop tracing is not supported/);
 	});
 
 	it.each([
@@ -2485,7 +2492,7 @@ describe('experimental store selectors', () => {
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('has ambiguous or unsupported sources'));
 	});
 
-	it('fails closed when one child receives selector props inside and outside list context', async () => {
+	it('throws when one child receives selector props inside and outside list context', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -2510,31 +2517,32 @@ describe('experimental store selectors', () => {
 			module.exports = { App };
 		`;
 
-		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, {
+		expect(() => transformTemplateVars(source, {
 			...selectorOptions,
 			warnOnUnsupported: false,
-		});
-		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article>{{#products}}<article></article>{{/products}}</main>');
+		})).toThrow(/mixed-context-ambiguity/);
 		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it('records unsupported metadata for mixed list and non-list child props when warnings are suppressed', () => {
+	it('throws for incompatible list-relative child shapes', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
-			const Card = ({ name }) => {
-				return <article>{ name }</article>;
+			const ItemCard = ({ item }) => {
+				return <article>{ item.name }</article>;
 			};
 
 			const App = () => {
-				const featured = useStoreSelector((state) => state.featured);
 				const products = useStoreSelector((state) => state.products);
+				const tags = useStoreSelector((state) => state.tags);
 				return (
 					<main>
-						<Card name={ featured.name } />
 						{ products.map((product) => (
-							<Card name={ product.name } />
+							<ItemCard item={ product } />
+						)) }
+						{ tags.map((tag) => (
+							<ItemCard item={ tag.meta } />
 						)) }
 					</main>
 				);
@@ -2543,22 +2551,10 @@ describe('experimental store selectors', () => {
 			module.exports = { App };
 		`;
 
-		const result = transformTemplateVars(source, {
+		expect(() => transformTemplateVars(source, {
 			...selectorOptions,
 			warnOnUnsupported: false,
-		});
-		const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
-
-		expect(entry).toEqual(expect.objectContaining({
-			componentName: 'Card',
-			unsupported: expect.arrayContaining([
-				expect.objectContaining({
-					kind: 'seed-prop',
-					propName: 'name',
-					sourcePaths: expect.arrayContaining([ 'featured.name', 'products[].name' ]),
-				}),
-			]),
-		}));
+		})).toThrow(/list-relative-multi-source-ambiguity/);
 		expect(warn).not.toHaveBeenCalled();
 	});
 

@@ -47,6 +47,10 @@ function hasModuleFixture(name) {
 	return fs.existsSync(path.join(e2eFixturesDir, name, 'modules'));
 }
 
+function hasExpectedErrorFixture(name) {
+	return fs.existsSync(path.join(e2eFixturesDir, name, 'expected-error.txt'));
+}
+
 function escapeRegExp(value) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -65,7 +69,8 @@ function expectNoOrphanedListDeclarations(code) {
 const fixtureNames = fs.readdirSync(e2eFixturesDir)
 	.filter((name) => fs.statSync(path.join(e2eFixturesDir, name)).isDirectory());
 const moduleFixtureNames = fixtureNames.filter(hasModuleFixture);
-const selectorFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name));
+const selectorFailClosedFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name) && hasExpectedErrorFixture(name));
+const selectorFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name) && ! hasExpectedErrorFixture(name));
 const stableFixtureNames = fixtureNames.filter((name) => ! name.startsWith('store-selector-') && ! hasModuleFixture(name));
 
 describe('e2e template output fixtures', () => {
@@ -107,6 +112,18 @@ describe('e2e template output fixtures', () => {
 		expect(code).not.toContain('useStoreSelector');
 		expect(code).not.toContain('$$');
 		expectNoOrphanedListDeclarations(code);
+	});
+
+	it.each(selectorFailClosedFixtureNames.flatMap((fixtureName) => (
+		languages.map((language) => [ fixtureName, language ])
+	)))('%s fails closed for unsupported selector output in %s', async (fixtureName, language) => {
+		const source = readFixture(fixtureName, 'input.jsx');
+		const expectedError = readFixture(fixtureName, 'expected-error.txt').trim();
+
+		await expect(renderTemplateFixture(language, source, 'App', {}, {
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).rejects.toThrow(expectedError);
 	});
 
 	it.each(moduleFixtureNames.flatMap((fixtureName) => (
