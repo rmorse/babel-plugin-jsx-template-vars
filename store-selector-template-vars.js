@@ -224,9 +224,14 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 	const summaries = [];
 	const summaryRecords = [];
 	const selectorLocalNames = selectorImports.localNames || new Set();
+	const unsupportedByBinding = new WeakMap();
 
 	getTopLevelHookCandidates( programPath, babel ).forEach( ( candidate ) => {
-		const summary = createTransparentSourceHookSummary( candidate, selectorLocalNames, babel );
+		const result = createTransparentHookSummary( candidate, selectorLocalNames, babel, summariesByBinding );
+		if ( result?.unsupported ) {
+			unsupportedByBinding.set( candidate.binding.identifier, result.unsupported );
+		}
+		const summary = result?.summary;
 		if ( ! summary ) {
 			return;
 		}
@@ -235,15 +240,18 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 		summaryRecords.push( summary );
 		summaries.push( {
 			hookName: summary.hookName,
-			returnKind: 'source-selector',
+			returnKind: summary.returnKind,
 			segments: summary.segments,
 			declarationSegments: summary.declarationSegments,
+			params: summary.params,
+			suffixSegments: summary.suffixSegments,
 			strategy: summary.strategy,
 		} );
 	} );
 
 	return {
 		summariesByBinding,
+		unsupportedByBinding,
 		summaryRecords,
 		summaries,
 	};
@@ -260,7 +268,7 @@ function getTopLevelHookCandidates( programPath, babel ) {
 
 		if ( types.isFunctionDeclaration( declarationPath.node ) ) {
 			const name = declarationPath.node.id?.name;
-			if ( ! isHookName( name ) ) {
+			if ( ! isHookName( name ) || isReservedReactHookName( name ) ) {
 				return;
 			}
 			const binding = declarationPath.scope.getBinding( name );
@@ -278,7 +286,7 @@ function getTopLevelHookCandidates( programPath, babel ) {
 		if ( types.isVariableDeclaration( declarationPath.node ) ) {
 			declarationPath.get( 'declarations' ).forEach( ( declaratorPath ) => {
 				const { id, init } = declaratorPath.node;
-				if ( ! types.isIdentifier( id ) || ! isHookName( id.name ) ) {
+				if ( ! types.isIdentifier( id ) || ! isHookName( id.name ) || isReservedReactHookName( id.name ) ) {
 					return;
 				}
 				if ( ! types.isArrowFunctionExpression( init ) && ! types.isFunctionExpression( init ) ) {
@@ -312,14 +320,16 @@ function getTopLevelHookCandidates( programPath, babel ) {
 	return candidates;
 }
 
-function createTransparentSourceHookSummary( candidate, selectorLocalNames, babel ) {
+function createTransparentHookSummary( candidate, selectorLocalNames, babel, summariesByBinding ) {
 	const { functionPath } = candidate;
 	const node = functionPath.node;
-	if ( node.async || node.generator || node.params.length > 0 ) {
+	if ( node.async || node.generator ) {
 		if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
 			diagnostics.error( functionPath, `Store selector unsupported-hook-body: hook "${ candidate.hookName }" must be a synchronous zero-argument source hook before it can wrap store selectors.` );
 		}
-		return null;
+		return {
+			unsupported: createUnsupportedHookSummary( candidate, 'unsupported-hook-body', 'async-or-generator' ),
+		};
 	}
 
 	if ( candidate.constantDeclaration === false && hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
@@ -330,18 +340,32 @@ function createTransparentSourceHookSummary( candidate, selectorLocalNames, babe
 		if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
 			diagnostics.error( functionPath, `Store selector unsupported-hook-state-in-body: hook "${ candidate.hookName }" contains runtime hook work and cannot be summarized as static selector data.` );
 		}
-		return null;
+		return {
+			unsupported: createUnsupportedHookSummary( candidate, 'unsupported-hook-state-in-body', 'stateful-hook-in-body' ),
+		};
 	}
 
-	const summary = summarizeSourceHookReturn( candidate, selectorLocalNames, babel );
+	const summary = node.params.length === 0 ?
+		summarizeSourceHookReturn( candidate, selectorLocalNames, babel ) :
+		summarizeDerivedHookReturn( candidate, babel, summariesByBinding );
 	if ( summary ) {
-		return summary;
+		return { summary };
 	}
 
 	if ( hookBodyContainsStoreSelectorCall( functionPath, selectorLocalNames, babel ) ) {
 		diagnostics.error( functionPath, `Store selector unsupported-hook-body: hook "${ candidate.hookName }" contains store selector calls but does not have a supported single static return.` );
 	}
-	return null;
+	return {
+		unsupported: createUnsupportedHookSummary( candidate, 'unsupported-hook-body', 'unsupported-return-shape' ),
+	};
+}
+
+function createUnsupportedHookSummary( candidate, kind, reason ) {
+	return {
+		hookName: candidate.hookName,
+		kind,
+		reason,
+	};
 }
 
 function summarizeSourceHookReturn( candidate, selectorLocalNames, babel ) {
@@ -397,6 +421,106 @@ function summarizeSourceHookReturn( candidate, selectorLocalNames, babel ) {
 	return summarizeHookReturnExpression( candidate, returnArgumentPath, selectorAliases, selectorLocalNames, babel );
 }
 
+function summarizeDerivedHookReturn( candidate, babel, summariesByBinding ) {
+	const { functionPath } = candidate;
+	const params = functionPath.node.params || [];
+	if ( params.length !== 1 || ! babel.types.isIdentifier( params[ 0 ] ) ) {
+		return null;
+	}
+
+	const returnExpressionPath = getSingleHookReturnExpressionPath( functionPath, babel );
+	if ( ! returnExpressionPath ) {
+		return null;
+	}
+
+	const paramName = params[ 0 ].name;
+	const suffixSegments = parseDerivedHookReturnExpression(
+		returnExpressionPath,
+		paramName,
+		babel,
+		summariesByBinding
+	);
+	if ( ! suffixSegments ) {
+		return null;
+	}
+
+	return {
+		hookName: candidate.hookName,
+		returnKind: suffixSegments.length === 0 ? 'derived-root' : 'derived-path',
+		params: [ paramName ],
+		paramName,
+		segments: [ `$param:${ paramName }`, ...suffixSegments ],
+		declarationSegments: [ `$param:${ paramName }`, ...suffixSegments ],
+		suffixSegments,
+		strategy: 'same-file-derived-hook',
+	};
+}
+
+function getSingleHookReturnExpressionPath( functionPath, babel ) {
+	const { types } = babel;
+	const node = functionPath.node;
+	if ( types.isArrowFunctionExpression( node ) && ! types.isBlockStatement( node.body ) ) {
+		return functionPath.get( 'body' );
+	}
+
+	if ( ! types.isBlockStatement( node.body ) ) {
+		return null;
+	}
+
+	const statementPaths = functionPath.get( 'body.body' );
+	if ( statementPaths.length !== 1 || ! types.isReturnStatement( statementPaths[ 0 ].node ) ) {
+		return null;
+	}
+
+	const argumentPath = statementPaths[ 0 ].get( 'argument' );
+	return argumentPath?.node ? argumentPath : null;
+}
+
+function parseDerivedHookReturnExpression( expressionPath, paramName, babel, summariesByBinding ) {
+	const { types } = babel;
+	const expression = expressionPath.node;
+	if ( types.isIdentifier( expression ) ) {
+		return expression.name === paramName ? [] : null;
+	}
+
+	if ( isStaticMemberExpressionNode( expression, babel ) ) {
+		if ( expression.computed || ! types.isIdentifier( expression.property ) ) {
+			return null;
+		}
+
+		const objectPath = expressionPath.get( 'object' );
+		const objectSuffix = parseDerivedHookReturnExpression(
+			objectPath,
+			paramName,
+			babel,
+			summariesByBinding
+		);
+		return objectSuffix ? [ ...objectSuffix, expression.property.name ] : null;
+	}
+
+	if ( types.isCallExpression( expression ) ) {
+		if ( ! types.isIdentifier( expression.callee ) || expression.arguments.length !== 1 ) {
+			return null;
+		}
+
+		const binding = expressionPath.scope.getBinding( expression.callee.name );
+		const summary = binding ? summariesByBinding?.get?.( binding.identifier ) : null;
+		if ( ! summary || summary.returnKind !== 'derived-path' && summary.returnKind !== 'derived-root' ) {
+			return null;
+		}
+
+		const argumentSuffix = parseDerivedHookReturnExpression(
+			expressionPath.get( 'arguments.0' ),
+			paramName,
+			babel,
+			summariesByBinding
+		);
+		return argumentSuffix ? [ ...argumentSuffix, ...normalizeCanonicalSegments( summary.suffixSegments || [] ) ] : null;
+	}
+
+	return null;
+}
+
 function summarizeHookReturnExpression( candidate, expressionPath, selectorAliases, selectorLocalNames, babel ) {
 	const { types } = babel;
 	const expression = expressionPath.node;
@@ -404,6 +528,7 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 		const segments = parseStoreSelectorCall( expression, expressionPath, babel );
 		return {
 			hookName: candidate.hookName,
+			returnKind: 'source-selector',
 			segments,
 			declarationSegments: segments,
 			neutralizePaths: [ expressionPath ],
@@ -415,6 +540,7 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 		const alias = selectorAliases.get( expression.name );
 		return {
 			hookName: candidate.hookName,
+			returnKind: 'source-selector',
 			segments: alias.segments,
 			declarationSegments: alias.declarationSegments,
 			neutralizePaths: [ alias.neutralizePath ],
@@ -444,6 +570,10 @@ function neutralizeTransparentHookSummaries( hookSummaries, babel ) {
 
 function isHookName( name ) {
 	return typeof name === 'string' && /^use[A-Z]/.test( name );
+}
+
+function isReservedReactHookName( name ) {
+	return name === 'useMemo' || REACT_STATEFUL_HOOKS.has( name );
 }
 
 function isStoreSelectorCallNode( node, selectorLocalNames, babel ) {
@@ -1412,6 +1542,10 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				if ( this.isTransparentHookSummaryCall( path.node, path ) ) {
+					return;
+				}
+
 				if ( this.isHookLikeUseMemoCall( path.node ) ) {
 					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
 					if ( selectorSources.length > 0 ) {
@@ -1439,6 +1573,15 @@ class StoreSelectorCollector {
 				} );
 			},
 		} );
+	}
+
+	isTransparentHookSummaryCall( expression, path ) {
+		if ( ! this.babel.types.isCallExpression( expression ) || ! this.babel.types.isIdentifier( expression.callee ) ) {
+			return false;
+		}
+
+		const binding = path.scope.getBinding( expression.callee.name );
+		return Boolean( binding && this.config.storeSelectorHookSummariesByBinding?.has?.( binding.identifier ) );
 	}
 
 	collectLocalAliases() {
@@ -2858,37 +3001,78 @@ class StoreSelectorCollector {
 	}
 
 	resolveTransparentHookSummaryInfo( expression, path ) {
-		if (
-			! this.babel.types.isIdentifier( expression.callee ) ||
-			expression.arguments.length > 0
-		) {
-			const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) || [] );
-			if ( selectorSources.length > 0 && this.babel.types.isIdentifier( expression.callee ) ) {
-				const binding = path.scope.getBinding( expression.callee.name );
-				const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
-				if ( summary ) {
-					diagnostics.error(
-						path,
-						`Store selector unsupported-hook-call: hook "${ summary.hookName }" is a source hook and cannot receive selector-derived arguments such as "${ stringifySegments( selectorSources[ 0 ] ) }".`
-					);
-				}
-			}
+		if ( ! this.babel.types.isIdentifier( expression.callee ) ) {
 			return null;
 		}
 
 		const binding = path.scope.getBinding( expression.callee.name );
 		const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
+		const unsupported = binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
+		const argumentPaths = path.get( 'arguments' ) || [];
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
 		if ( ! summary ) {
+			if ( unsupported && selectorSources.length > 0 ) {
+				diagnostics.error(
+					path,
+					`Store selector ${ unsupported.kind }: hook "${ unsupported.hookName }" cannot summarize selector-derived values such as "${ stringifySegments( selectorSources[ 0 ] ) }" (${ unsupported.reason }).`
+				);
+			}
 			return null;
 		}
 
-		return {
-			segments: summary.segments,
-			declarationSegments: summary.declarationSegments || summary.segments,
-			dynamicRoot: summary.dynamicRoot,
-			dynamicRootSegments: summary.dynamicRootSegments,
-			transparentHook: summary.hookName,
-		};
+		if ( summary.returnKind === 'source-selector' ) {
+			if ( argumentPaths.length > 0 ) {
+				if ( selectorSources.length > 0 ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" is a source hook and cannot receive selector-derived arguments such as "${ stringifySegments( selectorSources[ 0 ] ) }".`
+					);
+				}
+				return null;
+			}
+
+			return {
+				segments: summary.segments,
+				declarationSegments: summary.declarationSegments || summary.segments,
+				dynamicRoot: summary.dynamicRoot,
+				dynamicRootSegments: summary.dynamicRootSegments,
+				transparentHook: summary.hookName,
+			};
+		}
+
+		if ( summary.returnKind === 'derived-path' || summary.returnKind === 'derived-root' ) {
+			if ( argumentPaths.length !== ( summary.params || [] ).length ) {
+				if ( selectorSources.length > 0 ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" expects ${ ( summary.params || [] ).length } static selector-derived argument(s).`
+					);
+				}
+				return null;
+			}
+
+			const argumentInfo = this.resolveExpressionInfo( expression.arguments[ 0 ], argumentPaths[ 0 ] );
+			if ( ! argumentInfo || ! isSelectorDerivedPath( argumentInfo.segments ) ) {
+				if ( selectorSources.length > 0 ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" must receive a direct selector-derived argument before it can be summarized.`
+					);
+				}
+				return null;
+			}
+
+			const suffixSegments = normalizeCanonicalSegments( summary.suffixSegments || [] );
+			return {
+				segments: [ ...argumentInfo.segments, ...suffixSegments ],
+				declarationSegments: [ ...( argumentInfo.declarationSegments || argumentInfo.segments ), ...suffixSegments ],
+				dynamicRoot: argumentInfo.dynamicRoot,
+				dynamicRootSegments: argumentInfo.dynamicRootSegments,
+				transparentHook: summary.hookName,
+			};
+		}
+
+		return null;
 	}
 
 	throwUnsupportedHookReturnIfSelectorDerived( path, expressionPaths, reason ) {

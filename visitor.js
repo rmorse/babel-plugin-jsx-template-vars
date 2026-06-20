@@ -212,6 +212,7 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
 						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 						storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
+						storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
 						storeSelectorNeutralizeSelectors: false,
 					} );
 					selectorResults.set( componentName, selectorResult );
@@ -278,6 +279,7 @@ function templateVarsVisitor( babel, config ) {
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 					storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
+					storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
 				} );
 				selectorResults.set( componentName, selectorResult );
 
