@@ -316,6 +316,11 @@ reuse, such as `product={ product }` inside different `.map()` roots, shares a
 child-relative seed shape through `declarationSegments` so the parent still owns
 the list wrapper and PHP context depth.
 
+Ambiguous multi-source selector flows that could produce partial or empty
+templates hard-error by default, even when warnings are suppressed. As new
+static shapes become supported, they should be paired with fail-closed fixtures
+for the nearest unsupported shape so false-positive hard errors are caught early.
+
 ## Caveats
 
 ### This is currently experimental

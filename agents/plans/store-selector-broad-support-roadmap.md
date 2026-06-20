@@ -105,6 +105,10 @@ Latest broad-support review follow-ups now covered:
   rendering empty output
 - dangerous mixed list/non-list child prop cases and incompatible
   list-relative shapes hard-error even when warnings are suppressed
+- multi-source ambiguity diagnostics are intentionally unconditional. This
+  shifts risk from silent under-rendering to possible over-rejection, so every
+  newly supported static shape must add a nearby positive fixture and a
+  fail-closed sibling fixture for the unsupported variant.
 - extensionless `.ts` / `.tsx` and `index.ts` / `index.tsx` relative imports
   resolve in the cross-file manifest
 - cross-file debug `compiledPaths` report composed child paths such as
@@ -510,6 +514,8 @@ Must prove:
   and in-transform paths
 - every unsupported boundary has a specific diagnostic kind/message
 - strict mode is required as the CI/review default for the experiment
+- multi-source ambiguity classes that can produce partial or empty output
+  hard-error by default, independent of `warnOnUnsupported`
 - wrong prop names are diagnosed without guessing intended mappings
 - conditionals, logical expressions, spreads, render props, and dynamic
   components fail clearly
@@ -573,6 +579,9 @@ Required gates:
 - stable flat fixtures with selector mode on
 
 Each positive gate should assert Handlebars and PHP output.
+Each new supported static shape should land with a paired fail-closed fixture
+for the closest unsupported sibling shape. This is the main guard against
+false-positive hard errors as the experiment broadens.
 
 Each selector fixture should assert:
 
