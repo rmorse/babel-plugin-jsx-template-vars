@@ -99,6 +99,30 @@ The collector must prove what the hook returns and map that result back to
 selector-derived segments. This is not a component adapter problem. It needs a
 hook summary model.
 
+## Implementation Blockers To Clear First
+
+Reviewer probes identified three code-level constraints that must be handled
+before positive hook support lands:
+
+1. **Opaque helper usage must recognize transparent hook boundaries.**
+   Existing helper-call diagnostics should not treat `useMemo` dependency-array
+   entries as opaque helper arguments. A transparent-hook allowlist must exempt
+   dependency arrays for debug-only collection and analyze memo callback bodies
+   through the hook summary path, not through general helper-call tracing.
+
+2. **Hook bodies need a dedicated scanner.**
+   Component-body nested selector rules are correct for JSX components, but
+   top-level custom hooks are separate summary candidates. Hook summaries should
+   be built by a dedicated hook-body scanner over top-level `use[A-Z]`
+   declarations/exports, not by reusing component `collectSelectorAssignments`
+   traversal inside component bodies.
+
+3. **Hook discovery must use hook identity, not component identity.**
+   Component names use `/^[A-Z]/`; hook names use `/^use[A-Z]/`. Add a
+   hook-specific discovery adapter for top-level function declarations, const
+   arrow/function expressions, and supported exports. Do not route hook
+   discovery through `isComponentName`.
+
 ## Design Principles
 
 1. **Support transparent value flow only.**
@@ -215,6 +239,9 @@ Rules:
   selector-derived value
 - dependency array is not used to prove the template path
 - dependency array may be recorded in debug metadata for review
+- omitted dependency arrays are allowed when the return expression is statically
+  provable; debug should record `dependencies: "omitted"`
+- dependency-array values must not trigger opaque-helper diagnostics
 
 Fail-closed siblings:
 
@@ -328,8 +355,12 @@ Rules:
 - no conditionals, loops, mutation, nested functions, async/generator, or
   unsupported helper calls
 - no non-return hook/helper statements in the body
+- no state/ref/effect/callback hooks in the body, even when the returned value
+  looks selector-derived
 - returned expression may be direct `useStoreSelector(...)`, a selector alias,
   or a supported transparent hook call
+- hook result aliases must be `const`; `let`/`var` or reassignment are
+  unsupported
 
 ### 7. Same-File Derived Custom Hook
 
@@ -359,6 +390,7 @@ Rules:
 - hook summary key must include parameter mapping and return shape
 - callsite resolution must inherit object-root, mixed-context, and
   list-relative ambiguity hard-errors from component prop tracing
+- hook result aliases must be `const`; reassignment invalidates the summary
 
 Fail-closed siblings:
 
@@ -500,6 +532,8 @@ static template data.
 Policy:
 
 - `useRef(selectorValue)` used only as a DOM ref remains irrelevant
+- `ref={ref}` JSX attributes remain irrelevant because they are not template
+  data
 - selector-derived arguments to `useRef` must not create template declarations
 - `ref.current` rendered or passed to selector-traced child props fails closed
 - selector-derived data stored into `ref.current` fails closed if consumed
@@ -587,6 +621,7 @@ sources:
 - `useTransition`
 - `useOptimistic`
 - `useActionState`
+- `useImperativeHandle`
 
 Policy:
 
@@ -792,6 +827,31 @@ Collector activation should consider:
 Without this activation input, cross-file hook consumers would skip collection
 before `resolveTransparentHookCallInfo` can run.
 
+### Hook Discovery And Body Scanning
+
+Add a hook-specific adapter, parallel to component discovery:
+
+- hook candidates are top-level declarations or supported exports named
+  `use[A-Z]`
+- supported declaration forms should mirror the component adapter where
+  practical: function declaration, const arrow, const function expression, and
+  default/named export forms once the export graph can identify them
+- nested hooks are ignored or diagnosed; they are not summary candidates
+- non-hook helpers such as `selectHeroTitle` remain unsupported unless a future
+  explicit configuration makes them selector sources
+
+Hook body scanning should be separate from component collection:
+
+- top-level custom hook bodies may contain an internal selector only when the
+  body is selected for a valid hook summary
+- selector calls inside memo callbacks or unsupported nested functions remain
+  hard failures
+- disallowed calls/statements in a hook body (`useState`, `useRef`,
+  `useEffect`, assignments, loops, helper calls) reject the summary even if the
+  final return expression looks selector-derived
+- a hook import resolving to a component export, or a component import resolving
+  to a hook export, is a wrong-kind import diagnostic
+
 ## Manifest Integration
 
 Cross-file hook summaries should be manifest-owned:
@@ -822,6 +882,22 @@ manifest handoff used for component callsite contexts.
 
 Do not derive cross-file hook summaries from transform order.
 
+Implementation should extend the existing manifest pass:
+
+1. Build file records.
+2. Resolve imports/exports.
+3. Build component graph records.
+4. Build hook summaries from top-level hook records.
+5. Resolve hook import edges with the same export graph.
+
+Cross-file diagnostics must include:
+
+- unresolved hook import
+- import resolves to a component export instead of a hook export
+- ambiguous hook export, including star-export ambiguity
+- unsupported hook body in the target file
+- hook import cycle
+
 ## Diagnostics
 
 Use stable diagnostic kinds:
@@ -834,10 +910,14 @@ Use stable diagnostic kinds:
 - `unsupported-hook-callback-flow`
 - `unsupported-hook-argument-flow`
 - `unsupported-hook-opaque-flow`
+- `unsupported-hook-nested`
+- `unsupported-hook-reassignment`
+- `unsupported-hook-state-in-body`
 - `unsupported-hook-import`
 - `ambiguous-hook-return`
 - `configured-selector-hook-unresolved`
 - `configured-selector-hook-invalid`
+- `transparent-hook-deps-audit`
 
 Diagnostic severity follows the existing relevance model:
 
@@ -845,7 +925,11 @@ Diagnostic severity follows the existing relevance model:
 - Hard error when selector-derived output depends on an unsupported hook path.
 - Hard error, or at minimum declaration suppression plus metadata, when a
   selector-derived expression appears inside a mutable state/ref initializer.
-- Optional fail-all mode for CI/review audits.
+- Optional fail-all mode for CI/review audits, e.g. an experimental
+  `auditHooks`/strict-review mode that surfaces skipped hooks even when they
+  are unrelated to output.
+- `transparent-hook-deps-audit` is review-only metadata and must not influence
+  path proof or output.
 
 ## Debug Metadata
 
@@ -897,6 +981,10 @@ The first implementation stream should stay intentionally narrow:
 2. Configured app-owned selector hooks as import-bound selector sources.
 3. Import-bound direct React `useMemo` expression bodies only.
 
+Steps 2 and 3 are independent after Phase 0. Configured selector hooks are the
+lowest-risk drop-in source-recognition win; `useMemo` is the first transparent
+hook-summary proof. They can land in either order if their gates stay separate.
+
 Supported first-wave `useMemo` return kinds:
 
 - scalar selector path
@@ -928,6 +1016,11 @@ Tasks:
 - suppress selector-member declarations inside stateful hook arguments
 - add mutable-hook taint tracking for state bindings, setter bindings, refs,
   and `ref.current` writes
+- add a transparent-hook exemption to opaque helper diagnostics so `useMemo`
+  dependency arrays are collected for debug rather than treated as helper
+  arguments
+- split nested-selector policy between unsupported component nested functions
+  and top-level hook-body summary scanning
 - add fail-closed tests for selector-derived values through `useState`,
   `useReducer`, `useRef`, and `useCallback`
 - add fail-closed tests for `setTitle(hero.title)`, `ref.current = hero.title`,
@@ -943,6 +1036,8 @@ Exit gates:
 - dangerous state/ref/callback template flows hard-error with stable hook
   diagnostic kinds
 - setter/ref mutation paths hard-error when the mutated value reaches output
+- `useMemo(() => hero.title, [ hero ])` dependencies do not trigger opaque
+  helper diagnostics
 - irrelevant effect-only usage does not break output
 - metadata records skipped hook boundaries
 - unsupported hook metadata is present even with warnings suppressed
@@ -985,6 +1080,8 @@ Positive gates:
 - list root preserved through `useMemo(() => products)` and then mapped
 - static optional member in memo return
 - dependency array recorded in debug metadata
+- omitted dependency array compiles the same statically proven return and is
+  recorded as omitted in debug metadata
 
 Fail-closed gates:
 
@@ -997,6 +1094,7 @@ Fail-closed gates:
 - object literal return before Phase 5
 - selector-derived value escapes through unsupported object spread
 - hook-in-callback such as `useMemo(() => useStoreSelector(...))`
+- nested selector inside memo callback hard-errors
 
 Metadata gates:
 
@@ -1024,10 +1122,12 @@ Fail-closed gates:
 - async/generator hook
 - hook body mutation
 - hook body helper call
+- hook body contains state/ref/effect/callback hooks
 - non-return hook/helper statement before the return
 - unsupported internal selector call does not survive import removal
 - valid internal selector call is consumed by the summary and does not double
   emit
+- hook result assigned to `let`/`var` or reassigned later
 
 ### Phase 4: Same-File Derived Custom Hooks
 
@@ -1115,13 +1215,14 @@ Fixture should include:
 ## Recommended Order
 
 1. Phase 0 hook safety hardening.
-2. Phase 1 configured app-owned selector hooks.
-3. Phase 2 direct `useMemo`.
-4. Phase 3 same-file source custom hooks.
-5. Phase 4 same-file derived custom hooks.
-6. Phase 5 object return contracts.
-7. Phase 6 cross-file transparent hooks.
-8. Phase 7 final hook fixture matrix.
+2. Phase 1 configured app-owned selector hooks and Phase 2 direct `useMemo` as
+   separate first-positive slices; configured hooks are source recognition,
+   `useMemo` is the first summary proof.
+3. Phase 3 same-file source custom hooks.
+4. Phase 4 same-file derived custom hooks.
+5. Phase 5 object return contracts.
+6. Phase 6 cross-file transparent hooks.
+7. Phase 7 final hook fixture matrix.
 
 Rationale:
 
@@ -1172,10 +1273,16 @@ Rationale:
     5 object-member alias contract lands?
 12. Does collector activation cover hook-only consumer components that import a
     summarized hook but do not import a selector source directly?
-13. Should tuple returns ever be supported for common hooks like
+13. Are the opaque-helper and dependency-array exemptions narrow enough for
+    `useMemo` without weakening helper diagnostics elsewhere?
+14. Is the dedicated hook-body scanner sufficiently separate from component
+    nested-function selector rules?
+15. Does the hook discovery adapter cover the right declaration/export forms
+    without reusing component identity rules?
+16. Should tuple returns ever be supported for common hooks like
    `const [hero] = useHeroTuple()`?
-14. What debug metadata is sufficient for reviewers to explain a skipped hook
+17. What debug metadata is sufficient for reviewers to explain a skipped hook
    path?
-15. Should cross-file hook summaries reuse the component manifest pass, or run as
+18. Should cross-file hook summaries reuse the component manifest pass, or run as
    a separate prepass phase?
-16. Are there common natural hook patterns missing from this plan?
+19. Are there common natural hook patterns missing from this plan?
