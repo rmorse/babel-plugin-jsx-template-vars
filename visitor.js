@@ -184,6 +184,7 @@ function templateVarsVisitor( babel, config ) {
 			const childPropTracesByComponent = new Map();
 			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename );
 			const crossFileDynamicRootPropsByComponent = getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename );
+			const crossFileDebug = getCrossFileDebugForFile( storeSelectorOptions, filename );
 
 			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
 				selectorResults.clear();
@@ -379,6 +380,9 @@ function templateVarsVisitor( babel, config ) {
 					...( state.file.metadata.storeSelectorTemplateVars || [] ),
 					...debugEntries,
 				];
+				if ( crossFileDebug ) {
+					state.file.metadata.storeSelectorTemplateVarsCrossFile = crossFileDebug;
+				}
 			}
 			if ( unsupportedEntries.length > 0 ) {
 				state.file.metadata.storeSelectorTemplateVarsUnsupported = [
@@ -450,6 +454,59 @@ function getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename
 	return propsByComponent && typeof propsByComponent === 'object' && ! Array.isArray( propsByComponent ) ?
 		propsByComponent :
 		{};
+}
+
+function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return null;
+	}
+
+	const manifest = storeSelectorOptions.__crossFileManifest;
+	if ( ! manifest ) {
+		return null;
+	}
+
+	const normalizedFilename = normalizeStoreSelectorFilename( filename );
+	const callsiteContexts = getCrossFileManifestEntry( manifest.callsiteContextsByFile || {}, normalizedFilename ) || [];
+	const childRelativeDiscovery = getCrossFileManifestEntry( manifest.childRelativeDiscoveryByFile || {}, normalizedFilename ) || {};
+	const dynamicRootProps = getCrossFileManifestEntry( manifest.dynamicRootPropsByFile || {}, normalizedFilename ) || {};
+	const importEdges = ( manifest.debug?.importEdges || [] ).filter( edge => normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename );
+	const seedEdges = ( manifest.debug?.seedEdges || [] ).filter( edge => (
+		normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename ||
+		normalizeStoreSelectorFilename( edge.targetFilename ) === normalizedFilename
+	) );
+	const skippedImports = ( manifest.debug?.skippedImports || [] ).filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizedFilename );
+	const diagnostics = ( manifest.diagnostics || [] ).filter( diagnostic => (
+		diagnostic.filename && normalizeStoreSelectorFilename( diagnostic.filename ) === normalizedFilename
+	) );
+
+	if (
+		callsiteContexts.length === 0 &&
+		Object.keys( childRelativeDiscovery ).length === 0 &&
+		Object.keys( dynamicRootProps ).length === 0 &&
+		importEdges.length === 0 &&
+		seedEdges.length === 0 &&
+		skippedImports.length === 0 &&
+		diagnostics.length === 0
+	) {
+		return null;
+	}
+
+	return {
+		filename: normalizedFilename,
+		callsiteContexts: callsiteContexts.map( context => ( {
+			...context,
+			canonicalPath: stringifyStoreSelectorSegments( context.canonicalSegments || [] ),
+			declarationPath: stringifyStoreSelectorSegments( context.declarationSegments || [] ),
+			compiledPaths: [ stringifyStoreSelectorSegments( context.canonicalSegments || [] ) ].filter( Boolean ),
+		} ) ),
+		childRelativeDiscovery,
+		dynamicRootProps,
+		importEdges,
+		seedEdges,
+		skippedImports,
+		diagnostics,
+	};
 }
 
 function getCrossFileManifestEntry( manifestByFile, filename ) {

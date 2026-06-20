@@ -27,6 +27,10 @@ Current implementation status:
     component, the child transforms with relative dynamic-root discovery, and
     each parent injects its own template-root descriptor callsite context.
     Replacement and control output are covered in Handlebars and PHP.
+  - Cross-file review/debug metadata for the direct object-root slice is
+    exposed through transform metadata, including per-file callsite contexts,
+    child relative-discovery records, dynamic-root props, import edges, seed
+    edges, diagnostics, and root compiled-path hints.
   - Dynamic root containment is enforced at transform time for covered same-file
     descriptor paths: bare dynamic-root rendering is rejected before codegen.
   - Minimal dynamic-root debug metadata is exposed for review mode, including
@@ -34,8 +38,8 @@ Current implementation status:
     `dynamicRootPropsByComponent`.
 - **Still pending:**
   - Cross-file relay through intermediate files.
-  - Full debug metadata for callsite contexts and compiled paths beyond the
-    manifest-level direct-callsite context records.
+  - Full cross-file debug metadata for relay/list-relative cases and
+    child-suffix compiled paths beyond the direct object-root root-path hints.
   - List-relative multi-source variants.
   - Shape-polymorphic specialization research.
 - **Later residuals to revisit:**

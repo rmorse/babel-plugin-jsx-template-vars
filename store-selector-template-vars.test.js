@@ -1341,6 +1341,108 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 
+	it('exposes cross-file callsite context debug metadata when requested', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => (
+					<main>
+						<h1>{ hero.title }</h1>
+						{ hero.status === 'published' && <span>Published</span> }
+					</main>
+				);
+			`,
+			'HomePage.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const HomePage = () => {
+					const hero = useStoreSelector((state) => state.home.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { HomePage };
+			`,
+			'ArticlePage.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const ArticlePage = () => {
+					const hero = useStoreSelector((state) => state.article.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { ArticlePage };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		};
+		const homeFilename = path.join(root, 'HomePage.jsx');
+		const headerFilename = path.join(root, 'Header.jsx');
+		const homeResult = transformTemplateVars(files[homeFilename], options, { filename: homeFilename });
+		const headerResult = transformTemplateVars(files[headerFilename], options, { filename: headerFilename });
+
+		expect(homeResult.metadata.storeSelectorTemplateVarsCrossFile).toEqual(expect.objectContaining({
+			filename: homeFilename,
+			callsiteContexts: [
+				expect.objectContaining({
+					parentFile: homeFilename,
+					parentComponent: 'HomePage',
+					targetFile: headerFilename,
+					targetComponent: 'Header',
+					importEdgeId: expect.stringContaining('HomePage.jsx::Header'),
+					jsxTag: 'Header',
+					propName: 'hero',
+					canonicalSegments: [ 'home', 'hero' ],
+					declarationSegments: [ 'home', 'hero' ],
+					canonicalPath: 'home.hero',
+					declarationPath: 'home.hero',
+					compiledPaths: [ 'home.hero' ],
+					strategy: 'dynamic-root-descriptor',
+				}),
+			],
+			dynamicRootProps: {
+				Header: [ 'hero' ],
+			},
+			importEdges: [
+				expect.objectContaining({
+					sourceFilename: homeFilename,
+					localName: 'Header',
+					importedName: 'Header',
+					targetFilename: headerFilename,
+					targetComponentName: 'Header',
+				}),
+			],
+		}));
+		expect(headerResult.metadata.storeSelectorTemplateVarsCrossFile).toEqual(expect.objectContaining({
+			filename: headerFilename,
+			childRelativeDiscovery: {
+				Header: [
+					expect.objectContaining({
+						localName: 'hero',
+						propName: 'hero',
+						dynamicRootSegments: [ 'hero' ],
+					}),
+				],
+			},
+			seedEdges: expect.arrayContaining([
+				expect.objectContaining({
+					targetFilename: headerFilename,
+					targetComponentName: 'Header',
+					localName: 'hero',
+				}),
+			]),
+		}));
+	});
+
 	it('records unsupported selector metadata for JSX member components', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
