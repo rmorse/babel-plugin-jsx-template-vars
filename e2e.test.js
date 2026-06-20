@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import crossFileSelectors from './store-selector-cross-file.js';
 import {
 	e2eFixturesDir,
 	normalizeTemplateOutput,
 	renderTemplateFixture,
+	renderTemplateModules,
 } from './test-utils/transform.js';
 
+const { createStoreSelectorCrossFileManifest } = crossFileSelectors;
 const languages = [ 'handlebars', 'php' ];
 const selectorParityFixtures = new Map([
 	[ 'store-selector-complex-surface', 'full-template-surface' ],
@@ -15,6 +18,33 @@ const selectorParityFixtures = new Map([
 
 function readFixture(name, fileName) {
 	return fs.readFileSync(path.join(e2eFixturesDir, name, fileName), 'utf8');
+}
+
+function readJsonFixture(name, fileName) {
+	return JSON.parse(readFixture(name, fileName));
+}
+
+function readModuleFixtureFiles(name) {
+	const modulesDir = path.join(e2eFixturesDir, name, 'modules');
+	const files = {};
+	const walk = (dir) => {
+		fs.readdirSync(dir, { withFileTypes: true }).forEach((entry) => {
+			const filename = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				walk(filename);
+				return;
+			}
+			if (entry.isFile()) {
+				files[filename] = fs.readFileSync(filename, 'utf8');
+			}
+		});
+	};
+	walk(modulesDir);
+	return files;
+}
+
+function hasModuleFixture(name) {
+	return fs.existsSync(path.join(e2eFixturesDir, name, 'modules'));
 }
 
 function escapeRegExp(value) {
@@ -34,8 +64,9 @@ function expectNoOrphanedListDeclarations(code) {
 
 const fixtureNames = fs.readdirSync(e2eFixturesDir)
 	.filter((name) => fs.statSync(path.join(e2eFixturesDir, name)).isDirectory());
-const selectorFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-'));
-const stableFixtureNames = fixtureNames.filter((name) => ! name.startsWith('store-selector-'));
+const moduleFixtureNames = fixtureNames.filter(hasModuleFixture);
+const selectorFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name));
+const stableFixtureNames = fixtureNames.filter((name) => ! name.startsWith('store-selector-') && ! hasModuleFixture(name));
 
 describe('e2e template output fixtures', () => {
 	it.each(stableFixtureNames.flatMap((fixtureName) => (
@@ -76,6 +107,32 @@ describe('e2e template output fixtures', () => {
 		expect(code).not.toContain('useStoreSelector');
 		expect(code).not.toContain('$$');
 		expectNoOrphanedListDeclarations(code);
+	});
+
+	it.each(moduleFixtureNames.flatMap((fixtureName) => (
+		languages.map((language) => [ fixtureName, language ])
+	)))('%s renders expected %s output with cross-file store selectors enabled', async (fixtureName, language) => {
+		const fixtureConfig = readJsonFixture(fixtureName, 'fixture.json');
+		const files = readModuleFixtureFiles(fixtureName);
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const entryFilename = path.join(e2eFixturesDir, fixtureName, 'modules', fixtureConfig.entry);
+		const expected = readFixture(fixtureName, `expected.${ language }.html`);
+
+		const { codeByFile, output } = await renderTemplateModules(language, files, entryFilename, fixtureConfig.exportName, {}, {
+			experimentalStoreSelectors: {
+				crossFile: true,
+				__crossFileManifest: manifest,
+			},
+		});
+		const combinedCode = Object.values(codeByFile).join('\n');
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
+		expect(combinedCode).not.toContain('useStoreSelector');
+		expect(combinedCode).not.toContain('$$');
+		if (combinedCode.includes('getLanguageList')) {
+			expectNoOrphanedListDeclarations(combinedCode);
+		}
 	});
 
 	it.each(Array.from(selectorParityFixtures.entries()).flatMap(([ selectorFixtureName, flatFixtureName ]) => (

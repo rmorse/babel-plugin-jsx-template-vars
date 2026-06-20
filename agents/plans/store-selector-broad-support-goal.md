@@ -170,6 +170,11 @@ Every positive selector fixture must assert:
 - no orphaned declarations
 - debug metadata where relevant
 
+Current status: e2e fixtures cover same-file selector full surface,
+split-file selector full surface, same-file list-relative multi-source,
+cross-file multi-source object roots, and cross-file list-relative
+multi-source for the supported static surface.
+
 ## Implementation Constraints
 
 - Keep selector-specific logic in collector, visitor, and manifest handoff.

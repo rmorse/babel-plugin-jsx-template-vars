@@ -87,6 +87,12 @@ Already implemented and reviewed:
   - Babel option handoff that hides `__crossFileManifest` behind an
     experimental helper
   - README documentation for strict/review mode and supported static subsets
+- Final parity fixture coverage for supported broad-support surfaces:
+  - same-file selector-only full surface
+  - split-file selector-only full surface
+  - same-file list-relative multi-source
+  - cross-file object-root multi-source
+  - cross-file list-relative multi-source
 
 Current boundaries are documented in:
 
@@ -524,6 +530,11 @@ Must prove:
 Before broad support is claimed, add fixture gates that represent realistic app
 surfaces. This is the explicit closing gate for the roadmap, after the earlier
 feature and infrastructure gates are complete.
+
+Status: fixture coverage exists for the supported surfaces listed in the
+proven foundation. Broader future gates, such as shape-polymorphic output or
+arbitrary spread data-flow, still need their own fixtures if they are pursued
+later.
 
 Required gates:
 
