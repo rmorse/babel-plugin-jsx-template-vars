@@ -425,8 +425,9 @@ class ListController {
 		const sourceSegments = metadata.sourceSegments || [];
 		const rootName = sourceSegments[ 0 ];
 		const mappedRoot = this.vars.mapped?.[ rootName ];
+		const directSourceMetadata = this.listMetadataBySourceKey.get( sourceSegments.join( '.' ) );
 
-		if ( ! mappedRoot ) {
+		if ( ! mappedRoot || directSourceMetadata?.path !== metadata.path ) {
 			return null;
 		}
 
@@ -813,10 +814,19 @@ class ListController {
 
 	resolveListMetaFromSegments( segments, path ) {
 		const sourceKey = this.normalizeCanonicalSegments( segments ).join( '.' );
+		const callbackMetadata = this.resolveNestedListMetaFromCallbackContext( segments, path );
+		if ( callbackMetadata ) {
+			return callbackMetadata;
+		}
+
 		if ( this.listMetadataBySourceKey.has( sourceKey ) ) {
 			return this.listMetadataBySourceKey.get( sourceKey );
 		}
 
+		return null;
+	}
+
+	resolveNestedListMetaFromCallbackContext( segments, path ) {
 		const callbackContext = this.findCallbackListContext( path, segments[ 0 ] );
 		if ( ! callbackContext || segments.length === 1 ) {
 			return null;

@@ -185,6 +185,7 @@ function templateVarsVisitor( babel, config ) {
 			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename );
 			const crossFileDynamicRootPropsByComponent = getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename );
 			const crossFileDebug = getCrossFileDebugForFile( storeSelectorOptions, filename );
+			const derivedUnsupportedRecords = [];
 
 			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
 				selectorResults.clear();
@@ -238,6 +239,7 @@ function templateVarsVisitor( babel, config ) {
 					const seedAliases = createStoreSelectorSeedAliases( componentPath, seedTraces, babel, {
 						...config,
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForPass,
+						storeSelectorUnsupportedRecords: derivedUnsupportedRecords,
 					}, relatedFlows );
 					seedAliases.forEach( ( seedAlias ) => {
 						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
@@ -357,6 +359,8 @@ function templateVarsVisitor( babel, config ) {
 				} );
 				processedComponents.add( componentName );
 			} );
+
+			mergeStoreSelectorUnsupportedRecords( unsupportedEntries, derivedUnsupportedRecords );
 
 			pendingTemplateVars.forEach( ( pending, componentName ) => {
 				if ( processedComponents.has( componentName ) ) {
@@ -498,7 +502,7 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 			...context,
 			canonicalPath: stringifyStoreSelectorSegments( context.canonicalSegments || [] ),
 			declarationPath: stringifyStoreSelectorSegments( context.declarationSegments || [] ),
-			compiledPaths: [ stringifyStoreSelectorSegments( context.canonicalSegments || [] ) ].filter( Boolean ),
+			compiledPaths: getCompiledPathsForCallsiteContext( context, manifest ),
 		} ) ),
 		childRelativeDiscovery,
 		dynamicRootProps,
@@ -507,6 +511,33 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 		skippedImports,
 		diagnostics,
 	};
+}
+
+function getCompiledPathsForCallsiteContext( context, manifest ) {
+	const canonicalSegments = normalizeStoreSelectorSegments( context.canonicalSegments || [] );
+	const discoveryByComponent = getCrossFileManifestEntry( manifest.childRelativeDiscoveryByFile || {}, context.targetFile ) || {};
+	const discoveryEntries = discoveryByComponent[ context.targetComponent ] || [];
+	const discoveryEntry = discoveryEntries.find( entry => entry.propName === context.propName );
+	const localPaths = discoveryEntry?.localPaths || [];
+	if ( localPaths.length === 0 ) {
+		return [ stringifyStoreSelectorSegments( canonicalSegments ) ].filter( Boolean );
+	}
+
+	const dynamicRootSegments = normalizeStoreSelectorSegments(
+		discoveryEntry.dynamicRootSegments || [ discoveryEntry.localName ].filter( Boolean )
+	);
+	const compiledPaths = localPaths.map( localPath => {
+		const localSegments = normalizeStoreSelectorSegments( localPath );
+		const suffix = segmentsStartWith( localSegments, dynamicRootSegments ) ?
+			localSegments.slice( dynamicRootSegments.length ) :
+			localSegments;
+		return stringifyStoreSelectorSegments( [
+			...canonicalSegments,
+			...suffix,
+		] );
+	} ).filter( Boolean );
+
+	return Array.from( new Set( compiledPaths ) ).sort();
 }
 
 function getCrossFileManifestEntry( manifestByFile, filename ) {
@@ -588,6 +619,53 @@ function createDynamicRootDebugAlias( alias ) {
 		dynamicRootSegments: alias.dynamicRootSegments || alias.declarationSegments || alias.segments || [],
 		source: alias.source,
 	};
+}
+
+function mergeStoreSelectorUnsupportedRecords( unsupportedEntries, records ) {
+	const seen = new Set();
+	unsupportedEntries.forEach( entry => {
+		( entry.unsupported || [] ).forEach( unsupported => {
+			seen.add( createStoreSelectorUnsupportedKey( entry.componentName, unsupported ) );
+		} );
+	} );
+
+	records.forEach( ( record ) => {
+		const unsupported = record.unsupported;
+		const key = createStoreSelectorUnsupportedKey( record.componentName, unsupported );
+		if ( seen.has( key ) ) {
+			return;
+		}
+		seen.add( key );
+		unsupportedEntries.push( {
+			componentName: record.componentName,
+			unsupported: [ unsupported ],
+		} );
+	} );
+}
+
+function createStoreSelectorUnsupportedKey( componentName, unsupported = {} ) {
+	return [
+		componentName,
+		unsupported.kind || '',
+		unsupported.propName || '',
+		( unsupported.sourcePaths || [] ).join( ',' ),
+		unsupported.message || '',
+	].join( '|' );
+}
+
+function normalizeStoreSelectorSegments( segments ) {
+	if ( typeof segments === 'string' ) {
+		return segments.split( '.' ).filter( Boolean );
+	}
+	if ( ! Array.isArray( segments ) ) {
+		return [];
+	}
+	return segments.flatMap( segment => String( segment ).split( '.' ).filter( Boolean ) );
+}
+
+function segmentsStartWith( segments, prefix ) {
+	return prefix.length > 0 &&
+		prefix.every( ( segment, index ) => segments[ index ] === segment );
 }
 
 function stringifyStoreSelectorSegments( segments = [] ) {

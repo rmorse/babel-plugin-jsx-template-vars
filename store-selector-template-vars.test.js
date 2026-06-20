@@ -858,6 +858,51 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		[
+			'handlebars',
+			'<main>{{#products}}<article>{{name}}</article>{{/products}}{{#sections}}<section>{{#products}}<article>{{name}}</article>{{/products}}</section>{{/sections}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><?php echo $data_1['name']; ?></article><?php } ?><?php foreach ( $data['sections'] as $data_1 ) { ?><section><?php foreach ( $data_1['products'] as $data_2 ) { ?><article><?php echo $data_2['name']; ?></article><?php } ?></section><?php } ?></main>",
+		],
+	])('auto-seeds same-file list-relative children at different list depths for %s', async (language, expected) => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ProductCard = ({ product }) => (
+				<article>{ product.name }</article>
+			);
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				const sections = useStoreSelector((state) => state.sections);
+				return (
+					<main>
+						{ products.map((product) => (
+							<ProductCard product={ product } />
+						)) }
+						{ sections.map((section) => (
+							<section>
+								{ section.products.map((product) => (
+									<ProductCard product={ product } />
+								)) }
+							</section>
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expectNoOrphanedTemplateReplacements(code, [ 'product.name' ]);
+		expect(code).not.toContain("data_1['products']['name']");
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
 	it('builds a cross-file manifest for direct relative named imports', async () => {
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
@@ -1174,6 +1219,67 @@ describe('experimental store selectors', () => {
 		]));
 		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name' ]);
 		expect(combinedCode).not.toContain("data_1['products']");
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it.each([
+		[
+			'handlebars',
+			'<main>{{#products}}<article>{{name}}</article>{{/products}}{{#sections}}<section>{{#products}}<article>{{name}}</article>{{/products}}</section>{{/sections}}</main>',
+		],
+		[
+			'php',
+			"<main><?php foreach ( $data['products'] as $data_1 ) { ?><article><?php echo $data_1['name']; ?></article><?php } ?><?php foreach ( $data['sections'] as $data_1 ) { ?><section><?php foreach ( $data_1['products'] as $data_2 ) { ?><article><?php echo $data_2['name']; ?></article><?php } ?></section><?php } ?></main>",
+		],
+	])('traces cross-file list-relative children at different list depths for %s', async (language, expected) => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'ProductCard.jsx': `
+				export const ProductCard = ({ product }) => (
+					<article>{ product.name }</article>
+				);
+			`,
+			'App.jsx': `
+				import { ProductCard } from './ProductCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const products = useStoreSelector((state) => state.products);
+					const sections = useStoreSelector((state) => state.sections);
+					return (
+						<main>
+							{ products.map((product) => (
+								<ProductCard product={ product } />
+							)) }
+							{ sections.map((section) => (
+								<section>
+									{ section.products.map((product) => (
+										<ProductCard product={ product } />
+									)) }
+								</section>
+							)) }
+						</main>
+					);
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+		const { codeByFile, output } = await renderTemplateModules(
+			language,
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+		const combinedCode = Object.values(codeByFile).join('\n');
+
+		expect(manifest.diagnostics).toEqual([]);
+		expectNoOrphanedTemplateReplacements(combinedCode, [ 'product.name' ]);
+		expect(combinedCode).not.toContain("data_1['products']['name']");
 		expect(normalizeTemplateOutput(output)).toBe(expected);
 	});
 
@@ -1620,17 +1726,27 @@ describe('experimental store selectors', () => {
 			'Header.jsx': `
 				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
 			`,
+			'Panel.tsx': `
+				type PanelProps = { hero: { title: string } };
+				export const Panel = ({ hero }: PanelProps) => <section>{ hero.title }</section>;
+			`,
 			'components/index.jsx': `
 				export const Footer = ({ hero }) => <footer>{ hero.title }</footer>;
 			`,
+			'tsx-components/index.tsx': `
+				type AsideProps = { hero: { title: string } };
+				export const Aside = ({ hero }: AsideProps) => <aside>{ hero.title }</aside>;
+			`,
 			'App.jsx': `
 				import { Header } from './Header';
+				import { Panel } from './Panel';
 				import { Footer } from './components';
+				import { Aside } from './tsx-components';
 				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 				const App = () => {
 					const hero = useStoreSelector((state) => state.hero);
-					return <main><Header hero={ hero } /><Footer hero={ hero } /></main>;
+					return <main><Header hero={ hero } /><Panel hero={ hero } /><Footer hero={ hero } /><Aside hero={ hero } /></main>;
 				};
 
 				module.exports = { App };
@@ -1640,9 +1756,11 @@ describe('experimental store selectors', () => {
 		const manifest = createStoreSelectorCrossFileManifest(files);
 
 		expect(manifest.diagnostics).toEqual([]);
-		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Footer', 'Header' ]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Aside', 'Footer', 'Header', 'Panel' ]);
 		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toHaveLength(1);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Panel.tsx')].Panel).toHaveLength(1);
 		expect(manifest.seedAliasesByFile[path.join(root, 'components', 'index.jsx')].Footer).toHaveLength(1);
+		expect(manifest.seedAliasesByFile[path.join(root, 'tsx-components', 'index.tsx')].Aside).toHaveLength(1);
 	});
 
 	it('detects import cycles and skips tracing cyclic edges', () => {
@@ -1860,7 +1978,7 @@ describe('experimental store selectors', () => {
 					declarationSegments: [ 'home', 'hero' ],
 					canonicalPath: 'home.hero',
 					declarationPath: 'home.hero',
-					compiledPaths: [ 'home.hero' ],
+					compiledPaths: [ 'home.hero.status', 'home.hero.title' ],
 					strategy: 'dynamic-root-descriptor',
 				}),
 			],
@@ -2397,6 +2515,50 @@ describe('experimental store selectors', () => {
 			warnOnUnsupported: false,
 		});
 		expect(normalizeTemplateOutput(output)).toBe('<main><article>{{featured.name}}</article>{{#products}}<article></article>{{/products}}</main>');
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('records unsupported metadata for mixed list and non-list child props when warnings are suppressed', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Card = ({ name }) => {
+				return <article>{ name }</article>;
+			};
+
+			const App = () => {
+				const featured = useStoreSelector((state) => state.featured);
+				const products = useStoreSelector((state) => state.products);
+				return (
+					<main>
+						<Card name={ featured.name } />
+						{ products.map((product) => (
+							<Card name={ product.name } />
+						)) }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
+		const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
+
+		expect(entry).toEqual(expect.objectContaining({
+			componentName: 'Card',
+			unsupported: expect.arrayContaining([
+				expect.objectContaining({
+					kind: 'seed-prop',
+					propName: 'name',
+					sourcePaths: expect.arrayContaining([ 'featured.name', 'products[].name' ]),
+				}),
+			]),
+		}));
 		expect(warn).not.toHaveBeenCalled();
 	});
 
@@ -3614,6 +3776,25 @@ describe('experimental store selectors', () => {
 		`;
 
 		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/computed properties/);
+	});
+
+	it('rejects computed optional usage on selector-derived values', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const key = 'title';
+				const hero = useStoreSelector((state) => state.hero);
+				return <h1>{ hero?.[key] }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			...selectorOptions,
+			strict: true,
+		})).toThrow(/computed member access is not supported/);
 	});
 
 	it('rejects computed selector paths for the package-scoped selector hook', () => {

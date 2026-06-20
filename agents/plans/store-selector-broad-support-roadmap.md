@@ -94,6 +94,19 @@ Already implemented and reviewed:
   - cross-file object-root multi-source
   - cross-file list-relative multi-source
 
+Latest broad-support review follow-ups now covered:
+
+- same child reused at different list depths keeps PHP context depth correct
+  for both same-file and cross-file list-relative multi-source cases
+- computed optional member usage such as `hero?.[key]` fails closed instead of
+  rendering empty output
+- suppressed warnings still record machine-readable unsupported metadata for
+  dangerous mixed list/non-list child prop cases
+- extensionless `.ts` / `.tsx` and `index.ts` / `index.tsx` relative imports
+  resolve in the cross-file manifest
+- cross-file debug `compiledPaths` report composed child paths such as
+  `home.hero.title`, not only the canonical root
+
 Current boundaries are documented in:
 
 - [store-selector-data-contract-implementation.md](./store-selector-data-contract-implementation.md)

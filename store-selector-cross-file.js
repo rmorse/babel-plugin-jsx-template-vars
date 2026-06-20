@@ -56,6 +56,12 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 						storeSelectorNeutralizeSelectors: false,
 					}
 				);
+				recordChildRelativeDiscoveredPaths(
+					childRelativeDiscoveryByFile,
+					record.filename,
+					componentName,
+					selectorResult
+				);
 
 				collectStoreSelectorChildPropFlows(
 					annotateSelectorResultSource( selectorResult, record.filename, componentName ),
@@ -425,8 +431,12 @@ function resolveImportFilename( fromFilename, source, records ) {
 		base,
 		`${ base }.jsx`,
 		`${ base }.js`,
+		`${ base }.tsx`,
+		`${ base }.ts`,
 		path.join( base, 'index.jsx' ),
 		path.join( base, 'index.js' ),
+		path.join( base, 'index.tsx' ),
+		path.join( base, 'index.ts' ),
 	].map( normalizeFilename );
 
 	return candidates.find( candidate => records.has( candidate ) ) || null;
@@ -818,6 +828,27 @@ function addChildRelativeDiscovery( childRelativeDiscoveryByFile, filename, comp
 	childRelativeDiscoveryByFile[ filename ][ componentName ].push( entry );
 }
 
+function recordChildRelativeDiscoveredPaths( childRelativeDiscoveryByFile, filename, componentName, selectorResult ) {
+	const entries = childRelativeDiscoveryByFile[ normalizeFilename( filename ) ]?.[ componentName ];
+	if ( ! Array.isArray( entries ) || entries.length === 0 ) {
+		return;
+	}
+
+	const declarations = ( selectorResult?.declarations || [] )
+		.map( declaration => normalizeSegments( declaration ) )
+		.filter( segments => segments.length > 0 );
+	entries.forEach( entry => {
+		const dynamicRootSegments = normalizeSegments( entry.dynamicRootSegments || [ entry.localName ].filter( Boolean ) );
+		const localPaths = declarations
+			.filter( segments => segmentsStartWith( segments, dynamicRootSegments ) )
+			.map( stringifySegments );
+		entry.localPaths = Array.from( new Set( [
+			...( entry.localPaths || [] ),
+			...localPaths,
+		] ) ).sort();
+	} );
+}
+
 function removeManifestSeedAlias( seedAliasesByFile, filename, componentName, seedAlias ) {
 	const seedAliases = seedAliasesByFile[ filename ]?.[ componentName ];
 	if ( ! seedAliases ) {
@@ -999,6 +1030,21 @@ function isRelativeImport( source ) {
 
 function normalizeFilename( filename ) {
 	return path.normalize( path.resolve( filename ) );
+}
+
+function normalizeSegments( segments ) {
+	if ( typeof segments === 'string' ) {
+		return segments.split( '.' ).filter( Boolean );
+	}
+	if ( ! Array.isArray( segments ) ) {
+		return [];
+	}
+	return segments.flatMap( segment => String( segment ).split( '.' ).filter( Boolean ) );
+}
+
+function segmentsStartWith( segments, prefix ) {
+	return prefix.length > 0 &&
+		prefix.every( ( segment, index ) => segments[ index ] === segment );
 }
 
 function stringifySegments( segments ) {

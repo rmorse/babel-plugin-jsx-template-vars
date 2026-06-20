@@ -257,6 +257,7 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 			) {
 				const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 				const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
+				recordUnsupportedSeedTrace( config, componentName, propName, validationTraces, sourcePaths, message );
 				diagnostics.unsupported( componentPath, message, config );
 				return;
 			}
@@ -303,6 +304,7 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 		) {
 			const sourceList = Array.from( sourcePaths ).filter( Boolean ).join( ', ' );
 			const message = `Store selector seed prop "${ propName }" for child component "${ componentName }" has ambiguous or unsupported sources${ sourceList ? ` (${ sourceList })` : '' }; seed tracing is disabled for this prop.`;
+			recordUnsupportedSeedTrace( config, componentName, propName, validationTraces, sourcePaths, message );
 			diagnostics.unsupported( componentPath, message, config );
 			return;
 		}
@@ -409,6 +411,28 @@ function isListRelativeMultiSourceSeed( traces, sourcePaths ) {
 		trace.declarationSegments || trace.segments || []
 	).join( '.' ) ) );
 	return declarationKeys.size === 1;
+}
+
+function recordUnsupportedSeedTrace( config, componentName, propName, traces, sourcePaths, message ) {
+	if ( ! Array.isArray( config.storeSelectorUnsupportedRecords ) ) {
+		return;
+	}
+
+	config.storeSelectorUnsupportedRecords.push( {
+		componentName,
+		unsupported: {
+			kind: 'seed-prop',
+			propName,
+			target: `${ componentName }.${ propName }`,
+			path: Array.from( sourcePaths ).filter( Boolean ).join( '|' ),
+			segments: [],
+			message,
+			sourcePaths: Array.from( sourcePaths ).filter( Boolean ),
+			sourceSegments: traces
+				.map( trace => normalizeCanonicalSegments( trace.segments || [] ) )
+				.filter( segments => segments.length > 0 ),
+		},
+	} );
 }
 
 function reportObjectRootMultiSourceAmbiguity( componentPath, propName, traces, sourcePaths ) {
@@ -946,6 +970,13 @@ class StoreSelectorCollector {
 			'MemberExpression|OptionalMemberExpression': ( path ) => {
 				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
 					return;
+				}
+
+				if ( ! this.isUnsupportedChildPropExpression( path ) && this.isComputedSelectorMemberExpression( path ) ) {
+					diagnostics.error(
+						path,
+						'Store selector computed member access is not supported. Use a static member path such as hero.title.'
+					);
 				}
 
 				if (
@@ -2005,6 +2036,15 @@ class StoreSelectorCollector {
 
 	isPartialMemberExpression( path ) {
 		return this.isStaticMemberExpressionNode( path.parentPath?.node ) && path.parentPath.node.object === path.node;
+	}
+
+	isComputedSelectorMemberExpression( path ) {
+		if ( ! path.node?.computed ) {
+			return false;
+		}
+
+		const objectSegments = this.resolveExpressionSegments( path.node.object, path );
+		return Boolean( objectSegments && isSelectorDerivedPath( objectSegments ) );
 	}
 
 	isMapCalleeObject( path ) {
