@@ -9,6 +9,14 @@ const { ReplaceController } = require('./controllers/replace');
 const { ListController } = require('./controllers/list');
 const { ControlController } = require('./controllers/control');
 const diagnostics = require('./diagnostics');
+
+const templateArtifactHelpers = new Set([
+	'getLanguageReplace',
+	'getLanguageList',
+	'getLanguageControl',
+	'getTemplateRootPathArg',
+	'createTemplateRootDescriptor',
+]);
 /**
  * Generate new uids for the provided scope.
  * 
@@ -93,6 +101,11 @@ const templateVarsController = {
 			listMetadata: templateVars.listMetadata || [],
 			scalarMetadata: templateVars.scalarMetadata || [],
 		}
+		const generatedTemplateArtifactNames = new Set([
+			...Object.values(this.vars.replace.mapped),
+			...Object.values(this.vars.control.mapped),
+			...Object.values(this.vars.list.mapped),
+		]);
 
 
 		// All the list variable names we need to look for in JSX expressions
@@ -338,7 +351,74 @@ const templateVarsController = {
 
 		});
 
+		cleanupUnusedTemplateArtifactDeclarations(componentPath, types, generatedTemplateArtifactNames);
+
 	}
+}
+
+function cleanupUnusedTemplateArtifactDeclarations(componentPath, types, generatedTemplateArtifactNames) {
+	const functionPath = componentPath.get('declarations.0.init');
+	if (!functionPath?.scope || generatedTemplateArtifactNames.size === 0) {
+		return;
+	}
+
+	let removed = false;
+	do {
+		removed = false;
+		functionPath.scope.crawl();
+		const declarationsToRemove = [];
+
+		functionPath.traverse({
+			VariableDeclarator(declaratorPath) {
+				const id = declaratorPath.node.id;
+				if (!types.isIdentifier(id) || !generatedTemplateArtifactNames.has(id.name)) {
+					return;
+				}
+
+				if (!hasTemplateArtifactInitializer(declaratorPath, types)) {
+					return;
+				}
+
+				const binding = declaratorPath.scope.getBinding(id.name);
+				if (binding && binding.referencePaths.length === 0) {
+					declarationsToRemove.push(declaratorPath);
+				}
+			},
+		});
+
+		declarationsToRemove.forEach((declaratorPath) => {
+			if (declaratorPath.removed) {
+				return;
+			}
+
+			const declarationPath = declaratorPath.parentPath;
+			if (declarationPath.node.declarations.length === 1) {
+				declarationPath.remove();
+			} else {
+				declaratorPath.remove();
+			}
+			removed = true;
+		});
+	} while (removed);
+}
+
+function hasTemplateArtifactInitializer(declaratorPath, types) {
+	const initPath = declaratorPath.get('init');
+	if (!initPath.node) {
+		return false;
+	}
+
+	let found = false;
+	initPath.traverse({
+		CallExpression(callPath) {
+			const callee = callPath.node.callee;
+			if (types.isIdentifier(callee) && templateArtifactHelpers.has(callee.name)) {
+				found = true;
+				callPath.stop();
+			}
+		},
+	});
+	return found;
 }
 
 function getConditionalReturn(recursionIdentifier, componentName, types) {

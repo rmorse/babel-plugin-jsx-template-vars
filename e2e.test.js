@@ -55,9 +55,8 @@ function escapeRegExp(value) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function expectNoOrphanedListDeclarations(code) {
-	const declarations = Array.from(code.matchAll(/\b(?:const|let|var)\s+(_uid\d*)\s*=\s*[^;]*getLanguageList[^;]*;/g));
-	expect(declarations.length).toBeGreaterThan(0);
+function expectNoOrphanedTemplateArtifacts(code) {
+	const declarations = Array.from(code.matchAll(/\b(?:const|let|var)\s+(_uid\d*)\s*=\s*[^;]*(?:getLanguage(?:Replace|List|Control)|getTemplateRootPathArg|createTemplateRootDescriptor)[^;]*;/g));
 
 	declarations.forEach((match) => {
 		const variableName = match[1];
@@ -111,7 +110,7 @@ describe('e2e template output fixtures', () => {
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
 		expect(code).not.toContain('useStoreSelector');
 		expect(code).not.toContain('$$');
-		expectNoOrphanedListDeclarations(code);
+		expectNoOrphanedTemplateArtifacts(code);
 	});
 
 	it.each(selectorFailClosedFixtureNames.flatMap((fixtureName) => (
@@ -147,9 +146,7 @@ describe('e2e template output fixtures', () => {
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
 		expect(combinedCode).not.toContain('useStoreSelector');
 		expect(combinedCode).not.toContain('$$');
-		if (combinedCode.includes('getLanguageList')) {
-			expectNoOrphanedListDeclarations(combinedCode);
-		}
+		expectNoOrphanedTemplateArtifacts(combinedCode);
 	});
 
 	it.each(Array.from(selectorParityFixtures.entries()).flatMap(([ selectorFixtureName, flatFixtureName ]) => (

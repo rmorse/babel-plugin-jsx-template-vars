@@ -2068,6 +2068,90 @@ describe('experimental store selectors', () => {
 		}));
 	});
 
+	it('exposes successful and skipped cross-file debug edges together', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import MissingDefault from './MissingDefault.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.home.hero);
+					return <main><Header hero={ hero } /><MissingDefault hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+			'ArticlePage.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const ArticlePage = () => {
+					const hero = useStoreSelector((state) => state.article.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { ArticlePage };
+			`,
+		});
+		const appFilename = path.join(root, 'App.jsx');
+		const headerFilename = path.join(root, 'Header.jsx');
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const result = transformTemplateVars(files[appFilename], {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		}, {
+			filename: appFilename,
+		});
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'unsupported-default-import',
+				filename: appFilename,
+				source: './MissingDefault.jsx',
+			}),
+		]);
+		expect(result.metadata.storeSelectorTemplateVarsCrossFile).toEqual(expect.objectContaining({
+			filename: appFilename,
+			callsiteContexts: [
+				expect.objectContaining({
+					targetFile: headerFilename,
+					targetComponent: 'Header',
+					propName: 'hero',
+					compiledPaths: [ 'home.hero.title' ],
+				}),
+			],
+			importEdges: [
+				expect.objectContaining({
+					localName: 'Header',
+					targetFilename: headerFilename,
+				}),
+			],
+			skippedImports: [
+				expect.objectContaining({
+					kind: 'unsupported-default-import',
+					localName: 'MissingDefault',
+					source: './MissingDefault.jsx',
+				}),
+			],
+			diagnostics: [
+				expect.objectContaining({
+					kind: 'unsupported-default-import',
+					source: './MissingDefault.jsx',
+				}),
+			],
+		}));
+	});
+
 	it('records unsupported selector metadata for JSX member components', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
