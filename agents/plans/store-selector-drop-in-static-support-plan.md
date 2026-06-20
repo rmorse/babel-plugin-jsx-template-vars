@@ -71,6 +71,13 @@ turning the transform into React execution or bundler emulation.
    review mode. If an author cannot tell why a component did or did not trace,
    the support is not complete.
 
+7. **Diagnostics must be relevance-filtered.**
+   Drop-in projects may contain unsupported imports that never participate in a
+   selector-traced path. Those should be visible in manifest diagnostics and
+   debug metadata, but they should not hard-fail a normal transform unless
+   selector tracing needs that edge or the caller enables an explicit
+   fail-on-all-manifest-diagnostics CI policy.
+
 ## Current Foundation
 
 Already implemented:
@@ -94,6 +101,37 @@ Already implemented:
 
 The remaining work is therefore not a ground-up design. It is controlled
 expansion of what the manifest can resolve and what the collector can prove.
+
+## Diagnostic Severity Policy
+
+The import/export resolver should distinguish three levels of concern:
+
+1. **Manifest note / debug diagnostic.**
+   Unsupported shapes discovered while scanning the project, but not needed by
+   any selector-traced path. Example: an unrelated package import in a file that
+   otherwise has no selector-driven component edge.
+
+2. **Selector-path hard error.**
+   Unsupported shapes that block a selector-derived value from reaching a
+   traceable child. Example: `<Header hero={ hero } />` where `Header` resolves
+   only through an unsupported package import.
+
+3. **Explicit CI fail-all mode.**
+   A review/CI option can choose to fail on every manifest diagnostic,
+   including unrelated unsupported imports. This is useful for migration audits,
+   but should not be the default drop-in runtime behavior.
+
+Required fixtures:
+
+- unsupported package/default/namespace import in the project but unrelated to
+  selector output does not break a normal transform
+- the same unsupported shape on a selector path hard-errors with a stable
+  diagnostic kind
+- explicit fail-all mode turns manifest diagnostics into build failures
+- debug metadata exposes both unrelated manifest diagnostics and selector-path
+  hard errors with clear relevance
+- type-only imports/exports are ignored for runtime resolution and do not
+  produce unsupported import diagnostics
 
 ## Definition Of Drop-In Static Support
 
@@ -132,7 +170,7 @@ Common authoring:
 import Header from './Header';
 ```
 
-Supported export forms should include:
+Supported export forms should eventually include:
 
 ```jsx
 export default Header;
@@ -145,10 +183,12 @@ export { Header as default };
 Recommended contract:
 
 - For `export default Header`, resolve to the local `Header` binding.
-- For `export default function Header() {}`, use `Header`.
-- For anonymous default functions, synthesize a manifest component identity such
-  as `default` for export resolution, but preserve the local import name for
-  JSX callsites and debug metadata.
+- For `export { Header as default }`, resolve through the normal named export
+  path.
+- Defer `export default function Header() {}` until the component adapter can
+  represent function declarations.
+- Defer anonymous default functions until the manifest has a clear debug and
+  component identity story for anonymous exports.
 - Do not use the old unsafe "local import name matches a named export" fallback.
 - If multiple default candidates exist or the default export is not a component,
   diagnose and skip.
@@ -157,7 +197,6 @@ Positive gates:
 
 - relative default import direct child, object-root replace/control, HBS/PHP
 - default import with `export { Header as default }`
-- anonymous default function component
 - cross-file multi-source object roots through default imports
 - debug import edge shows `importedName: 'default'`, target export kind, and
   resolved component identity
@@ -166,9 +205,13 @@ Fail-closed gates:
 
 - default export is non-component value
 - default export is a call expression with unknown runtime behavior
+- default function declaration before the component adapter supports it
+- anonymous default function before anonymous component identities are supported
 - default import from barrel with ambiguous default
 - local import name differs from default function name but export resolution is
   valid; should still trace by export, not by name matching
+- unrelated unsupported default import remains a manifest diagnostic only until
+  selector tracing needs that edge
 
 ### 2. Barrel And Re-Export Resolution
 
@@ -192,16 +235,19 @@ Supported subset:
   export { Header };
   ```
 
-- `export * from './module'` when it resolves to a unique exported component
-  name and does not conflict
+Defer `export * from './module'` until named, renamed, and default-as-named
+re-exports are stable. When it lands, resolve only the requested export name,
+never re-export `default` through `export *`, and mirror ESM ambiguity semantics
+exactly.
 
 Diagnostics:
 
-- ambiguous star exports
 - re-export cycles
 - default re-export from a non-component
-- conflicts between local export and star export
 - package/barrel chains beyond configured resolver boundary
+- ambiguous star exports once `export *` support is introduced
+- conflicts between local export and star export once `export *` support is
+  introduced
 
 Implementation guidance:
 
@@ -227,18 +273,20 @@ Positive gates:
 - one-hop named barrel
 - renamed barrel export
 - default-as-named barrel export
-- star export with unique match
 - two-hop barrel chain
 - cross-file object-root and list-relative fixtures through a barrel
 
 Fail-closed gates:
 
-- ambiguous `export *`
 - re-export cycle
 - missing re-export target
 - barrel exporting a non-component under component name
 - mixed supported and unsupported exports in the same barrel; supported edges
   should still work if graph consistency permits
+- `export *` remains diagnostic-only until its own subphase
+- when `export *` lands: unique requested export works, conflicting star exports
+  fail closed, and default is not re-exported
+- type-only exports do not create runtime component edges
 
 ### 3. Namespace Imports
 
@@ -774,28 +822,70 @@ Exit gates:
 - debug metadata for unsupported default/namespace/package/barrel imports remains
   stable
 
-### Phase 1: Export Graph And Default Imports
+### Phase 1: Component Identity And Export Records
+
+Goal: create the minimum component/export identity model needed before default
+imports and barrels broaden resolution.
+
+This is not broad component declaration support yet. It is the shared record
+format that lets later phases resolve exports without relying on local import
+name matching.
+
+Tasks:
+
+- Add a component identity record for currently supported component shapes:
+  top-level variable declarations initialized with arrow/function expressions.
+- Add an export record table per file.
+- Represent named exports, local exported variables, and default aliases to
+  existing supported components.
+- Track unsupported component/export forms with stable diagnostics.
+- Record whether a component identity is usable for transform, export-only, or
+  unsupported.
+- Expose component identity and export records in debug metadata.
+
+Component identity sketch:
+
+```txt
+componentId
+filename
+localName
+exportNames[]
+declarationKind
+componentPath
+functionPath
+propsParamPolicy
+supported
+unsupportedReason?
+```
+
+Exit gates:
+
+- existing named import behavior still works through identity records
+- unsupported function/default declarations still diagnose as before
+- debug metadata lists component identities and export records
+- no transform code still depends on unsafe default-import name matching
+
+### Phase 2: Default Imports
 
 Goal: safely support default imports and build the export graph needed for
 barrels.
 
 Tasks:
 
-- Build export table per file.
-- Resolve named exports through existing component paths.
+- Reuse Phase 1 component identity and export records.
 - Resolve default exports through explicit export declarations only.
 - Remove any name-match fallback.
-- Add component identities for anonymous default functions.
 - Extend debug import edges with export resolution.
 
 Exit gates:
 
 - default import positive fixtures pass HBS/PHP
 - default non-component fails closed
-- default anonymous function works or has a documented diagnostic
+- default function declarations diagnose until Phase 4 supports them
+- anonymous default functions diagnose until anonymous identities are designed
 - no seed invention on bad defaults
 
-### Phase 2: Barrels And Re-Exports
+### Phase 3: Named Barrels And Re-Exports
 
 Goal: support common local barrel files without treating them as components.
 
@@ -805,36 +895,14 @@ Tasks:
 - Resolve `export { X as Y } from`.
 - Resolve `export { default as X } from`.
 - Resolve local import-then-export barrels.
-- Add conservative `export *` support with ambiguity detection.
 - Add export graph cycle detection.
 
 Exit gates:
 
 - one-hop and two-hop barrel fixtures
-- star export unique match works
-- star export ambiguity fails closed
 - export cycle diagnostic
 - debug metadata shows every barrel hop
-
-### Phase 3: Namespace Member JSX
-
-Goal: support `import * as Cards` plus `<Cards.Header />` for static members.
-
-Tasks:
-
-- Represent JSX component references structurally.
-- Resolve namespace member callsites to export graph entries.
-- Thread structured component references through child prop collection and
-  manifest callsite contexts.
-- Add debug tag names for namespace components.
-
-Exit gates:
-
-- namespace direct child object-root
-- namespace list-relative child
-- namespace through barrel
-- computed namespace member fails closed
-- package namespace stays diagnostic unless resolver says otherwise
+- `export *` remains diagnostic-only
 
 ### Phase 4: Component Declaration Breadth
 
@@ -856,25 +924,25 @@ Exit gates:
   supported forms
 - unsupported nested/async/generator components diagnose
 
-### Phase 5: Transparent Wrapper Recognition
+### Phase 5: Namespace Member JSX
 
-Goal: support `memo` and carefully scoped `forwardRef`.
+Goal: support `import * as Cards` plus `<Cards.Header />` for static members.
 
 Tasks:
 
-- Add transparent wrapper allowlist.
-- Resolve direct and `React.` wrapper identifiers.
-- Unwrap local references without executing code.
-- Feed unwrapped function into component adapter.
-- Record wrapper chain in debug metadata.
+- Represent JSX component references structurally.
+- Resolve namespace member callsites to export graph entries.
+- Thread structured component references through child prop collection and
+  manifest callsite contexts.
+- Add debug tag names for namespace components.
 
 Exit gates:
 
-- `memo` positive fixtures
-- `React.memo` positive fixtures
-- `forwardRef` positive fixtures if included
-- unknown HOC remains fail-closed
-- wrapper factory/runtime call remains fail-closed
+- namespace direct child object-root
+- namespace list-relative child
+- namespace through barrel
+- computed namespace member fails closed
+- package namespace stays diagnostic unless resolver says otherwise
 
 ### Phase 6: Static Spread Expansion
 
@@ -890,10 +958,10 @@ Tasks:
 Exit gates:
 
 - scalar local object spread
-- object-root local object spread
+- object-root spread remains diagnostic until descriptor path parity is proven
 - spread plus explicit override
 - mutated/computed/runtime spread fail-closed
-- cross-file child through spread works
+- cross-file child through spread works for scalar props
 
 ### Phase 7: Children Composition Expansion
 
@@ -914,7 +982,27 @@ Exit gates:
 - wrapper with own selector scalar plus children passthrough
 - `cloneElement`, `React.Children.map`, render prop children fail closed
 
-### Phase 8: Alias And Package Resolver
+### Phase 8: Transparent Wrapper Recognition
+
+Goal: support `memo` first, with `forwardRef` as a separate follow-up slice.
+
+Tasks:
+
+- Add transparent wrapper allowlist.
+- Resolve direct and `React.` wrapper identifiers.
+- Unwrap local references without executing code.
+- Feed unwrapped function into component adapter.
+- Record wrapper chain in debug metadata.
+
+Exit gates:
+
+- `memo` positive fixtures
+- `React.memo` positive fixtures
+- `forwardRef` remains diagnostic-only until its own slice
+- unknown HOC remains fail-closed
+- wrapper factory/runtime call remains fail-closed
+
+### Phase 9: Alias And Package Resolver
 
 Goal: support configured aliases and local package/workspace imports.
 
@@ -933,9 +1021,35 @@ Exit gates:
 - workspace package fixture
 - package exports fixture
 - out-of-root and unconfigured package fail closed
+- symlinked paths normalize to one canonical file or diagnose ambiguity
+- case-normalized duplicate paths diagnose on case-insensitive filesystems
+- package `exports` condition ambiguity fails closed with a stable diagnostic
 - debug metadata records resolver strategy
 
-### Phase 9: Final Drop-In Fixture Matrix
+### Phase 10: `export *` And Namespace Exports
+
+Goal: add ESM star export support only after named barrels, namespace JSX, and
+component identity records are stable.
+
+Tasks:
+
+- Resolve only the requested export name through `export *`.
+- Do not re-export `default` through `export *`.
+- Detect conflicts across star export sources.
+- Support `export * as Cards from './cards'` only if namespace export semantics
+  can reuse the namespace member JSX resolver.
+- Mirror ESM ambiguity behavior rather than inventing a precedence rule.
+
+Exit gates:
+
+- unique requested star export works
+- conflicting star exports fail closed
+- `export *` does not expose default
+- local explicit export precedence is documented and tested
+- type-only star exports do not create runtime component edges
+- `export * as Cards` works or remains diagnostic with a stable kind
+
+### Phase 11: Final Drop-In Fixture Matrix
 
 Goal: prove realistic project shape.
 
@@ -964,26 +1078,33 @@ Must assert:
 ## Recommended Order
 
 1. Phase 0 contract baseline.
-2. Phase 1 export graph and default imports.
-3. Phase 2 barrels and re-exports.
-4. Phase 4 component declaration breadth.
-5. Phase 3 namespace member JSX.
-6. Phase 6 static spread expansion.
-7. Phase 7 children composition expansion.
-8. Phase 5 transparent wrappers.
-9. Phase 8 alias and package resolver.
-10. Phase 9 final drop-in fixture matrix.
+2. Phase 1 component identity and export records.
+3. Phase 2 default imports.
+4. Phase 3 named barrels and re-exports.
+5. Phase 4 component declaration breadth.
+6. Phase 5 namespace member JSX.
+7. Phase 6 static spread expansion.
+8. Phase 7 children composition expansion.
+9. Phase 8 transparent wrappers.
+10. Phase 9 alias and package resolver.
+11. Phase 10 `export *` and namespace exports.
+12. Phase 11 final drop-in fixture matrix.
 
 Rationale:
 
-- Default imports and barrels unlock many codebases and build resolver
-  primitives needed by namespace/package support.
+- Component identity records must exist before defaults/barrels broaden export
+  resolution, otherwise Phase 1 would depend on machinery scheduled later.
+- Default imports and named barrels unlock many codebases and build resolver
+  primitives needed by namespace/package support, while avoiding early `export *`
+  ambiguity.
 - Component declaration breadth should land before wrapper recognition so
   wrappers can reuse a stable component adapter.
 - Static spreads and children wrappers are authoring-pattern breadth; they can
   be developed independently after import graph shape stabilizes.
 - Alias/package resolution should wait until export graph semantics and debug
   metadata are stable, because it widens the file graph considerably.
+- `export *` should wait until named re-exports and namespace member resolution
+  are stable enough to mirror ESM ambiguity rules precisely.
 
 ## Diagnostics Taxonomy Additions
 
@@ -1001,6 +1122,8 @@ unsupported-package-import
 unconfigured-package-import
 alias-outside-root
 ambiguous-alias-resolution
+manifest-diagnostic-fail-all
+selector-path-unsupported-import
 unsupported-component-wrapper
 unsupported-component-function
 unsupported-static-spread
@@ -1050,21 +1173,22 @@ childrenPolicies[]
 ## Reviewer Questions
 
 1. Is supporting local barrels before package aliases the right sequence?
-2. Should `export *` support be included early with ambiguity detection, or
-   deferred until named re-exports are stable?
-3. Is anonymous default function support worth the extra component identity
-   complexity, or should it diagnose until wrapper/API shape is more mature?
-4. Should `forwardRef` be supported alongside `memo`, or deferred because the
+2. Is the new Phase 1 component identity record enough, or should it become the
+   full component adapter immediately?
+3. Should `export *` stay deferred until named re-exports and namespace support
+   are stable?
+4. Is anonymous default function support worth the extra component identity
+   complexity later, or should it remain diagnostic until strong usage pressure?
+5. Should `forwardRef` be supported alongside `memo`, or deferred because the
    second parameter changes component semantics?
-5. Are static local object spreads safe enough for Phase 6, or should spreads
-   remain limited to inline object literals until the import graph work settles?
-6. Which package resolver config should be the first supported public API:
+6. Are static local object spreads safe enough for Phase 6, or should spreads
+   remain scalar-only until object-root spread descriptors are proven?
+7. Which package resolver config should be the first supported public API:
    explicit aliases only, tsconfig paths, or workspace package maps?
-7. Do we want any support for `export * as Cards from './cards'` before general
-   namespace support?
-8. Should every unsupported import shape hard-error in strict/review mode, or
-   should some remain manifest diagnostics only until a selector path crosses
-   them?
+8. Do we want any support for `export * as Cards from './cards'` before general
+   namespace support, or only as Phase 10 work?
+9. Is the diagnostic relevance policy right: manifest note by default,
+   selector-path hard error when needed, and explicit CI fail-all mode?
 
 ## Non-Goals For This Plan
 
@@ -1089,4 +1213,3 @@ This plan is successful when reviewers agree that:
   are stable
 - the fixture strategy catches both false negatives and false-positive hard
   errors
-
