@@ -7,6 +7,11 @@ const {
 	createStoreSelectorDynamicRootAliases,
 	createStoreSelectorSeedAliases,
 } = require( './store-selector-template-vars' );
+const {
+	getTopLevelComponentPath,
+	getVariableDeclarationPath,
+	isComponentName,
+} = require( './component-adapter' );
 
 function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const diagnostics = [];
@@ -167,11 +172,13 @@ function createFileRecords( files, diagnostics, debug ) {
 			},
 		} );
 
+		const componentPaths = getTopLevelComponentPaths( programPath, babel.types );
 		records.set( filename, {
 			filename,
 			source,
 			programPath,
-			componentPaths: getTopLevelComponentPaths( programPath, babel.types ),
+			componentPaths,
+			exports: getFileExports( programPath, componentPaths, babel.types ),
 			unsupportedComponents: getUnsupportedComponentDeclarations( programPath, babel.types ),
 			selectorImports: collectStoreSelectorImports( programPath, babel ),
 			imports: new Map(),
@@ -255,6 +262,221 @@ function collectRawComponentImports( programPath, filename ) {
 	return imports;
 }
 
+function getFileExports( programPath, componentPaths, types ) {
+	const exports = new Map();
+	componentPaths.forEach( ( _componentPath, componentName ) => {
+		exports.set( componentName, {
+			exportedName: componentName,
+			componentName,
+			kind: 'component',
+		} );
+	} );
+
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		const node = childPath.node;
+
+		if ( types.isExportDefaultDeclaration( node ) ) {
+			const declaration = node.declaration;
+			if ( types.isIdentifier( declaration ) && componentPaths.has( declaration.name ) ) {
+				exports.set( 'default', {
+					exportedName: 'default',
+					componentName: declaration.name,
+					kind: 'default-identifier',
+				} );
+				return;
+			}
+			if (
+				types.isFunctionDeclaration( declaration ) &&
+				declaration.id &&
+				componentPaths.has( declaration.id.name )
+			) {
+				exports.set( 'default', {
+					exportedName: 'default',
+					componentName: declaration.id.name,
+					kind: 'default-function-declaration',
+				} );
+				return;
+			}
+
+			exports.set( 'default', {
+				exportedName: 'default',
+				unsupported: true,
+				kind: 'unsupported-default-export',
+				declarationKind: getDefaultExportDeclarationKind( declaration, types ),
+			} );
+			return;
+		}
+
+		if ( types.isExportAllDeclaration( node ) ) {
+			exports.set( `*:${ node.source?.value || '' }`, {
+				exportedName: '*',
+				source: node.source?.value,
+				unsupported: true,
+				kind: 'unsupported-star-export',
+			} );
+			return;
+		}
+
+		if ( ! types.isExportNamedDeclaration( node ) ) {
+			return;
+		}
+
+		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
+			const specifier = specifierPath.node;
+			if ( ! types.isExportSpecifier( specifier ) ) {
+				return;
+			}
+			const localName = getExportSpecifierName( specifier.local );
+			const exportedName = getExportSpecifierName( specifier.exported );
+			if ( ! localName || ! exportedName ) {
+				return;
+			}
+			if ( node.source ) {
+				exports.set( exportedName, {
+					exportedName,
+					importedName: localName,
+					source: node.source.value,
+					kind: localName === 'default' ? 'reexport-default-as-named' : 'reexport-named',
+				} );
+				return;
+			}
+			if ( componentPaths.has( localName ) ) {
+				exports.set( exportedName, {
+					exportedName,
+					componentName: localName,
+					kind: exportedName === 'default' ? 'default-named-export' : 'local-named-export',
+				} );
+			}
+		} );
+	} );
+
+	return exports;
+}
+
+function resolveImportedComponent( importInfo, targetRecord, records ) {
+	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
+	const resolved = resolveExportedComponent( targetRecord, exportedName, records, new Set() );
+	if ( resolved.componentName ) {
+		return resolved;
+	}
+
+	if ( importInfo.kind === 'default' ) {
+		return {
+			unsupported: true,
+			kind: resolved.kind || 'unsupported-default-export',
+			declarationKind: resolved.declarationKind,
+			message: `Store selector cross-file tracing could not resolve default import "${ importInfo.localName }" to a supported component export.`,
+		};
+	}
+
+	return resolved.unsupported ? resolved : {
+		componentName: importInfo.importedName,
+		filename: targetRecord.filename,
+		exportKind: 'direct-component-name',
+	};
+}
+
+function resolveExportedComponent( targetRecord, exportedName, records, seen ) {
+	if ( ! targetRecord || ! exportedName ) {
+		return {
+			unsupported: true,
+			kind: 'unsupported-reexport',
+		};
+	}
+
+	const visitKey = `${ targetRecord.filename }::${ exportedName }`;
+	if ( seen.has( visitKey ) ) {
+		return {
+			unsupported: true,
+			kind: 'unsupported-reexport',
+			message: `Store selector cross-file tracing found a re-export cycle while resolving "${ exportedName }" from "${ targetRecord.filename }".`,
+		};
+	}
+	seen.add( visitKey );
+
+	const exportInfo = targetRecord.exports?.get( exportedName );
+	if ( exportInfo?.componentName ) {
+		return {
+			componentName: exportInfo.componentName,
+			filename: targetRecord.filename,
+			exportKind: exportInfo.kind,
+			exportHops: [],
+		};
+	}
+
+	if ( exportInfo?.unsupported ) {
+		return {
+			unsupported: true,
+			kind: exportInfo.kind,
+			declarationKind: exportInfo.declarationKind,
+		};
+	}
+
+	if ( exportInfo?.source ) {
+		const reexportFilename = resolveImportFilename( targetRecord.filename, exportInfo.source, records );
+		if ( ! reexportFilename ) {
+			return {
+				unsupported: true,
+				kind: 'unsupported-reexport',
+				message: `Store selector cross-file tracing could not resolve re-export "${ exportInfo.source }" from "${ targetRecord.filename }".`,
+			};
+		}
+		const reexportRecord = records.get( reexportFilename );
+		const resolved = resolveExportedComponent( reexportRecord, exportInfo.importedName, records, seen );
+		if ( resolved.componentName ) {
+			return {
+				...resolved,
+				exportKind: exportInfo.kind,
+				exportHops: [
+					{
+						filename: targetRecord.filename,
+						source: exportInfo.source,
+						importedName: exportInfo.importedName,
+						exportedName: exportInfo.exportedName,
+						targetFilename: reexportFilename,
+					},
+					...( resolved.exportHops || [] ),
+				],
+			};
+		}
+		return resolved;
+	}
+
+	if ( targetRecord.componentPaths.has( exportedName ) ) {
+		return {
+			componentName: exportedName,
+			filename: targetRecord.filename,
+			exportKind: 'direct-component-name',
+			exportHops: [],
+		};
+	}
+
+	return {
+		unsupported: true,
+		kind: 'unsupported-reexport',
+	};
+}
+
+function getExportSpecifierName( specifierName ) {
+	if ( babel.types.isIdentifier( specifierName ) ) {
+		return specifierName.name;
+	}
+	return specifierName?.value;
+}
+
+function getDefaultExportDeclarationKind( declaration, types ) {
+	if ( types.isFunctionDeclaration( declaration ) ) {
+		return declaration.id ? 'default-function-declaration' : 'anonymous-default-function';
+	}
+	if ( types.isIdentifier( declaration ) ) {
+		return 'default-identifier';
+	}
+	if ( types.isCallExpression( declaration ) ) {
+		return 'default-call-expression';
+	}
+	return declaration?.type || 'unknown';
+}
+
 function resolveRecordImports( records, diagnostics, debug ) {
 	records.forEach( ( record ) => {
 		record.rawImports.forEach( ( importInfo ) => {
@@ -265,19 +487,6 @@ function resolveRecordImports( records, diagnostics, debug ) {
 					source: importInfo.source,
 					localName: importInfo.localName,
 					message: `Store selector cross-file tracing only supports relative imports; "${ importInfo.source }" is skipped.`,
-				} );
-				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
-				return;
-			}
-
-			if ( importInfo.kind === 'default' ) {
-				diagnostics.push( {
-					kind: 'unsupported-default-import',
-					filename: record.filename,
-					source: importInfo.source,
-					localName: importInfo.localName,
-					importedName: importInfo.importedName,
-					message: `Store selector cross-file tracing does not support default imports yet; "${ importInfo.localName }" from "${ importInfo.source }" is skipped.`,
 				} );
 				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
@@ -310,10 +519,28 @@ function resolveRecordImports( records, diagnostics, debug ) {
 			}
 
 			const targetRecord = records.get( targetFilename );
-			const targetComponentName = importInfo.importedName;
+			const resolvedImport = resolveImportedComponent( importInfo, targetRecord, records );
+			const targetComponentName = resolvedImport.componentName;
+			const resolvedFilename = resolvedImport.filename || targetFilename;
+			const resolvedRecord = records.get( resolvedFilename );
 
-			if ( ! targetComponentName || ! targetRecord.componentPaths.has( targetComponentName ) ) {
-				const unsupportedComponent = targetRecord.unsupportedComponents?.get( targetComponentName );
+			if ( resolvedImport.unsupported ) {
+				diagnostics.push( {
+					kind: resolvedImport.kind,
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+					targetFilename,
+					declarationKind: resolvedImport.declarationKind,
+					message: resolvedImport.message || `Store selector cross-file tracing could not resolve "${ importInfo.localName }" from "${ importInfo.source }" to a supported component export.`,
+				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, targetFilename ) );
+				return;
+			}
+
+			if ( ! targetComponentName || ! resolvedRecord?.componentPaths.has( targetComponentName ) ) {
+				const unsupportedComponent = resolvedRecord?.unsupportedComponents?.get( targetComponentName );
 				if ( unsupportedComponent ) {
 					diagnostics.push( {
 						kind: 'unsupported-component-declaration',
@@ -321,12 +548,12 @@ function resolveRecordImports( records, diagnostics, debug ) {
 						source: importInfo.source,
 						localName: importInfo.localName,
 						importedName: importInfo.importedName,
-						targetFilename,
+						targetFilename: resolvedFilename,
 						componentName: targetComponentName,
 						declarationKind: unsupportedComponent.kind,
-						message: `Store selector cross-file tracing does not support component declaration "${ targetComponentName }" in "${ targetFilename }" (${ unsupportedComponent.kind }).`,
+						message: `Store selector cross-file tracing does not support component declaration "${ targetComponentName }" in "${ resolvedFilename }" (${ unsupportedComponent.kind }).`,
 					} );
-					debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, targetFilename ) );
+					debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, resolvedFilename ) );
 					return;
 				}
 
@@ -336,25 +563,28 @@ function resolveRecordImports( records, diagnostics, debug ) {
 					source: importInfo.source,
 					localName: importInfo.localName,
 					importedName: importInfo.importedName,
-					targetFilename,
+					targetFilename: resolvedFilename,
 					message: `Store selector cross-file tracing could not find component "${ importInfo.importedName }" in "${ targetFilename }". Barrel files and re-exports are not supported in this slice.`,
 				} );
-				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, targetFilename ) );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo, resolvedFilename ) );
 				return;
 			}
 
 			record.imports.set( importInfo.localName, {
 				localName: importInfo.localName,
 				componentName: targetComponentName,
-				filename: targetFilename,
+				filename: resolvedFilename,
 			} );
 			debug.importEdges.push( {
 				sourceFilename: record.filename,
 				importSource: importInfo.source,
 				localName: importInfo.localName,
 				importedName: importInfo.importedName,
-				targetFilename,
+				targetFilename: resolvedFilename,
+				resolvedFromFilename: targetFilename,
 				targetComponentName,
+				exportKind: resolvedImport.exportKind,
+				exportHops: resolvedImport.exportHops || [],
 			} );
 		} );
 	} );
@@ -923,24 +1153,12 @@ function isListRelativeSeedAliasConflict( existingSeedAlias, seedAlias ) {
 function getTopLevelComponentPaths( programPath, types ) {
 	const components = new Map();
 	programPath.get( 'body' ).forEach( ( childPath ) => {
-		const declarationPath = getVariableDeclarationPath( childPath, types );
-		if ( ! declarationPath || declarationPath.node.declarations.length !== 1 ) {
+		const component = getTopLevelComponentPath( childPath, types );
+		if ( ! component ) {
 			return;
 		}
 
-		const declaration = declarationPath.node.declarations[ 0 ];
-		if ( ! types.isIdentifier( declaration.id ) || ! isComponentName( declaration.id.name ) ) {
-			return;
-		}
-
-		if (
-			! types.isArrowFunctionExpression( declaration.init ) &&
-			! types.isFunctionExpression( declaration.init )
-		) {
-			return;
-		}
-
-		components.set( declaration.id.name, declarationPath );
+		components.set( component.name, component.path );
 	} );
 	return components;
 }
@@ -949,23 +1167,6 @@ function getUnsupportedComponentDeclarations( programPath, types ) {
 	const unsupported = new Map();
 	programPath.get( 'body' ).forEach( ( childPath ) => {
 		const node = childPath.node;
-
-		if ( types.isFunctionDeclaration( node ) && node.id && isComponentName( node.id.name ) ) {
-			unsupported.set( node.id.name, {
-				kind: 'function-declaration',
-			} );
-			return;
-		}
-
-		if ( types.isExportNamedDeclaration( node ) && types.isFunctionDeclaration( node.declaration ) ) {
-			const name = node.declaration.id?.name;
-			if ( isComponentName( name ) ) {
-				unsupported.set( name, {
-					kind: 'export-function-declaration',
-				} );
-			}
-			return;
-		}
 
 		if ( types.isExportDefaultDeclaration( node ) ) {
 			const declaration = node.declaration;
@@ -1003,25 +1204,6 @@ function getUnsupportedComponentDeclarations( programPath, types ) {
 		}
 	} );
 	return unsupported;
-}
-
-function getVariableDeclarationPath( childPath, types ) {
-	if ( types.isVariableDeclaration( childPath.node ) ) {
-		return childPath;
-	}
-
-	if (
-		types.isExportNamedDeclaration( childPath.node ) &&
-		types.isVariableDeclaration( childPath.node.declaration )
-	) {
-		return childPath.get( 'declaration' );
-	}
-
-	return null;
-}
-
-function isComponentName( name ) {
-	return typeof name === 'string' && /^[A-Z]/.test( name );
 }
 
 function isRelativeImport( source ) {

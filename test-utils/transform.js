@@ -94,7 +94,7 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 	]));
 	const transformed = new Map();
 	normalizedSources.forEach((source, filename) => {
-		transformed.set(filename, transformTemplateVars(source, { language, ...pluginOptions }, { filename }).code);
+		transformed.set(filename, transformTemplateVars(source, { language, ...pluginOptions }, { filename }));
 	});
 
 	const modules = new Map();
@@ -110,8 +110,8 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 				return modules.get(normalizedFilename);
 			}
 
-			const code = transformed.get(normalizedFilename);
-			if (!code) {
+			const result = transformed.get(normalizedFilename);
+			if (!result) {
 				throw new Error(`No transformed module found for ${ normalizedFilename }`);
 			}
 
@@ -131,7 +131,7 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 				'getTemplateRootPathArg',
 				'isTemplateRootDescriptor',
 				'loadModule',
-				`${ rewriteRelativeImportsForExecution(code, normalizedFilename) }\nreturn module.exports;`
+				`${ rewriteRelativeImportsForExecution(result.code, normalizedFilename) }\nreturn module.exports;`
 			);
 
 			const exports = execute(
@@ -155,7 +155,8 @@ export async function renderTemplateModules(language, sources, entryFilename, ex
 
 		const entryExports = loadModule(entryFilename);
 		return {
-			codeByFile: Object.fromEntries(transformed),
+			codeByFile: Object.fromEntries(Array.from(transformed.entries()).map(([ filename, result ]) => [ filename, result.code ])),
+			metadataByFile: Object.fromEntries(Array.from(transformed.entries()).map(([ filename, result ]) => [ filename, result.metadata || {} ])),
 			output: entryExports[ exportName ](props),
 		};
 	} finally {
@@ -198,7 +199,18 @@ function h(type, props, ...children) {
 
 function rewriteRelativeImportsForExecution(code, filename) {
 	const exportedNames = [];
+	const defaultExportNames = [];
+	let reexportIndex = 0;
 	const nextCode = code
+		.replace(/export\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, exportsList, source) => {
+			const resolved = resolveRelativeModuleForExecution(filename, source);
+			const moduleName = `__reexport_${ reexportIndex++ }`;
+			return `const ${ moduleName } = loadModule(${ JSON.stringify(resolved) });\n${ rewriteReExportsForExecution(exportsList, moduleName) }\n`;
+		})
+		.replace(/import\s+([A-Za-z_$][\w$]*)\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, localName, source) => {
+			const resolved = resolveRelativeModuleForExecution(filename, source);
+			return `const { default: ${ localName } } = loadModule(${ JSON.stringify(resolved) });\n`;
+		})
 		.replace(/import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"]([^'"]+)['"];\s*/g, (_match, imports, source) => {
 			const resolved = resolveRelativeModuleForExecution(filename, source);
 			return `const { ${ rewriteNamedImportsForExecution(imports) } } = loadModule(${ JSON.stringify(resolved) });\n`;
@@ -207,15 +219,36 @@ function rewriteRelativeImportsForExecution(code, filename) {
 			exportedNames.push(name);
 			return `const ${ name } =`;
 		})
+		.replace(/export\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g, (_match, name) => {
+			exportedNames.push(name);
+			return `function ${ name }(`;
+		})
+		.replace(/export\s+default\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g, (_match, name) => {
+			defaultExportNames.push(name);
+			return `function ${ name }(`;
+		})
+		.replace(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;?/g, (_match, name) => {
+			defaultExportNames.push(name);
+			return '';
+		})
+		.replace(/export\s+\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/g, (_match, name) => {
+			defaultExportNames.push(name);
+			return '';
+		})
 		.replace(/module\.exports\s*=\s*\{\s*([^}]+?)\s*\};?/g, (_match, exportsList) => {
 			return `module.exports = { ${ exportsList.trim() } };`;
 		});
 
-	if (exportedNames.length === 0) {
+	if (exportedNames.length === 0 && defaultExportNames.length === 0) {
 		return nextCode;
 	}
 
-	return `${ nextCode }\nObject.assign(module.exports, { ${ exportedNames.join(', ') } });`;
+	const namedExportCode = exportedNames.length > 0 ?
+		`Object.assign(module.exports, { ${ exportedNames.join(', ') } });` :
+		'';
+	const defaultExportCode = defaultExportNames.map(name => `module.exports.default = ${ name };`).join('\n');
+
+	return `${ nextCode }\n${ namedExportCode }\n${ defaultExportCode }`;
 }
 
 function rewriteNamedImportsForExecution(imports) {
@@ -228,6 +261,20 @@ function rewriteNamedImportsForExecution(imports) {
 			return aliasMatch ? `${ aliasMatch[1] }: ${ aliasMatch[2] }` : importName;
 		})
 		.join(', ');
+}
+
+function rewriteReExportsForExecution(exportsList, moduleName) {
+	return exportsList
+		.split(',')
+		.map((exportName) => exportName.trim())
+		.filter(Boolean)
+		.map((exportName) => {
+			const aliasMatch = exportName.match(/^([A-Za-z_$][\w$]*|default)\s+as\s+([A-Za-z_$][\w$]*|default)$/);
+			const importedName = aliasMatch ? aliasMatch[1] : exportName;
+			const exportedName = aliasMatch ? aliasMatch[2] : exportName;
+			return `module.exports[${ JSON.stringify(exportedName) }] = ${ moduleName }[${ JSON.stringify(importedName) }];`;
+		})
+		.join('\n');
 }
 
 function resolveRelativeModuleForExecution(filename, source) {

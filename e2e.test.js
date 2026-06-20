@@ -134,19 +134,29 @@ describe('e2e template output fixtures', () => {
 		const entryFilename = path.join(e2eFixturesDir, fixtureName, 'modules', fixtureConfig.entry);
 		const expected = readFixture(fixtureName, `expected.${ language }.html`);
 
-		const { codeByFile, output } = await renderTemplateModules(language, files, entryFilename, fixtureConfig.exportName, {}, {
+		const { codeByFile, metadataByFile, output } = await renderTemplateModules(language, files, entryFilename, fixtureConfig.exportName, {}, {
 			experimentalStoreSelectors: {
 				crossFile: true,
+				debug: true,
 				__crossFileManifest: manifest,
 			},
 		});
 		const combinedCode = Object.values(codeByFile).join('\n');
+		const crossFileDebugEntries = Object.values(metadataByFile)
+			.map(metadata => metadata.storeSelectorTemplateVarsCrossFile)
+			.filter(Boolean);
 
 		expect(manifest.diagnostics).toEqual([]);
 		expect(normalizeTemplateOutput(output)).toBe(normalizeTemplateOutput(expected));
 		expect(combinedCode).not.toContain('useStoreSelector');
 		expect(combinedCode).not.toContain('$$');
 		expectNoOrphanedTemplateArtifacts(combinedCode);
+		expect(crossFileDebugEntries.length).toBeGreaterThan(0);
+		expect(crossFileDebugEntries.some(entry => (
+			(entry.importEdges || []).length > 0 ||
+			(entry.callsiteContexts || []).length > 0 ||
+			Object.keys(entry.childRelativeDiscovery || {}).length > 0
+		))).toBe(true);
 	});
 
 	it.each(Array.from(selectorParityFixtures.entries()).flatMap(([ selectorFixtureName, flatFixtureName ]) => (

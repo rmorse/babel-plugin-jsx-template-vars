@@ -9,6 +9,10 @@ const { ReplaceController } = require('./controllers/replace');
 const { ListController } = require('./controllers/list');
 const { ControlController } = require('./controllers/control');
 const diagnostics = require('./diagnostics');
+const {
+	getComponentFirstParamPath,
+	getComponentFunctionPath,
+} = require('./component-adapter');
 
 const templateArtifactHelpers = new Set([
 	'getLanguageReplace',
@@ -45,7 +49,7 @@ const isHookCall = (callee, types) => {
 };
 
 function normalizeExpressionBodiedArrowComponent( componentPath, types ) {
-	const component = componentPath.node.declarations?.[ 0 ]?.init;
+	const component = getComponentFunctionPath( componentPath, types )?.node;
 	if ( ! types.isArrowFunctionExpression( component ) || types.isBlockStatement( component.body ) ) {
 		return;
 	}
@@ -68,6 +72,10 @@ const templateVarsController = {
 		this.babel = babel;
 		const { types, parse } = babel;
 		normalizeExpressionBodiedArrowComponent( componentPath, types );
+		const componentFunctionPath = getComponentFunctionPath( componentPath, types );
+		if ( ! componentFunctionPath ) {
+			return;
+		}
 		// Get the three types of template vars.
 		const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 		const sharedVarMap = {};
@@ -113,12 +121,12 @@ const templateVarsController = {
 		// Start the main traversal of component
 
 		// TODO - we should look through the params and apply the same logic...
-		const componentParam = componentPath.node.declarations[0].init.params[0];
+		const componentParam = componentFunctionPath.node.params[0];
 		let propsName = null;
 		// If the param is an object pattern, we want to add `__context__` as a property to it.
-		if (componentPath.node.declarations[0].init.params.length === 0) {
+		if (componentFunctionPath.node.params.length === 0) {
 			// Then there are no params, so lets add an object pattern with the generated props.
-			componentPath.node.declarations[0].init.params.push(types.objectPattern([
+			componentFunctionPath.node.params.push(types.objectPattern([
 				types.objectProperty(types.identifier('__context__'), types.identifier('__context__'), false, true),
 				types.objectProperty(types.identifier('__config__'), types.identifier('__config__'), false, true),
 			]));
@@ -143,7 +151,7 @@ const templateVarsController = {
 		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
 		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
 		if (types.isObjectPattern(componentParam)) {
-			const componentParamPath = componentPath.get('declarations.0.init.params.0');
+			const componentParamPath = getComponentFirstParamPath( componentPath, types );
 			listController.registerPatternAliases(componentParam, [], componentParamPath);
 		}
 		listController.registerExternalPathAliases( config.storeSelectorAliases || [] );
@@ -357,7 +365,7 @@ const templateVarsController = {
 }
 
 function cleanupUnusedTemplateArtifactDeclarations(componentPath, types, generatedTemplateArtifactNames) {
-	const functionPath = componentPath.get('declarations.0.init');
+	const functionPath = getComponentFunctionPath( componentPath, types );
 	if (!functionPath?.scope || generatedTemplateArtifactNames.size === 0) {
 		return;
 	}

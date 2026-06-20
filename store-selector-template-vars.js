@@ -1,4 +1,9 @@
 const diagnostics = require( './diagnostics' );
+const {
+	getComponentFirstParamPath,
+	getComponentFunctionPath,
+	getComponentName,
+} = require( './component-adapter' );
 
 const STORE_SELECTOR_MODULE = 'babel-plugin-jsx-template-vars/store';
 const STORE_SELECTOR_EXPORT = 'useStoreSelector';
@@ -107,8 +112,7 @@ function createStoreSelectorPropAliases( componentPath, traces = [], babel, conf
 		};
 	}
 
-	const functionPath = componentPath.get( 'declarations.0.init' );
-	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParamPath = getComponentFirstParamPath( componentPath, babel.types );
 	const firstParam = firstParamPath?.node;
 	if ( firstParam && babel.types.isIdentifier( firstParam ) ) {
 		const binding = firstParamPath.scope.getBinding( firstParam.name );
@@ -247,8 +251,7 @@ function createStoreSelectorSeedAliases( componentPath, traces = [], babel, conf
 		return [];
 	}
 
-	const functionPath = componentPath.get( 'declarations.0.init' );
-	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParamPath = getComponentFirstParamPath( componentPath, babel.types );
 	const firstParam = firstParamPath?.node;
 	if ( firstParam && babel.types.isIdentifier( firstParam ) ) {
 		const binding = firstParamPath.scope.getBinding( firstParam.name );
@@ -374,8 +377,7 @@ function createStoreSelectorDynamicRootAliases( componentPath, traces = [], babe
 		return [];
 	}
 
-	const functionPath = componentPath.get( 'declarations.0.init' );
-	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParamPath = getComponentFirstParamPath( componentPath, babel.types );
 	const firstParam = firstParamPath?.node;
 	if ( ! firstParam || ( ! babel.types.isObjectPattern( firstParam ) && ! babel.types.isIdentifier( firstParam ) ) ) {
 		return [];
@@ -520,8 +522,7 @@ function isConfiguredDynamicRootProp( config, componentName, propName ) {
 }
 
 function childPropHasObjectRootUsage( componentPath, propName, babel ) {
-	const functionPath = componentPath.get( 'declarations.0.init' );
-	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParamPath = getComponentFirstParamPath( componentPath, babel.types );
 	const firstParam = firstParamPath?.node;
 	if ( ! firstParam ) {
 		return false;
@@ -554,8 +555,7 @@ function childPropHasObjectRootUsage( componentPath, propName, babel ) {
 }
 
 function childComponentPassesThroughChildren( componentPath, babel ) {
-	const functionPath = componentPath.get( 'declarations.0.init' );
-	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParamPath = getComponentFirstParamPath( componentPath, babel.types );
 	const firstParam = firstParamPath?.node;
 	if ( ! firstParam ) {
 		return false;
@@ -676,8 +676,7 @@ function warnUnsupportedChildParamShape( componentPath, traces, config ) {
 }
 
 function getStoreSelectorComponentName( componentPath ) {
-	const declaration = componentPath.node?.declarations?.[ 0 ];
-	return declaration?.id?.name || 'child component';
+	return getComponentName( componentPath ) || 'child component';
 }
 
 function groupChildPropTraces( traces ) {
@@ -781,7 +780,7 @@ function assertNoUnprocessedStoreSelectorReferences( programPath, selectorImport
 
 			diagnostics.error(
 				path,
-				'Store selector reference could not be processed. Store selectors are currently supported only in top-level capitalized variable components declared as const App = () => ... .'
+				'Store selector reference could not be processed. Store selectors are currently supported only in top-level capitalized components with a statically supported function body.'
 			);
 		},
 	} );
@@ -790,7 +789,7 @@ function assertNoUnprocessedStoreSelectorReferences( programPath, selectorImport
 class StoreSelectorCollector {
 	constructor( componentPath, selectorLocalNames, babel, config = {} ) {
 		this.componentPath = componentPath;
-		this.componentFunctionPath = componentPath.get( 'declarations.0.init' );
+		this.componentFunctionPath = getComponentFunctionPath( componentPath, babel.types );
 		this.selectorLocalNames = selectorLocalNames;
 		this.babel = babel;
 		this.config = config;

@@ -80,6 +80,63 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
+	it('renders selector bindings in function declaration components', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function App() {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			}
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('renders selector bindings in memo-wrapped components', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const memo = (component) => component;
+			const App = memo(({ hero }) => {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			});
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('renders selector bindings in React.memo identifier-wrapped components', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const React = { memo: (component) => component };
+			const Inner = ({ hero }) => {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			};
+			const App = React.memo(Inner);
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
 	it('discovers list fields from map body children and JSX prop values', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -965,6 +1022,87 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
 	});
 
+	it('traces cross-file function declaration components', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export function Header({ hero }) {
+					return <h1>{ hero.title }</h1>;
+				}
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				function App() {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /></main>;
+				}
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Header' ]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				segments: [ 'hero' ],
+				declarationSegments: [ 'hero' ],
+			}),
+		]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
+	it('traces cross-file memo-wrapped components', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				const memo = (component) => component;
+				export const Header = memo(({ hero }) => <h1>{ hero.title }</h1>);
+			`,
+			'App.jsx': `
+				import { Header } from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <main><Header hero={ hero } /></main>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
+	});
+
 	it('traces renamed relative named imports', async () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -1511,10 +1649,55 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
-	it('does not trace default cross-file imports', () => {
+	it('traces supported default cross-file imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
-				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				export default Header;
+			`,
+			'App.jsx': `
+				import Header from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const options = createCrossFileOptions(manifest);
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			options
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Header' ]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'Header',
+				importedName: 'default',
+				targetComponentName: 'Header',
+				exportKind: 'default-identifier',
+			})
+		]));
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('diagnoses default imports when the default export is not a component', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export default 42;
 			`,
 			'App.jsx': `
 				import Header from './Header.jsx';
@@ -1533,22 +1716,101 @@ describe('experimental store selectors', () => {
 
 		expect(manifest.diagnostics).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-default-import',
+				kind: 'unsupported-default-export',
 				source: './Header.jsx',
 				localName: 'Header',
 				importedName: 'default',
-			}),
-		]);
-		expect(manifest.debug.skippedImports).toEqual([
-			expect.objectContaining({
-				kind: 'unsupported-default-import',
-				source: './Header.jsx',
-				localName: 'Header',
-				importedName: 'default',
+				declarationKind: 'NumericLiteral',
 			}),
 		]);
 		expect(manifest.componentNamesByFile).toEqual({});
 		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('traces default imports through named default re-exports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				export { Header as default };
+			`,
+			'App.jsx': `
+				import PageHeader from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <PageHeader hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'PageHeader',
+				importedName: 'default',
+				targetComponentName: 'Header',
+				exportKind: 'default-named-export',
+			})
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('traces default imports into named default function components', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export default function Header({ hero }) {
+					return <h1>{ hero.title }</h1>;
+				}
+			`,
+			'App.jsx': `
+				import Header from './Header.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'Header',
+				importedName: 'default',
+				targetComponentName: 'Header',
+				exportKind: 'default-function-declaration',
+			})
+		]));
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
 	it('does not trace namespace cross-file imports', () => {
@@ -1583,13 +1845,60 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
-	it('reports re-export barrels as unsupported cross-file targets', () => {
+	it('traces named re-export barrels as cross-file targets', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
 				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
 			`,
 			'index.jsx': `
 				export { Header } from './Header.jsx';
+			`,
+			'App.jsx': `
+				import { Header } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <Header hero={ hero } />;
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.componentNamesByFile[path.join(root, 'App.jsx')]).toEqual([ 'Header' ]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'Header',
+				importedName: 'Header',
+				targetFilename: path.join(root, 'Header.jsx'),
+				resolvedFromFilename: path.join(root, 'index.jsx'),
+				targetComponentName: 'Header',
+				exportKind: 'reexport-named',
+			})
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('keeps star re-export barrels diagnostic-only', () => {
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'index.jsx': `
+				export * from './Header.jsx';
 			`,
 			'App.jsx': `
 				import { Header } from './index.jsx';
@@ -1616,6 +1925,65 @@ describe('experimental store selectors', () => {
 		]);
 		expect(manifest.componentNamesByFile).toEqual({});
 		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
+	it('traces renamed and default-as-named barrel exports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				export default Header;
+			`,
+			'ProductCard.jsx': `
+				export const ProductCard = ({ product }) => <article>{ product.name }</article>;
+			`,
+			'index.jsx': `
+				export { default as Header } from './Header.jsx';
+				export { ProductCard as Card } from './ProductCard.jsx';
+			`,
+			'App.jsx': `
+				import { Header, Card } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const products = useStoreSelector((state) => state.products);
+					return (
+						<main>
+							<Header hero={ hero } />
+							{ products.map((product) => <Card product={ product } />) }
+						</main>
+					);
+				};
+
+				module.exports = { App };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.importEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'Header',
+				targetComponentName: 'Header',
+				exportKind: 'reexport-default-as-named',
+			}),
+			expect.objectContaining({
+				localName: 'Card',
+				targetComponentName: 'ProductCard',
+				exportKind: 'reexport-named',
+			}),
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1>{{#products}}<article>{{name}}</article>{{/products}}</main>');
 	});
 
 	it('records parser failures as manifest diagnostics without throwing', () => {
@@ -1733,7 +2101,8 @@ describe('experimental store selectors', () => {
 		]);
 	});
 
-	it('diagnoses unsupported exported function components', () => {
+	it('discovers exported function declaration components in the manifest', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'Header.jsx': `
 				export function Header({ hero }) {
@@ -1755,14 +2124,14 @@ describe('experimental store selectors', () => {
 
 		const manifest = createStoreSelectorCrossFileManifest(files);
 
-		expect(manifest.diagnostics).toEqual([
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-component-declaration',
-				componentName: 'Header',
-				declarationKind: 'export-function-declaration',
-			}),
+				localName: 'hero',
+				segments: [ 'hero' ],
+				declarationSegments: [ 'hero' ],
+			})
 		]);
-		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
 	it('locks down extensionless and index relative import resolution', () => {
@@ -2076,12 +2445,12 @@ describe('experimental store selectors', () => {
 			`,
 			'App.jsx': `
 				import { Header } from './Header.jsx';
-				import MissingDefault from './MissingDefault.jsx';
+				import * as MissingNamespace from './MissingNamespace.jsx';
 				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 				const App = () => {
 					const hero = useStoreSelector((state) => state.home.hero);
-					return <main><Header hero={ hero } /><MissingDefault hero={ hero } /></main>;
+					return <main><Header hero={ hero } /><MissingNamespace hero={ hero } /></main>;
 				};
 
 				module.exports = { App };
@@ -2115,9 +2484,9 @@ describe('experimental store selectors', () => {
 
 		expect(manifest.diagnostics).toEqual([
 			expect.objectContaining({
-				kind: 'unsupported-default-import',
+				kind: 'unsupported-namespace-import',
 				filename: appFilename,
-				source: './MissingDefault.jsx',
+				source: './MissingNamespace.jsx',
 			}),
 		]);
 		expect(result.metadata.storeSelectorTemplateVarsCrossFile).toEqual(expect.objectContaining({
@@ -2138,15 +2507,15 @@ describe('experimental store selectors', () => {
 			],
 			skippedImports: [
 				expect.objectContaining({
-					kind: 'unsupported-default-import',
-					localName: 'MissingDefault',
-					source: './MissingDefault.jsx',
+					kind: 'unsupported-namespace-import',
+					localName: 'MissingNamespace',
+					source: './MissingNamespace.jsx',
 				}),
 			],
 			diagnostics: [
 				expect.objectContaining({
-					kind: 'unsupported-default-import',
-					source: './MissingDefault.jsx',
+					kind: 'unsupported-namespace-import',
+					source: './MissingNamespace.jsx',
 				}),
 			],
 		}));
@@ -4045,26 +4414,27 @@ describe('experimental store selectors', () => {
 		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/list chains only support/);
 	});
 
-	it('rejects selector calls in unsupported function declaration components before import removal', () => {
-		const source = `
-			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
-
-			function App() {
-				const title = useStoreSelector((state) => state.hero.title);
-				return <h1>{ title }</h1>;
-			}
-
-			module.exports = { App };
-		`;
-
-		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/could not be processed/);
-	});
-
-	it('rejects selector calls in unsupported default exported components before import removal', () => {
+	it('processes selector calls in named default exported components before import removal', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 			export default function App() {
+				const title = useStoreSelector((state) => state.hero.title);
+				return <h1>{ title }</h1>;
+			}
+		`;
+
+		const result = transformTemplateVars(source, selectorOptions);
+
+		expect(result.code).not.toContain('useStoreSelector');
+		expect(result.code).toContain('getLanguageReplace');
+	});
+
+	it('rejects selector calls in anonymous default exported components before import removal', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			export default function() {
 				const title = useStoreSelector((state) => state.hero.title);
 				return <h1>{ title }</h1>;
 			}

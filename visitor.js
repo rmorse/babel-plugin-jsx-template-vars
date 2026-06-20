@@ -47,6 +47,9 @@ const path = require( 'path' );
 const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
 const {
+	getTopLevelComponentPath,
+} = require( './component-adapter' );
+const {
 	collectStoreSelectorImports,
 	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
@@ -143,7 +146,7 @@ function templateVarsVisitor( babel, config ) {
 			}
 
 			// Find the component path by name
-			const componentPath = getComponentPath( path.parentPath, componentName );
+			const componentPath = getComponentPath( path.parentPath, componentName, types );
 			
 			// Remove templateVars from the source
 			path.remove();
@@ -367,7 +370,7 @@ function templateVarsVisitor( babel, config ) {
 					return;
 				}
 
-				const componentPath = getComponentPath( programPath, componentName );
+				const componentPath = getComponentPath( programPath, componentName, types );
 				if ( ! componentPath ) {
 					return;
 				}
@@ -399,12 +402,18 @@ function templateVarsVisitor( babel, config ) {
 };
 
 // Find and return a component (variable declaration) path via traversal by its name.
-function getComponentPath( path, componentName ) {
+function getComponentPath( path, componentName, types ) {
 	let componentPath;
 	path.traverse( {
 		VariableDeclaration( subPath ) {
-			const declarationName = subPath.node.declarations[0].id.name
-			if ( declarationName === componentName ) {
+			const component = getTopLevelComponentPath( subPath, types );
+			if ( component?.name === componentName ) {
+				componentPath = component.path;
+			}
+			subPath.skip();
+		},
+		FunctionDeclaration( subPath ) {
+			if ( subPath.node.id?.name === componentName ) {
 				componentPath = subPath;
 			}
 			subPath.skip();
@@ -686,45 +695,14 @@ function createStoreSelectorSeedAliasKey( seedAlias ) {
 function getTopLevelComponentPaths( programPath, types ) {
 	const components = new Map();
 	programPath.get( 'body' ).forEach( ( childPath ) => {
-		const declarationPath = getVariableDeclarationPath( childPath, types );
-		if ( ! declarationPath || declarationPath.node.declarations.length !== 1 ) {
+		const component = getTopLevelComponentPath( childPath, types );
+		if ( ! component ) {
 			return;
 		}
 
-		const declaration = declarationPath.node.declarations[ 0 ];
-		if ( ! types.isIdentifier( declaration.id ) || ! isComponentName( declaration.id.name ) ) {
-			return;
-		}
-
-		if (
-			! types.isArrowFunctionExpression( declaration.init ) &&
-			! types.isFunctionExpression( declaration.init )
-		) {
-			return;
-		}
-
-		components.set( declaration.id.name, declarationPath );
+		components.set( component.name, component.path );
 	} );
 	return components;
-}
-
-function getVariableDeclarationPath( childPath, types ) {
-	if ( types.isVariableDeclaration( childPath.node ) ) {
-		return childPath;
-	}
-
-	if (
-		types.isExportNamedDeclaration( childPath.node ) &&
-		types.isVariableDeclaration( childPath.node.declaration )
-	) {
-		return childPath.get( 'declaration' );
-	}
-
-	return null;
-}
-
-function isComponentName( name ) {
-	return typeof name === 'string' && /^[A-Z]/.test( name );
 }
 
 module.exports = templateVarsVisitor;
