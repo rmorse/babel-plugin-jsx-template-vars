@@ -2104,6 +2104,88 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported children'));
 	});
 
+	it('renders selector scalar children through direct children passthrough components', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Wrapper = ({ children }) => {
+				return <div className="wrap">{ children }</div>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Wrapper>{ hero.title }</Wrapper>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<div className="wrap">{{hero.title}}</div>');
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported children'));
+	});
+
+	it('keeps selector children unsupported when the child does not directly pass children through', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Wrapper = ({ children }) => {
+				return <div>{ children && <span>{ children }</span> }</div>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Wrapper>{ hero.title }</Wrapper>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			...selectorOptions,
+			warnOnUnsupported: false,
+		});
+		const [ entry ] = result.metadata.storeSelectorTemplateVarsUnsupported;
+
+		expect(entry.unsupported).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				kind: 'child-prop-boundary',
+				boundary: 'JSXChildren',
+				componentName: 'Wrapper',
+				propName: 'children',
+				target: 'Wrapper.children',
+				sourcePaths: [ 'hero.title' ],
+			}),
+		]));
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('renders scalar selector fields from static object literal spreads', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ title, kicker }) => {
+				return <header><p>{ kicker }</p><h1>{ title }</h1></header>;
+			};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header {...{ title: hero.title, kicker: hero.kicker }} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported spread props'));
+	});
+
 	it('does not globally alias child props with multiple selector sources', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const source = `
@@ -3339,19 +3421,76 @@ describe('experimental store selectors', () => {
 		})).toThrow(/helper-body field inference is not supported/);
 	});
 
-	it('rejects optional chaining in selector paths for slice 1', () => {
+	it('normalizes optional chaining in selector paths and selector-derived usage', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 			const App = () => {
 				const title = useStoreSelector((state) => state.hero?.title);
+				const hero = useStoreSelector((state) => state.hero);
+				return (
+					<main>
+						<h1>{ title }</h1>
+						<p>{ hero?.summary }</p>
+						{ hero?.status === 'published' && <aside>Published</aside> }
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<main><h1>{{hero.title}}</h1><p>{{hero.summary}}</p>{{#if_equal hero.status 'published'}}<aside>Published</aside>{{/if_equal}}</main>");
+	});
+
+	it('normalizes optional chaining through dynamic object-root child props', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => {
+				return (
+					<header>
+						<h1>{ hero?.title }</h1>
+						{ hero?.status === 'published' && <span>Published</span> }
+					</header>
+				);
+			};
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const articleHero = useStoreSelector((state) => state.article.hero);
+				return (
+					<main>
+						<Header hero={ homeHero } />
+						<Header hero={ articleHero } />
+					</main>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<main><header><h1>{{home.hero.title}}</h1>{{#if_equal home.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header><header><h1>{{article.hero.title}}</h1>{{#if_equal article.hero.status 'published'}}<span>Published</span>{{/if_equal}}</header></main>");
+	});
+
+	it('rejects computed optional selector paths', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const key = 'title';
+				const title = useStoreSelector((state) => state.hero?.[key]);
 				return <h1>{ title }</h1>;
 			};
 
 			module.exports = { App };
 		`;
 
-		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/optional chaining is not supported/);
+		expect(() => transformTemplateVars(source, selectorOptions)).toThrow(/computed properties/);
 	});
 
 	it('rejects computed selector paths for the package-scoped selector hook', () => {

@@ -57,6 +57,14 @@ Already implemented and reviewed:
 - Same-file and cross-file list-relative multi-source support for compatible
   child-relative shapes, including whole item props and object-field list props
   such as `badges={ product.badges }`.
+- Common React pattern static subsets:
+  - static optional member chains, such as `hero?.title`, normalize to normal
+    template paths
+  - selector scalar children render through direct children-passthrough
+    components
+  - list-rendering children remain supported inside component children
+  - static object-literal spreads with scalar selector fields are
+    parent-materialized
 - Descriptor hardening:
   - generated runtime helper imports
   - transform-time containment for bare descriptors
@@ -310,9 +318,13 @@ Policy:
 These patterns are common in real React code. They should be investigated and
 either supported for static subsets or diagnosed clearly.
 
+Status: the first static subset is implemented. The remaining work in this
+gate is broader local-static proofs and diagnostics polish, not basic support
+for the common simple forms.
+
 #### Optional chaining
 
-Likely supportable for static member chains because template paths are static:
+Supported for static member chains because template paths are static:
 
 ```jsx
 hero?.title
@@ -320,7 +332,7 @@ props.hero?.title
 product?.badge?.label
 ```
 
-Expected policy:
+Policy:
 
 - normalize static optional member chains to the same path as normal member
   access
@@ -330,7 +342,9 @@ Expected policy:
 
 #### Children composition
 
-Potentially supportable for visible, static JSX children:
+Supported for direct children-passthrough components and existing supported
+list children. This intentionally does not try to simulate arbitrary
+`children` logic:
 
 ```jsx
 <Card title={ hero.title }>
@@ -338,10 +352,10 @@ Potentially supportable for visible, static JSX children:
 </Card>
 ```
 
-Expected policy:
+Policy:
 
-- support selector data in children when usage remains directly visible and
-  statically traceable
+- support selector scalar data in children when the child directly renders the
+  `children` prop, such as `({ children }) => <div>{ children }</div>`
 - allow list-rendering children that are already supported by map/list handling
 - fail closed when the child component inspects, transforms, clones, or
   conditionally renders `children`
@@ -350,16 +364,17 @@ Expected policy:
 
 #### JSX spreads
 
-Harder than optional chaining and children. Support only when the AST contains
-strong static evidence.
+Harder than optional chaining and children. The first supported subset is
+inline object-literal spreads with scalar selector fields; support only when
+the AST contains strong static evidence.
 
-Potentially supportable:
+Supported:
 
 ```jsx
 <Header {...{ title: hero.title, status: hero.status }} />
 ```
 
-Maybe support later:
+Still investigate later:
 
 ```jsx
 const headerProps = { title: hero.title };
@@ -371,6 +386,7 @@ Remain fail-closed:
 ```jsx
 <Header {...props} />
 <Header {...getHeaderProps(hero)} />
+<Header {...{ hero }} /> // object-root spread props need descriptor injection support first
 ```
 
 ### 8. Import Graph Breadth
@@ -558,7 +574,8 @@ Pause for review after each major gate:
 - after resolver/parser/component-shape diagnostics are locked down
 - before same-file list-relative multi-source implementation
 - before cross-file list-relative multi-source implementation
-- before optional chaining, children, or spread support
+- before broadening optional chaining, children, or spread support beyond the
+  current static subsets
 - before expanding import graph support
 - before introducing the production wrapper
 - before final parity fixture gates

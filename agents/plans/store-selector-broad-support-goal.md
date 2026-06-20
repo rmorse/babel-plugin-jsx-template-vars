@@ -102,7 +102,8 @@ Investigate and either support the static subset or fail closed with diagnostics
     `hero.title`
   - reject computed/call forms such as `hero?.[key]` and `getHero()?.title`
 - `children` composition:
-  - support direct/static selector usage in JSX children where traceable
+  - support direct/static selector usage in JSX children where traceable,
+    currently the direct `children` passthrough subset
   - allow supported map/list children
   - fail closed when a child inspects, transforms, clones, or conditionally
     renders `children`
@@ -111,6 +112,12 @@ Investigate and either support the static subset or fail closed with diagnostics
     spreads such as `<Header {...{ title: hero.title }} />`
   - reject arbitrary identifier/call spreads unless a conservative
     local-static-object proof is implemented
+
+Current status: the initial static subset is implemented for optional member
+chains, direct `children` passthrough, supported list children, and inline
+object-literal scalar spreads. Broader local-static object spread proofs,
+object-root spread descriptor injection, and manipulated `children` remain
+future work and should stay fail-closed.
 
 ### 10. Import Graph Breadth
 

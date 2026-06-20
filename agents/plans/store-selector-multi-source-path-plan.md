@@ -205,9 +205,9 @@ Do not implement these in this stream:
 - shape-polymorphic specialization
 - dynamic components
 - HOCs
-- spreads
+- broad spread tracing beyond static object-literal scalar spreads
 - render props
-- optional chaining
+- optional call/data-flow tracing beyond static optional member chains
 - generic React context tracing
 - default import support
 - namespace import support

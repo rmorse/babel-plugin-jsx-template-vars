@@ -26,6 +26,15 @@ function isStoreSelectorDebugEnabled( config = {} ) {
 	);
 }
 
+function isStaticMemberExpressionNode( expression, babel ) {
+	const { types } = babel;
+	return Boolean(
+		types.isMemberExpression( expression ) ||
+		( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
+		expression?.type === 'OptionalMemberExpression'
+	) && ! expression.computed;
+}
+
 function collectStoreSelectorImports( programPath, babel ) {
 	const { types } = babel;
 	const localNames = new Set();
@@ -449,19 +458,74 @@ function childPropHasObjectRootUsage( componentPath, propName, babel ) {
 	return binding.referencePaths.some( referencePath => isBindingObjectRootUsage( referencePath, babel ) );
 }
 
+function childComponentPassesThroughChildren( componentPath, babel ) {
+	const functionPath = componentPath.get( 'declarations.0.init' );
+	const firstParamPath = functionPath.get( 'params.0' );
+	const firstParam = firstParamPath?.node;
+	if ( ! firstParam ) {
+		return false;
+	}
+
+	if ( babel.types.isIdentifier( firstParam ) ) {
+		const binding = firstParamPath.scope.getBinding( firstParam.name );
+		if ( ! binding || binding.referencePaths.length === 0 ) {
+			return false;
+		}
+
+		return binding.referencePaths.every( referencePath => isPropsChildrenPassthroughUsage( referencePath, babel ) );
+	}
+
+	if ( ! babel.types.isObjectPattern( firstParam ) ) {
+		return false;
+	}
+
+	const bindingPath = findObjectPatternBindingPath( firstParamPath, 'children', babel );
+	if ( ! bindingPath || ! babel.types.isIdentifier( bindingPath.node ) ) {
+		return false;
+	}
+
+	const binding = bindingPath.scope.getBinding( bindingPath.node.name );
+	if ( ! binding || binding.referencePaths.length === 0 ) {
+		return false;
+	}
+
+	return binding.referencePaths.every( referencePath => isDirectJSXExpressionUsage( referencePath ) );
+}
+
 function isPropsObjectMemberRootUsage( referencePath, propName, babel ) {
 	const memberPath = referencePath.parentPath;
 	if (
 		! memberPath ||
-		! babel.types.isMemberExpression( memberPath.node ) ||
+		! isStaticMemberExpressionNode( memberPath.node, babel ) ||
 		memberPath.node.object !== referencePath.node ||
-		memberPath.node.computed ||
 		! babel.types.isIdentifier( memberPath.node.property, { name: propName } )
 	) {
 		return false;
 	}
 
 	return isBindingObjectRootUsage( memberPath, babel );
+}
+
+function isPropsChildrenPassthroughUsage( referencePath, babel ) {
+	const memberPath = referencePath.parentPath;
+	if (
+		! memberPath ||
+		! isStaticMemberExpressionNode( memberPath.node, babel ) ||
+		memberPath.node.object !== referencePath.node ||
+		! babel.types.isIdentifier( memberPath.node.property, { name: 'children' } )
+	) {
+		return false;
+	}
+
+	return isDirectJSXExpressionUsage( memberPath );
+}
+
+function isDirectJSXExpressionUsage( referencePath ) {
+	const parentPath = referencePath.parentPath;
+	return Boolean(
+		parentPath?.node?.type === 'JSXExpressionContainer' &&
+		parentPath.node.expression === referencePath.node
+	);
 }
 
 function isBindingObjectRootUsage( referencePath, babel ) {
@@ -471,7 +535,7 @@ function isBindingObjectRootUsage( referencePath, babel ) {
 	}
 
 	if (
-		babel.types.isMemberExpression( parentPath.node ) &&
+		isStaticMemberExpressionNode( parentPath.node, babel ) &&
 		parentPath.node.object === referencePath.node
 	) {
 		return true;
@@ -879,7 +943,7 @@ class StoreSelectorCollector {
 
 				this.addDeclarationForExpression( path );
 			},
-			MemberExpression: ( path ) => {
+			'MemberExpression|OptionalMemberExpression': ( path ) => {
 				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
 					return;
 				}
@@ -942,6 +1006,10 @@ class StoreSelectorCollector {
 						return;
 					}
 
+					if ( this.canPassThroughSelectorChildren( elementName ) ) {
+						return;
+					}
+
 					const sourceSegments = selectorSources[ 0 ];
 					const message = `Store selector value "${ stringifySegments( sourceSegments ) }" is used in unsupported children for child component "${ elementName }".`;
 					this.unsupportedChildPropExpressions.add( childPath.node.expression );
@@ -967,6 +1035,10 @@ class StoreSelectorCollector {
 					return;
 				}
 				const { elementName, traceable } = componentInfo;
+
+				if ( traceable && this.isSupportedStaticObjectSpread( path, elementName ) ) {
+					return;
+				}
 
 				const selectorSources = this.collectSelectorDerivedSegments( path.get( 'argument' ) );
 				if ( selectorSources.length === 0 ) {
@@ -1166,6 +1238,59 @@ class StoreSelectorCollector {
 		);
 	}
 
+	isSupportedStaticObjectSpread( path, elementName ) {
+		const { types } = this.babel;
+		const argumentPath = path.get( 'argument' );
+		if ( ! types.isObjectExpression( argumentPath.node ) ) {
+			return false;
+		}
+
+		const properties = argumentPath.get( 'properties' );
+		for ( const propertyPath of properties ) {
+			const property = propertyPath.node;
+			if ( ! types.isObjectProperty( property ) || property.computed ) {
+				return false;
+			}
+
+			const propName = this.getPatternPropertyName( property );
+			if ( ! propName ) {
+				return false;
+			}
+
+			const valuePath = propertyPath.get( 'value' );
+			const selectorSources = this.collectSelectorDerivedSegments( valuePath );
+			if ( selectorSources.length === 0 ) {
+				continue;
+			}
+
+			if ( this.isPotentialDynamicRootBoundary( elementName, propName, selectorSources ) ) {
+				const message = `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used as object-root spread prop "${ propName }" for child component "${ elementName }".`;
+				this.unsupportedChildPropExpressions.add( property.value );
+				this.recordUnsupported( 'child-prop-boundary', selectorSources[ 0 ], message, {
+					boundary: 'JSXSpreadAttribute',
+					componentName: elementName,
+					propName,
+					target: `${ elementName }.${ propName }`,
+					sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+					sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+				} );
+				diagnostics.unsupported( path, message, this.config );
+				return true;
+			}
+		}
+
+		return true;
+	}
+
+	canPassThroughSelectorChildren( elementName ) {
+		const componentPath = this.config.storeSelectorComponentPaths?.get?.( elementName );
+		if ( ! componentPath ) {
+			return false;
+		}
+
+		return childComponentPassesThroughChildren( componentPath, this.babel );
+	}
+
 	addParentListDeclarationForSeed( segments ) {
 		const normalizedSegments = normalizeCanonicalSegments( segments );
 		const lastListIndex = normalizedSegments.reduce( ( match, segment, index ) => (
@@ -1280,11 +1405,10 @@ class StoreSelectorCollector {
 			return [];
 		}
 
-		if ( expression?.type === 'OptionalMemberExpression' || ( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ) {
-			diagnostics.error( path, 'Store selector optional chaining is not supported yet; use a static member path.' );
-		}
-
-		if ( ! types.isMemberExpression( expression ) ) {
+		const isMemberExpression = types.isMemberExpression( expression ) ||
+			( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( expression ) ) ||
+			expression?.type === 'OptionalMemberExpression';
+		if ( ! isMemberExpression ) {
 			diagnostics.error( path, 'Store selector must be a static member path, for example useStoreSelector((state) => state.hero.title).' );
 		}
 
@@ -1668,7 +1792,7 @@ class StoreSelectorCollector {
 			return this.resolveIdentifierInfo( expression.name, path );
 		}
 
-		if ( types.isMemberExpression( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
+		if ( this.isStaticMemberExpressionNode( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
 			const memberInfo = this.resolveMemberAliasInfo( expression, path );
 			if ( memberInfo ) {
 				return memberInfo;
@@ -1711,6 +1835,10 @@ class StoreSelectorCollector {
 			dynamicRoot: alias.dynamicRoot,
 			dynamicRootSegments: alias.dynamicRootSegments,
 		} : null;
+	}
+
+	isStaticMemberExpressionNode( expression ) {
+		return isStaticMemberExpressionNode( expression, this.babel );
 	}
 
 	resolveIdentifierSegments( name, path ) {
@@ -1790,7 +1918,7 @@ class StoreSelectorCollector {
 			Identifier: ( path ) => {
 				const parent = path.parentPath?.node;
 				if (
-					this.babel.types.isMemberExpression( parent ) &&
+					this.isStaticMemberExpressionNode( parent ) &&
 					(
 						( parent.object === path.node && ! parent.computed ) ||
 						parent.property === path.node
@@ -1800,7 +1928,7 @@ class StoreSelectorCollector {
 				}
 				addInfo( this.resolveIdentifierInfo( path.node.name, path ) );
 			},
-			MemberExpression: ( path ) => {
+			'MemberExpression|OptionalMemberExpression': ( path ) => {
 				if ( this.isPartialMemberExpression( path ) ) {
 					return;
 				}
@@ -1868,7 +1996,7 @@ class StoreSelectorCollector {
 			return false;
 		}
 
-		if ( [ 'VariableDeclarator', 'ObjectProperty', 'MemberExpression', 'ObjectPattern', 'ArrayPattern', 'AssignmentPattern' ].includes( parent.type ) ) {
+		if ( [ 'VariableDeclarator', 'ObjectProperty', 'MemberExpression', 'OptionalMemberExpression', 'ObjectPattern', 'ArrayPattern', 'AssignmentPattern' ].includes( parent.type ) ) {
 			return false;
 		}
 
@@ -1876,7 +2004,7 @@ class StoreSelectorCollector {
 	}
 
 	isPartialMemberExpression( path ) {
-		return this.babel.types.isMemberExpression( path.parentPath?.node ) && path.parentPath.node.object === path.node;
+		return this.isStaticMemberExpressionNode( path.parentPath?.node ) && path.parentPath.node.object === path.node;
 	}
 
 	isMapCalleeObject( path ) {

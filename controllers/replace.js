@@ -69,7 +69,7 @@ class ReplaceController {
 		if ( replacementPath ) {
 			// Make sure we only replace identifiers that are not props and also that
 			// they are not variable declarations.
-			const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator', 'ArrayPattern', 'AssignmentPattern' ];
+			const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'OptionalMemberExpression', 'VariableDeclarator', 'ArrayPattern', 'AssignmentPattern' ];
 			if ( path.parentPath.node && ! excludeTypes.includes( path.parentPath.node.type ) ) {
 				path.node.name = this.vars.mapped[ replacementPath ];
 			}
