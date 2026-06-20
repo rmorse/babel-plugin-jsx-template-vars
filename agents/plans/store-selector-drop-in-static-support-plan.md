@@ -40,6 +40,19 @@ semantically transparent, and to keep dynamic forms diagnostic-only. The plan
 should be judged by whether it expands natural authoring coverage without
 turning the transform into React execution or bundler emulation.
 
+The first implementation wave should be deliberately 80/20:
+
+- component adapter refactor
+- default imports
+- named/renamed/default-as-named barrels
+- function declarations
+- `memo` / `React.memo`
+
+Then pause and test against a realistic app-shaped fixture or real codebase
+before taking on the long tail. Namespace imports, `export *`, package/workspace
+resolution, local-const spreads, `forwardRef`, and anonymous defaults are
+valuable, but they are not part of the first wave.
+
 ## Design Principles
 
 1. **Support the static subset.**
@@ -139,15 +152,23 @@ Required fixtures:
 author can keep normal static component organization and not restructure code
 purely for the transform.
 
-In scope:
+First-wave scope:
 
 - direct relative imports
 - extensionless and `index` imports
-- named, renamed, default, namespace-member, and barrel exports
-- explicit configured aliases and workspace/package entries
-- top-level component declarations and transparent wrappers
-- statically analyzable props, children, and spreads
+- named, renamed, default, and named barrel exports
+- top-level variable and function component declarations
+- `memo` / `React.memo` transparent wrappers
 - TypeScript syntax that does not affect runtime data flow
+
+Follow-up scope after the first wave:
+
+- namespace-member exports/imports
+- explicit configured aliases and workspace/package entries
+- broader statically analyzable props, children, and spreads
+- `forwardRef`
+- anonymous default component identities
+- `export *`
 
 Out of scope unless separately proven:
 
@@ -436,13 +457,19 @@ export { Header };
 ```
 
 Currently supported component paths are mainly top-level variable declarations
-with arrow/function expressions. Drop-in support should add:
+with arrow/function expressions. The first wave should add:
 
 - function declarations
 - exported function declarations
-- default function declarations
 - named functions exported separately
 - TypeScript annotated function/arrow components
+
+Follow-up support can add:
+
+- default function declarations if the adapter can expose them without
+  special-case import logic
+- anonymous default functions only if real usage justifies the identity/debug
+  complexity
 
 Implementation guidance:
 
@@ -468,12 +495,12 @@ Positive gates:
 - `function Header`
 - `export function Header`
 - `export default function Header`
-- anonymous default function component
 - TypeScript props annotation
 - cross-file default import into a function declaration component
 
 Fail-closed gates:
 
+- anonymous default function component until Phase 12
 - overloaded or nested component declarations
 - component declaration inside another function
 - multiple runtime params where props param is not statically identifiable
@@ -497,8 +524,8 @@ Recommended support:
 - Treat a small allowlist of wrappers as transparent when their props function
   is statically visible.
 - Start with `memo` and `React.memo`.
-- Add `forwardRef` only when the first parameter is clearly props and the second
-  parameter is ref.
+- Defer `forwardRef` until `memo`, component adapter, and first-wave validation
+  are proven.
 - Do not execute wrapper arguments.
 
 Implementation guidance:
@@ -519,7 +546,6 @@ Positive gates:
 
 - `memo(({ hero }) => ...)`
 - `React.memo(Header)` where `Header` is local top-level component
-- `forwardRef(({ hero }, ref) => ...)`
 - default export of memo-wrapped component
 
 Fail-closed gates:
@@ -529,6 +555,7 @@ Fail-closed gates:
 - wrapper composition beyond allowlist if not implemented
 - `memo(factory())`
 - `forwardRef` with untraceable props param
+- `forwardRef` remains diagnostic until Phase 10
 
 ### 7. Static JSX Spreads
 
@@ -538,7 +565,7 @@ Already supported:
 <Header {...{ title: hero.title }} />
 ```
 
-Natural next support:
+Potential follow-up support:
 
 ```jsx
 const headerProps = {
@@ -549,9 +576,13 @@ const headerProps = {
 <Header {...headerProps} />
 ```
 
-Supported subset:
+The first wave should not include local const object spreads. If this is
+pursued later, the supported subset should be ultra-conservative:
 
 - local `const` object literal
+- single JSX spread use
+- no mutation or member assignment
+- no escape to another function or component before the spread
 - no reassignment
 - properties are static keys
 - values are selector-derived scalar paths or supported descriptors
@@ -803,6 +834,15 @@ Follow-up wrapper requirements:
 
 ## Implementation Phases
 
+Every implementation phase that adds a new import, export, declaration, or
+wrapper form must include a small integration gate with the existing
+multi-source stack:
+
+- object-root descriptor composition still works through the new form
+- list-relative reuse still works where the form can carry list item props
+- one incompatible sibling case hard-errors under `warnOnUnsupported: false`
+- debug metadata shows the new form and the compiled/blocked path
+
 ### Phase 0: Contract Baseline
 
 Goal: lock the current behavior before broadening.
@@ -822,28 +862,29 @@ Exit gates:
 - debug metadata for unsupported default/namespace/package/barrel imports remains
   stable
 
-### Phase 1: Component Identity And Export Records
+### Phase 1: Component Adapter Refactor
 
-Goal: create the minimum component/export identity model needed before default
-imports and barrels broaden resolution.
+Goal: remove the variable-declaration-only assumption before any new import,
+barrel, or wrapper feature depends on component identity.
 
-This is not broad component declaration support yet. It is the shared record
-format that lets later phases resolve exports without relying on local import
-name matching.
+This is a regression-gated refactor. It should preserve current behavior while
+replacing direct `.declarations.0.init` assumptions with an internal component
+adapter used by visitor, manifest, collector, and controller handoff.
 
 Tasks:
 
-- Add a component identity record for currently supported component shapes:
-  top-level variable declarations initialized with arrow/function expressions.
-- Add an export record table per file.
-- Represent named exports, local exported variables, and default aliases to
-  existing supported components.
-- Track unsupported component/export forms with stable diagnostics.
-- Record whether a component identity is usable for transform, export-only, or
-  unsupported.
-- Expose component identity and export records in debug metadata.
+- Introduce an internal component adapter.
+- Support existing top-level variable declarations initialized with
+  arrow/function expressions through the adapter.
+- Add support for top-level function declarations.
+- Add support for exported function declarations.
+- Keep default function declarations and anonymous default functions diagnostic
+  until Phase 2/long-tail identity rules decide how to expose them.
+- Replace variable-declaration assumptions in current same-file and cross-file
+  paths.
+- Expose component declaration records in debug metadata.
 
-Component identity sketch:
+Component adapter sketch:
 
 ```txt
 componentId
@@ -853,6 +894,9 @@ exportNames[]
 declarationKind
 componentPath
 functionPath
+declarationPath
+paramPath
+bodyPath
 propsParamPolicy
 supported
 unsupportedReason?
@@ -860,28 +904,40 @@ unsupportedReason?
 
 Exit gates:
 
-- existing named import behavior still works through identity records
-- unsupported function/default declarations still diagnose as before
-- debug metadata lists component identities and export records
-- no transform code still depends on unsafe default-import name matching
+- full existing suite passes with no selector output diffs
+- same-file and cross-file object-root descriptors still work
+- same-file and cross-file list-relative reuse still works
+- mixed-context and incompatible-list hard errors still fire
+- function declaration fixture works same-file and cross-file
+- exported function declaration fixture works same-file and cross-file
+- default/anonymous function declarations remain diagnostic unless explicitly
+  added in Phase 2
+- debug metadata lists component declaration form and adapter support status
 
 ### Phase 2: Default Imports
 
-Goal: safely support default imports and build the export graph needed for
-barrels.
+Goal: safely support the common deterministic default import forms on top of the
+component adapter.
 
 Tasks:
 
-- Reuse Phase 1 component identity and export records.
+- Build an export table per file using component adapter identities.
 - Resolve default exports through explicit export declarations only.
+- Support `export default Header` where `Header` is an adapter-supported local
+  component.
+- Support `export { Header as default }`.
+- Support `export default function Header() {}` only if Phase 1's adapter
+  already supports the declaration form without a special-case path.
 - Remove any name-match fallback.
 - Extend debug import edges with export resolution.
 
 Exit gates:
 
 - default import positive fixtures pass HBS/PHP
+- default import works with object-root descriptors and controls
+- default import works with list-relative child props where relevant
+- incompatible default-import child shapes hard-error
 - default non-component fails closed
-- default function declarations diagnose until Phase 4 supports them
 - anonymous default functions diagnose until anonymous identities are designed
 - no seed invention on bad defaults
 
@@ -900,31 +956,63 @@ Tasks:
 Exit gates:
 
 - one-hop and two-hop barrel fixtures
+- named, renamed, and default-as-named barrel fixtures pass HBS/PHP
+- barrel import works with object-root descriptors and controls
+- barrel import works with list-relative child props where relevant
+- incompatible barrel-routed child shapes hard-error
 - export cycle diagnostic
 - debug metadata shows every barrel hop
 - `export *` remains diagnostic-only
 
-### Phase 4: Component Declaration Breadth
+### Phase 4: `memo` Transparent Wrapper
 
-Goal: support normal declaration forms.
+Goal: support the most common transparent wrapper without opening the full HOC
+surface.
 
 Tasks:
 
-- Introduce internal component adapter.
-- Support function declarations.
-- Support exported function declarations.
-- Support default function declarations.
-- Support TypeScript annotations on supported component forms.
-- Keep unsupported declarations diagnostic-only.
+- Add transparent wrapper allowlist for `memo` and `React.memo`.
+- Unwrap local references without executing code.
+- Feed unwrapped function into the component adapter.
+- Record wrapper chain in debug metadata.
 
 Exit gates:
 
-- same-file and cross-file fixtures for each declaration form
-- no controller assumption on variable-only declaration shape remains for new
-  supported forms
-- unsupported nested/async/generator components diagnose
+- `memo` and `React.memo` positive fixtures
+- memo-wrapped default import works
+- memo-wrapped barrel import works
+- memo-wrapped component works with object-root descriptors and controls
+- memo-wrapped component works with list-relative child props where relevant
+- unknown HOC remains fail-closed
+- wrapper factory/runtime call remains fail-closed
+- `forwardRef` remains diagnostic-only until its own slice
 
-### Phase 5: Namespace Member JSX
+### Phase 5: First-Wave Real-App Validation
+
+Goal: pause after the 80/20 wave and validate against a realistic app-shaped
+fixture or real codebase before expanding the long tail.
+
+Tasks:
+
+- Build or select a fixture that uses default imports, named barrels, function
+  declarations, and `memo` together.
+- Include same-file and cross-file object-root multi-source callsites.
+- Include compatible list-relative child reuse.
+- Include at least one unsupported sibling shape for each newly supported area.
+- Record debug metadata expectations for import/export/component/wrapper edges.
+
+Exit gates:
+
+- HBS/PHP parity
+- no live `useStoreSelector`
+- no `$$`
+- no orphaned template artifacts
+- fail-closed fixtures throw under `warnOnUnsupported: false`
+- debug metadata explains successful and skipped edges
+- decision recorded on whether to proceed to namespace/resolver/spread work or
+  test against a real application first
+
+### Phase 6: Namespace Member JSX
 
 Goal: support `import * as Cards` plus `<Cards.Header />` for static members.
 
@@ -943,25 +1031,6 @@ Exit gates:
 - namespace through barrel
 - computed namespace member fails closed
 - package namespace stays diagnostic unless resolver says otherwise
-
-### Phase 6: Static Spread Expansion
-
-Goal: support local const object spreads that are equivalent to direct props.
-
-Tasks:
-
-- Collect local static object environments.
-- Resolve simple const object spreads into synthetic JSX props.
-- Preserve JSX override order.
-- Thread spread provenance through debug and diagnostics.
-
-Exit gates:
-
-- scalar local object spread
-- object-root spread remains diagnostic until descriptor path parity is proven
-- spread plus explicit override
-- mutated/computed/runtime spread fail-closed
-- cross-file child through spread works for scalar props
 
 ### Phase 7: Children Composition Expansion
 
@@ -982,32 +1051,41 @@ Exit gates:
 - wrapper with own selector scalar plus children passthrough
 - `cloneElement`, `React.Children.map`, render prop children fail closed
 
-### Phase 8: Transparent Wrapper Recognition
+### Phase 8: Static Spread Expansion
 
-Goal: support `memo` first, with `forwardRef` as a separate follow-up slice.
+Goal: support local const object spreads only if a conservative single-use,
+non-escaping analysis is acceptable.
+
+This phase is intentionally deferred because a wrong analysis can produce
+silent wrong data. Inline object-literal scalar spreads remain the supported
+shape until this gate is deliberately accepted.
 
 Tasks:
 
-- Add transparent wrapper allowlist.
-- Resolve direct and `React.` wrapper identifiers.
-- Unwrap local references without executing code.
-- Feed unwrapped function into component adapter.
-- Record wrapper chain in debug metadata.
+- Collect local static object environments.
+- Require `const`, single-use, no member assignment, and no escape from the
+  component.
+- Start scalar-only.
+- Resolve simple const object spreads into synthetic JSX props.
+- Preserve JSX override order.
+- Thread spread provenance through debug and diagnostics.
 
 Exit gates:
 
-- `memo` positive fixtures
-- `React.memo` positive fixtures
-- `forwardRef` remains diagnostic-only until its own slice
-- unknown HOC remains fail-closed
-- wrapper factory/runtime call remains fail-closed
+- scalar local object spread
+- object-root spread remains diagnostic until descriptor path parity is proven
+- spread plus explicit override
+- mutated/computed/runtime/escaping spread fail-closed
+- cross-file child through spread works for scalar props
 
 ### Phase 9: Alias And Package Resolver
 
-Goal: support configured aliases and local package/workspace imports.
+Goal: design and implement configured aliases and local package/workspace
+imports as a separate resolver plan.
 
 Tasks:
 
+- Write a dedicated resolver plan before implementation.
 - Add resolver config.
 - Parse tsconfig/jsconfig paths if configured.
 - Resolve workspace/local package sources.
@@ -1026,7 +1104,26 @@ Exit gates:
 - package `exports` condition ambiguity fails closed with a stable diagnostic
 - debug metadata records resolver strategy
 
-### Phase 10: `export *` And Namespace Exports
+### Phase 10: `forwardRef`
+
+Goal: support `forwardRef` only after `memo`, component adapter, and real-app
+validation have proven the wrapper model.
+
+Tasks:
+
+- Add `forwardRef` / `React.forwardRef` to transparent wrapper allowlist.
+- Require the first parameter to be statically identifiable as props.
+- Treat the second parameter as ref and ignore it for selector tracing.
+- Keep wrapper factories and unknown wrappers fail-closed.
+
+Exit gates:
+
+- `forwardRef` direct fixture
+- `React.forwardRef` fixture
+- default/barrel import of forwardRef component
+- untraceable props parameter fails closed
+
+### Phase 11: `export *` And Namespace Exports
 
 Goal: add ESM star export support only after named barrels, namespace JSX, and
 component identity records are stable.
@@ -1049,7 +1146,29 @@ Exit gates:
 - type-only star exports do not create runtime component edges
 - `export * as Cards` works or remains diagnostic with a stable kind
 
-### Phase 11: Final Drop-In Fixture Matrix
+### Phase 12: Anonymous Defaults
+
+Goal: decide whether anonymous default components are worth the manifest
+identity/debug complexity.
+
+Recommended default remains diagnostic with an actionable message: name the
+default export to enable selector tracing.
+
+Tasks:
+
+- Research usage pressure.
+- If implemented, synthesize stable component IDs for anonymous defaults.
+- Ensure debug metadata remains readable.
+- Ensure import/callsite paths do not depend on local import names.
+
+Exit gates:
+
+- anonymous default function positive fixture if supported
+- anonymous default arrow/function expression positive fixture if supported
+- anonymous default remains stable across runs
+- otherwise diagnostic remains clear and actionable
+
+### Phase 13: Final Drop-In Fixture Matrix
 
 Goal: prove realistic project shape.
 
@@ -1057,11 +1176,11 @@ Fixtures should combine:
 
 - default imports
 - barrels
-- namespace member components
 - function declarations
 - memo wrappers
-- local static spreads
-- children wrappers
+- namespace member components if Phase 6 has landed
+- local static spreads if Phase 8 has landed
+- children wrappers if Phase 7 has landed
 - TypeScript syntax
 - same-file and cross-file multi-source object roots
 - list-relative reuse
@@ -1078,31 +1197,35 @@ Must assert:
 ## Recommended Order
 
 1. Phase 0 contract baseline.
-2. Phase 1 component identity and export records.
+2. Phase 1 component adapter refactor.
 3. Phase 2 default imports.
 4. Phase 3 named barrels and re-exports.
-5. Phase 4 component declaration breadth.
-6. Phase 5 namespace member JSX.
-7. Phase 6 static spread expansion.
+5. Phase 4 `memo` transparent wrapper.
+6. Phase 5 first-wave real-app validation.
+7. Phase 6 namespace member JSX.
 8. Phase 7 children composition expansion.
-9. Phase 8 transparent wrappers.
+9. Phase 8 static spread expansion.
 10. Phase 9 alias and package resolver.
-11. Phase 10 `export *` and namespace exports.
-12. Phase 11 final drop-in fixture matrix.
+11. Phase 10 `forwardRef`.
+12. Phase 11 `export *` and namespace exports.
+13. Phase 12 anonymous defaults.
+14. Phase 13 final drop-in fixture matrix.
 
 Rationale:
 
-- Component identity records must exist before defaults/barrels broaden export
-  resolution, otherwise Phase 1 would depend on machinery scheduled later.
+- The component adapter must land before defaults/barrels/wrappers, because the
+  current implementation assumes variable declarations in many places.
 - Default imports and named barrels unlock many codebases and build resolver
   primitives needed by namespace/package support, while avoiding early `export *`
   ambiguity.
-- Component declaration breadth should land before wrapper recognition so
-  wrappers can reuse a stable component adapter.
-- Static spreads and children wrappers are authoring-pattern breadth; they can
-  be developed independently after import graph shape stabilizes.
-- Alias/package resolution should wait until export graph semantics and debug
-  metadata are stable, because it widens the file graph considerably.
+- `memo` is high-frequency and transparent enough to include in the first wave;
+  `forwardRef` is a separate wrapper slice.
+- The first wave should pause for real-app validation before adding long-tail
+  breadth.
+- Static spreads are deferred because a missed mutation/escape can produce
+  silent wrong data.
+- Alias/package resolution deserves its own resolver plan because it widens the
+  graph and introduces security/determinism concerns.
 - `export *` should wait until named re-exports and namespace member resolution
   are stable enough to mirror ESM ambiguity rules precisely.
 
@@ -1129,8 +1252,11 @@ unsupported-component-function
 unsupported-static-spread
 mutated-static-spread
 computed-spread-property
+escaping-static-spread
 unsupported-children-manipulation
 type-only-jsx-component
+anonymous-default-component
+unsupported-forward-ref
 ```
 
 Every kind should include:
@@ -1172,22 +1298,25 @@ childrenPolicies[]
 
 ## Reviewer Questions
 
-1. Is supporting local barrels before package aliases the right sequence?
-2. Is the new Phase 1 component identity record enough, or should it become the
-   full component adapter immediately?
-3. Should `export *` stay deferred until named re-exports and namespace support
+1. Is the first-wave scope right: adapter, defaults, named barrels, function
+   declarations, and `memo`?
+2. Is the component adapter refactor sufficiently specified as a regression gate?
+3. Should named barrels land before `memo`, or should wrapper support come first
+   after the adapter?
+4. Is the validation pause after Phase 4 strong enough, or should it require a
+   real external app before any long-tail work?
+5. Should namespace member JSX be the first follow-up after validation?
+6. Should local-const spreads remain deferred entirely, or is the proposed
+   scalar-only, single-use, non-escaping gate acceptable?
+7. Which resolver config should be the first supported public API in the
+   separate resolver plan: explicit aliases only, tsconfig paths, or workspace
+   package maps?
+8. Is `forwardRef` correctly deferred behind `memo`, adapter, and validation?
+9. Should `export *` stay deferred until named re-exports and namespace support
    are stable?
-4. Is anonymous default function support worth the extra component identity
-   complexity later, or should it remain diagnostic until strong usage pressure?
-5. Should `forwardRef` be supported alongside `memo`, or deferred because the
-   second parameter changes component semantics?
-6. Are static local object spreads safe enough for Phase 6, or should spreads
-   remain scalar-only until object-root spread descriptors are proven?
-7. Which package resolver config should be the first supported public API:
-   explicit aliases only, tsconfig paths, or workspace package maps?
-8. Do we want any support for `export * as Cards from './cards'` before general
-   namespace support, or only as Phase 10 work?
-9. Is the diagnostic relevance policy right: manifest note by default,
+10. Should anonymous defaults remain diagnostic with "name your default export"
+   unless real usage demands support?
+11. Is the diagnostic relevance policy right: manifest note by default,
    selector-path hard error when needed, and explicit CI fail-all mode?
 
 ## Non-Goals For This Plan
@@ -1207,9 +1336,12 @@ This plan is successful when reviewers agree that:
 
 - the static/dynamic boundary is clear
 - the import/export graph approach is safe
+- the first-wave scope is realistic for an experiment
 - every common shape has either a support path or a diagnostic path
 - controller boundaries remain protected
 - the phase order avoids doing package/bundler work before resolver semantics
   are stable
+- the adapter refactor happens before features that depend on it
+- long-tail features are deferred behind real-app validation
 - the fixture strategy catches both false negatives and false-positive hard
   errors
