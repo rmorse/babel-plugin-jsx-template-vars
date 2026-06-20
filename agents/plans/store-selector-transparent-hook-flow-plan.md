@@ -43,10 +43,10 @@ they simply return a selector-derived value or a pure projection of one.
 
 The recommended direction is to support a transparent subset:
 
+- configured app-owned selector hooks such as `useAppSelector`
 - `useMemo` with a pure selector-derived return expression
 - same-file custom hooks with a single static return
 - cross-file custom hooks after same-file summaries are proven
-- optional configured source selector hooks such as app-owned `useAppSelector`
 - object-return hooks when properties are statically selector-derived
 
 Everything stateful or opaque should remain diagnostic-only:
@@ -59,6 +59,14 @@ Everything stateful or opaque should remain diagnostic-only:
 - `useCallback` as data flow
 - conditional/multiple-return hooks
 - hooks with mutation, loops, async work, helper calls, or runtime branching
+
+Reviewer probing found that some unsupported hook shapes are not merely future
+work: they can be mishandled by the current collector. For example,
+selector-derived values inside `useState(hero.title)` or `useRef(hero.title)`
+can be declared as static template replacements even though they entered mutable
+runtime state, while `useMemo(() => hero.title)` can under-render because the
+collector skips nested function bodies. Phase 0 is therefore a safety fix, not
+just an inventory phase.
 
 The goal is not to execute hooks. The goal is to summarize hook return values
 when a static AST proof exists.
@@ -104,8 +112,9 @@ hook summary model.
 
 3. **Stateful hooks are not template data sources.**
    `useState`, `useReducer`, and `useRef` represent mutable runtime state.
-   Selector-derived values crossing those hooks should fail closed when they
-   affect template output.
+   Selector-derived values crossing those hooks must not synthesize template
+   declarations from hook arguments. If the returned mutable value reaches
+   template output, the transform should hard-error.
 
 4. **Custom hooks are allowed only when transparent.**
    A function named `useX` is not automatically safe. It needs a supported
@@ -123,9 +132,53 @@ hook summary model.
    If a hook returns the wrong shape for the component consuming it, the plugin
    may diagnose, but it should not guess or synthesize missing mappings.
 
+8. **Configured selector hooks are selector sources, not summaries.**
+   An app-owned hook such as `useAppSelector` should extend the import-bound
+   selector local-name set. It should not wait for transparent custom-hook
+   summary machinery.
+
 ## Supported Candidate Shapes
 
-### 1. Direct `useMemo` Projection
+### 1. Configured App-Owned Selector Hooks
+
+Many apps already have:
+
+```jsx
+const hero = useAppSelector((state) => state.hero);
+```
+
+The project currently recognizes the package-scoped `useStoreSelector` import.
+For drop-in adoption, support an explicit opt-in config:
+
+```js
+experimentalStoreSelectors: {
+  selectorHooks: [
+    {
+      source: '@/store/hooks',
+      importName: 'useAppSelector',
+      selectorArg: 0,
+    },
+  ],
+}
+```
+
+Rules:
+
+- opt-in only
+- import-bound, not name-only
+- same selector grammar as `useStoreSelector`
+- unsupported selector shapes keep the same hard-error policy
+- debug metadata must show that the source hook was configured
+- same local hook name from an unconfigured source is not treated as a selector
+
+This is different from transparent custom hooks. A configured selector hook is
+a new selector source. A transparent custom hook is a summarized wrapper around
+an existing selector source.
+
+Implementation should extend `selectorLocalNames` / `isStoreSelectorCall`
+behavior rather than adding hook-summary logic.
+
+### 2. Direct `useMemo` Projection
 
 ```jsx
 const hero = useStoreSelector((state) => state.hero);
@@ -157,9 +210,10 @@ useMemo(() => {
   log(hero.title);
   return hero.title;
 }, [ hero ]);
+useMemo(() => useStoreSelector((state) => state.hero), []);
 ```
 
-### 2. `useMemo` Object Return
+### 3. `useMemo` Object Return
 
 ```jsx
 const hero = useStoreSelector((state) => state.hero);
@@ -185,7 +239,7 @@ spreads:
 - computed properties are unsupported
 - spread inside returned object is unsupported until separately proven
 
-### 3. `useMemo` Object Root Preservation
+### 4. `useMemo` Object Root Preservation
 
 ```jsx
 const hero = useStoreSelector((state) => state.hero);
@@ -202,7 +256,30 @@ Expected:
 This should preserve object-root provenance and dynamic-root descriptor
 behavior. It must not materialize the object root as a replacement string.
 
-### 4. Same-File Source Custom Hook
+### 5. `useMemo` List Preservation
+
+```jsx
+const products = useStoreSelector((state) => state.products);
+const visibleProducts = useMemo(() => products, [ products ]);
+
+return visibleProducts.map((product) => <ProductCard product={ product } />);
+```
+
+This should preserve list-relative provenance and PHP context depth. It must
+not materialize a list root as a replacement string and must not double-apply
+the list root inside child output.
+
+Fail-closed siblings:
+
+```jsx
+useMemo(() => products.map(product => product.name), [ products ]);
+useMemo(() => cond ? products : saleProducts, [ products, saleProducts ]);
+```
+
+List-returning transforms can be added later. The first list gate is root
+preservation through `useMemo`.
+
+### 6. Same-File Source Custom Hook
 
 ```jsx
 function useHero() {
@@ -228,10 +305,11 @@ Rules:
 - single supported return statement
 - no conditionals, loops, mutation, nested functions, async/generator, or
   unsupported helper calls
+- no non-return hook/helper statements in the body
 - returned expression may be direct `useStoreSelector(...)`, a selector alias,
   or a supported transparent hook call
 
-### 5. Same-File Derived Custom Hook
+### 7. Same-File Derived Custom Hook
 
 ```jsx
 function useHeroTitle(hero) {
@@ -257,6 +335,8 @@ Rules:
 - callsite arguments supply selector-derived path info
 - return expression is resolved against the callsite argument environment
 - hook summary key must include parameter mapping and return shape
+- callsite resolution must inherit object-root, mixed-context, and
+  list-relative ambiguity hard-errors from component prop tracing
 
 Fail-closed siblings:
 
@@ -269,9 +349,12 @@ function useHeroTitle(hero) {
   if (hero.status === 'published') return hero.title;
   return hero.draftTitle;
 }
+
+let title = useHeroTitle(hero);
+title = otherTitle;
 ```
 
-### 6. Hook Returning Object Contract
+### 8. Hook Returning Object Contract
 
 ```jsx
 function useHeroView(hero) {
@@ -298,6 +381,12 @@ Supported subset:
   ```jsx
   const { title } = useHeroView(hero);
   ```
+- static spreads from returned objects into child props:
+
+  ```jsx
+  const view = useHeroView(hero);
+  return <Header {...view} />;
+  ```
 
 Deferred:
 
@@ -306,7 +395,22 @@ Deferred:
 - array/tuple returns
 - methods/functions in returned object
 
-### 7. Cross-File Transparent Custom Hooks
+### 9. Source Hook Object-Root Destructuring
+
+```jsx
+function useHero() {
+  return useStoreSelector((state) => state.hero);
+}
+
+const { title } = useHero();
+return <h1>{ title }</h1>;
+```
+
+This differs from object-return hooks. The hook returns an object root, and the
+callsite destructures that root. The collector should preserve provenance as if
+the destructure happened directly from `useStoreSelector`.
+
+### 10. Cross-File Transparent Custom Hooks
 
 ```jsx
 // hooks.js
@@ -332,41 +436,6 @@ Rules:
 - unresolved/unsupported hook imports remain manifest diagnostics until
   selector-derived output needs them
 
-### 8. Configured App-Owned Selector Hooks
-
-Many apps already have:
-
-```jsx
-const hero = useAppSelector((state) => state.hero);
-```
-
-The project currently recognizes the package-scoped `useStoreSelector` import.
-For drop-in adoption, we should investigate an explicit opt-in config:
-
-```js
-experimentalStoreSelectors: {
-  selectorHooks: [
-    {
-      source: '@/store/hooks',
-      importName: 'useAppSelector',
-      selectorArg: 0,
-    },
-  ],
-}
-```
-
-Rules:
-
-- opt-in only
-- import-bound, not name-only
-- same selector grammar as `useStoreSelector`
-- unsupported selector shapes keep the same hard-error policy
-- debug metadata must show that the source hook was configured
-
-This is different from transparent custom hooks. A configured selector hook is
-a new selector source. A transparent custom hook is a summarized wrapper around
-an existing selector source.
-
 ## Explicitly Unsupported Hook Shapes
 
 ### `useState`
@@ -381,13 +450,20 @@ static template data would be misleading.
 
 Policy:
 
-- if selector-derived values enter `useState` and the returned state variable is
-  used in template output, hard diagnostic
+- selector-derived arguments to `useState` must not create template
+  declarations
+- if selector-derived values enter `useState`, record unsupported hook metadata
+  even when warnings are suppressed
+- if the returned state variable reaches template output or selector-traced
+  child props, hard diagnostic
+- regression tests must assert that no `{{hero.title}}` / PHP equivalent is
+  emitted from a state initializer
 - otherwise record unsupported metadata only
 
 ### `useReducer`
 
-Same policy as `useState`. Reducer state is runtime mutable.
+Same policy as `useState`. Reducer state is runtime mutable. Selector-derived
+initializer values must not synthesize template declarations.
 
 ### `useRef`
 
@@ -402,6 +478,7 @@ static template data.
 Policy:
 
 - `useRef(selectorValue)` used only as a DOM ref remains irrelevant
+- selector-derived arguments to `useRef` must not create template declarations
 - `ref.current` rendered or passed to selector-traced child props fails closed
 - selector-derived data stored into `ref.current` fails closed if consumed
 
@@ -410,6 +487,13 @@ Policy:
 Effects do not return render data. Any selector-derived value used only inside
 an effect is irrelevant to template output. Any value produced by effect-driven
 mutation is unsupported.
+
+Policy:
+
+- selector-derived values used only inside effects should be recorded in
+  `skippedHooks` metadata without changing output
+- if an effect writes selector-derived values into mutable state/ref that is
+  later rendered, hard diagnostic through the state/ref policy
 
 ### `useCallback`
 
@@ -422,6 +506,17 @@ Potential future exception:
 
 That should be a separate render-prop/helper research item, not part of this
 hook flow plan.
+
+Fail-closed siblings:
+
+```jsx
+const renderTitle = useCallback(() => hero.title, [ hero ]);
+return <Header renderTitle={ renderTitle } />;
+```
+
+If selector-derived data reaches template output only by calling the returned
+callback, the transform should fail closed rather than execute or inline the
+callback.
 
 ### `useContext`
 
@@ -480,6 +575,72 @@ If `featuredHero` resolves to `featured.hero`, the call resolves to:
 }
 ```
 
+### Internal Selector Consumption
+
+Custom hooks that contain `useStoreSelector` create an interaction with the
+existing unprocessed-selector guard:
+
+```jsx
+function useHero() {
+  return useStoreSelector((state) => state.hero);
+}
+```
+
+Today, a selector call outside a supported component body should trigger
+`assertNoUnprocessedStoreSelectorReferences`. Hook summaries must deliberately
+consume supported hook-internal selector calls so they do not remain as stray
+selectors after import removal.
+
+Required policy before implementing source custom hooks:
+
+- only candidate hook bodies selected for a valid summary may contain internal
+  selector calls
+- the summary consumes the internal selector as metadata, not as standalone
+  component output
+- unsupported hook bodies containing selector calls must fail closed rather than
+  leaving a live selector reference
+- no double emission: a selector inside `useHero` should not create a template
+  declaration unless a callsite uses the summarized hook result
+- hook-in-callback patterns remain illegal:
+
+  ```jsx
+  useMemo(() => useStoreSelector((state) => state.hero), []);
+  ```
+
+  This should fail closed as an unsupported hook body, not become a nested
+  selector source.
+
+### Ambiguity Inheritance
+
+Parameterized transparent hooks must inherit the same hard-fail behavior as
+component prop tracing.
+
+Example:
+
+```jsx
+function useHeroTitle(hero) {
+  return hero.title;
+}
+
+const homeTitle = useHeroTitle(home.hero);
+const articleTitle = useHeroTitle(article.hero);
+```
+
+This is path-polymorphic and can be valid if each callsite resolves locally.
+But once a hook result is forwarded into a shared child, list context, object
+root, or object-return contract, the same ambiguity classes apply:
+
+- object-root multi-source ambiguity
+- mixed list/non-list context
+- incompatible list-relative declaration paths
+- conditional/unsupported hook return expressions
+
+Implementation should route these through the same unconditional
+`diagnostics.error` policy used by component prop tracing, not a hook-specific
+warn-only fallback. The test matrix must include multi-source hook callsites
+that prove both successful local composition and hard failures for incompatible
+contexts.
+
 ## Collector Integration
 
 The current collector already resolves identifiers, member expressions, local
@@ -535,6 +696,7 @@ Use stable diagnostic kinds:
 - `unsupported-hook-state-flow`
 - `unsupported-hook-ref-flow`
 - `unsupported-hook-callback-flow`
+- `unsupported-hook-argument-flow`
 - `unsupported-hook-import`
 - `ambiguous-hook-return`
 - `configured-selector-hook-unresolved`
@@ -544,6 +706,8 @@ Diagnostic severity follows the existing relevance model:
 
 - Manifest/debug note when an unsupported hook is unrelated to selector output.
 - Hard error when selector-derived output depends on an unsupported hook path.
+- Hard error, or at minimum declaration suppression plus metadata, when a
+  selector-derived expression appears inside a mutable state/ref initializer.
 - Optional fail-all mode for CI/review audits.
 
 ## Debug Metadata
@@ -583,25 +747,52 @@ Debug metadata must explain both successful and skipped hook paths.
 
 ## Implementation Phases
 
-### Phase 0: Hook Boundary Baseline
+### Phase 0: Hook Safety Hardening
 
-Goal: inventory current behavior and pin dangerous unsupported cases.
+Goal: fix live unsafe baseline behavior before adding positive hook support.
 
 Tasks:
 
-- Add fail-closed tests for selector-derived values through `useState`,
-  `useReducer`, `useRef`, and `useCallback`.
-- Add metadata tests for selector-derived values used only in `useEffect`
-  without template output.
-- Ensure no case silently renders empty output with `warnOnUnsupported: false`.
+- suppress selector-member declarations inside stateful hook arguments
+- add fail-closed tests for selector-derived values through `useState`,
+  `useReducer`, `useRef`, and `useCallback`
+- add metadata tests for selector-derived values used only in `useEffect`
+  without template output
+- ensure no case silently renders empty output with `warnOnUnsupported: false`
 
 Exit gates:
 
-- dangerous state/ref/callback template flows hard-error
+- `useState(hero.title)` and `useRef(hero.title)` do not emit
+  `{{hero.title}}` / PHP equivalents from the initializer argument
+- dangerous state/ref/callback template flows hard-error with stable hook
+  diagnostic kinds
 - irrelevant effect-only usage does not break output
 - metadata records skipped hook boundaries
+- unsupported hook metadata is present even with warnings suppressed
 
-### Phase 1: Direct `useMemo`
+### Phase 1: Configured App-Owned Selector Hooks
+
+Goal: support high-frequency app selector hooks such as `useAppSelector`
+without waiting for hook summaries.
+
+Positive gates:
+
+- configured named import behaves exactly like `useStoreSelector`
+- configured renamed import behaves exactly like `useStoreSelector`
+- configured default import if explicitly configured
+- HBS/PHP parity for replacement, control, object-root child props, and
+  list-relative child props
+- debug metadata marks the selector source as configured
+
+Fail-closed gates:
+
+- same local hook name from an unconfigured source is not treated as a selector
+- computed selector path
+- unassigned selector call
+- unsupported selector expression
+- package import without matching config
+
+### Phase 2: Direct `useMemo`
 
 Goal: support pure `useMemo` return expressions.
 
@@ -611,6 +802,7 @@ Positive gates:
 - control condition in HBS/PHP
 - object-root prop passed to child component
 - list-relative prop passed inside `.map`
+- list root preserved through `useMemo(() => products)` and then mapped
 - dependency array recorded in debug metadata
 
 Fail-closed gates:
@@ -620,8 +812,14 @@ Fail-closed gates:
 - block body with side effects
 - computed member return
 - selector-derived value escapes through unsupported object spread
+- hook-in-callback such as `useMemo(() => useStoreSelector(...))`
 
-### Phase 2: Same-File Custom Hook Source Wrappers
+Metadata gates:
+
+- dependency array is surfaced in debug metadata
+- missing/wrong dependency array does not change path proof or output
+
+### Phase 3: Same-File Custom Hook Source Wrappers
 
 Goal: support hooks that directly return `useStoreSelector(...)` or a selector
 alias.
@@ -631,6 +829,8 @@ Positive gates:
 - `function useHero() { return useStoreSelector(...); }`
 - `const useHero = () => useStoreSelector(...)`
 - hook-to-component object-root descriptors
+- destructuring from source hook object roots:
+  `const { title } = useHero()`
 - HBS/PHP parity
 
 Fail-closed gates:
@@ -640,8 +840,12 @@ Fail-closed gates:
 - async/generator hook
 - hook body mutation
 - hook body helper call
+- non-return hook/helper statement before the return
+- unsupported internal selector call does not survive import removal
+- valid internal selector call is consumed by the summary and does not double
+  emit
 
-### Phase 3: Same-File Derived Custom Hooks
+### Phase 4: Same-File Derived Custom Hooks
 
 Goal: support parameterized transparent hooks.
 
@@ -652,16 +856,20 @@ Positive gates:
 - compatible list-relative path
 - hook calls another transparent hook
 - object return with scalar properties
+- local multi-source callsites compose per callsite when compatible
 
 Fail-closed gates:
 
 - ambiguous multi-source parameter usage
+- mixed list/non-list parameter usage
+- incompatible list-relative parameter usage
 - computed property access
 - object return with spread
 - tuple return
 - return function/callback
+- reassigned hook-result alias
 
-### Phase 4: Hook Object Return Contracts
+### Phase 5: Hook Object Return Contracts
 
 Goal: support destructuring/member access from transparent object-return hooks.
 
@@ -670,6 +878,7 @@ Positive gates:
 - `const view = useHeroView(hero); view.title`
 - `const { title } = useHeroView(hero)`
 - child props from object return
+- hook result consumed by static spread: `<Header {...view} />`
 - explicit templateVars coexistence
 
 Fail-closed gates:
@@ -679,7 +888,7 @@ Fail-closed gates:
 - returned object contains broad spread
 - returned object mixes list and non-list shape for same key
 
-### Phase 5: Cross-File Transparent Hooks
+### Phase 6: Cross-File Transparent Hooks
 
 Goal: manifest-driven hook summaries across files.
 
@@ -699,36 +908,18 @@ Fail-closed gates:
 - ambiguous hook export
 - package hook import without explicit source-hook config
 
-### Phase 6: Configured App-Owned Selector Hooks
-
-Goal: support app selectors such as `useAppSelector` by explicit config.
-
-Positive gates:
-
-- named import from configured source
-- renamed import from configured source
-- default import from configured source if configured
-- same selector grammar as `useStoreSelector`
-- debug metadata marks configured source hook
-
-Fail-closed gates:
-
-- same local hook name from unconfigured source
-- computed selector path
-- unassigned selector call
-- unsupported selector expression
-- package import without config
-
 ### Phase 7: Final Hook Fixture Matrix
 
 Goal: prove natural hook use in a realistic component tree.
 
 Fixture should include:
 
+- configured app selector hook
 - `useMemo` scalar and object-root values
+- `useMemo` list-root preservation
 - same-file custom hook
 - cross-file custom hook through barrel
-- configured app selector hook
+- hook-return object spread into child props
 - child component object-root descriptor
 - list-relative child prop
 - static children wrapper
@@ -738,25 +929,25 @@ Fixture should include:
 
 ## Recommended Order
 
-1. Phase 0 hook boundary baseline.
-2. Phase 1 direct `useMemo`.
-3. Phase 2 same-file source custom hooks.
-4. Phase 3 same-file derived custom hooks.
-5. Phase 4 object return contracts.
-6. Phase 5 cross-file transparent hooks.
-7. Phase 6 configured app-owned selector hooks.
+1. Phase 0 hook safety hardening.
+2. Phase 1 configured app-owned selector hooks.
+3. Phase 2 direct `useMemo`.
+4. Phase 3 same-file source custom hooks.
+5. Phase 4 same-file derived custom hooks.
+6. Phase 5 object return contracts.
+7. Phase 6 cross-file transparent hooks.
 8. Phase 7 final hook fixture matrix.
 
 Rationale:
 
+- Phase 0 fixes live silent/surprising behavior before expanding support.
+- Configured selector hooks are source recognition, not hook summaries; they are
+  high-value and low-risk for Redux/RTK-style codebases.
 - `useMemo` is high-frequency and has a small local AST surface.
 - Same-file custom hooks prove summaries without manifest complexity.
 - Object return contracts are common, but they should build on scalar/object-root
   hook return support.
 - Cross-file hooks should reuse the proven manifest/export resolver.
-- Configured app-owned selector hooks are valuable for drop-in adoption, but
-  they create a new public-ish integration surface and should follow the
-  transparent-hook proof.
 
 ## Non-Goals
 
@@ -775,18 +966,22 @@ Rationale:
    calls be lowered directly into local aliases?
 2. Should `useMemo` dependency arrays be validated strictly, ignored for path
    proof, or recorded only in debug metadata?
-3. Should `useState(selectorValue)` always hard-error, or only when the returned
-   state variable reaches template output?
-4. Is `useRef` correctly treated as unsupported for template data flow?
-5. Should same-file custom hooks support object returns in the first hook slice,
+3. Does Phase 0 correctly handle the live stateful-hook argument leak by
+   suppressing declarations inside `useState` / `useRef` / `useReducer`
+   initializers?
+4. Should state/ref/callback hooks hard-error immediately when selector-derived
+   data enters them, or only when their returned value reaches template output?
+5. Is configured app-owned selector hook support correctly moved before
+   `useMemo` and custom hook summaries?
+6. Is the design note for hook-internal selectors sufficient to avoid
+   `assertNoUnprocessedStoreSelectorReferences` failures and double emission?
+7. Is ambiguity inheritance for parameterized hooks sufficiently specified?
+8. Should same-file custom hooks support object returns in the first hook slice,
    or only after scalar/object-root returns are proven?
-6. Should tuple returns ever be supported for common hooks like
+9. Should tuple returns ever be supported for common hooks like
    `const [hero] = useHeroTuple()`?
-7. Should configured app-owned selector hooks be part of this plan, or a
-   separate public API plan?
-8. What debug metadata is sufficient for reviewers to explain a skipped hook
+10. What debug metadata is sufficient for reviewers to explain a skipped hook
    path?
-9. Should cross-file hook summaries reuse the component manifest pass, or run as
+11. Should cross-file hook summaries reuse the component manifest pass, or run as
    a separate prepass phase?
-10. Are there common natural hook patterns missing from this plan?
-
+12. Are there common natural hook patterns missing from this plan?
