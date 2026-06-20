@@ -1656,6 +1656,51 @@ describe('experimental store selectors', () => {
 		expect(manifest.seedAliasesByFile).toEqual({});
 	});
 
+	it('diagnoses cross-file ambiguous seeds that cannot be promoted to dynamic roots', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'ItemCard.jsx': `
+				export const ItemCard = ({ item }) => <article>{ item.name }</article>;
+			`,
+			'ProductsPage.jsx': `
+				import { ItemCard } from './ItemCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const ProductsPage = () => {
+					const products = useStoreSelector((state) => state.products);
+					return <main>{ products.map((product) => <ItemCard item={ product } />) }</main>;
+				};
+
+				module.exports = { ProductsPage };
+			`,
+			'TagsPage.jsx': `
+				import { ItemCard } from './ItemCard.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const TagsPage = () => {
+					const tags = useStoreSelector((state) => state.tags);
+					return <main>{ tags.map((tag) => <ItemCard item={ tag.meta } />) }</main>;
+				};
+
+				module.exports = { TagsPage };
+			`,
+		});
+
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'ambiguous-cross-file-seed',
+				filename: path.join(root, 'ItemCard.jsx'),
+				componentName: 'ItemCard',
+				localName: 'item',
+				sourcePaths: expect.arrayContaining([ 'products[]', 'tags[].meta' ]),
+			}),
+		]);
+		expect(manifest.debug.ambiguousSeeds).toEqual(manifest.diagnostics);
+		expect(manifest.seedAliasesByFile).toEqual({});
+	});
+
 	it('parses TSX files intentionally during manifest discovery', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({

@@ -93,6 +93,9 @@ Already implemented and reviewed:
   - same-file list-relative multi-source
   - cross-file object-root multi-source
   - cross-file list-relative multi-source
+  - cross-file object-root relay multi-source
+  - nested list-relative multi-source
+  - mixed-context and incompatible-list fail-closed fixtures
 
 Latest broad-support review follow-ups now covered:
 
@@ -100,12 +103,19 @@ Latest broad-support review follow-ups now covered:
   for both same-file and cross-file list-relative multi-source cases
 - computed optional member usage such as `hero?.[key]` fails closed instead of
   rendering empty output
-- suppressed warnings still record machine-readable unsupported metadata for
-  dangerous mixed list/non-list child prop cases
+- dangerous mixed list/non-list child prop cases and incompatible
+  list-relative shapes hard-error even when warnings are suppressed
 - extensionless `.ts` / `.tsx` and `index.ts` / `index.tsx` relative imports
   resolve in the cross-file manifest
 - cross-file debug `compiledPaths` report composed child paths such as
   `home.hero.title`, not only the canonical root
+
+Architecture note: object-root path-polymorphism uses descriptor callsite
+contexts, where parents inject root descriptors and children compose relative
+member paths. Compatible list-relative multi-source uses seed-sharing via
+child-relative `declarationSegments`; it should not introduce descriptor
+wrapping for every list item because the parent list wrapper and PHP context
+depth are already the owning context.
 
 Current boundaries are documented in:
 

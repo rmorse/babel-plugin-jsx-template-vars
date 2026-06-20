@@ -309,6 +309,13 @@ object-literal scalar spreads. Dynamic components, HOCs, render props,
 arbitrary spreads, generic context tracing, and shape-polymorphic output remain
 fail-closed boundaries.
 
+Path-polymorphic object roots and list-relative reuse use two different
+mechanisms. Object roots such as `<Header hero={ homeHero } />` use parent
+callsite descriptors plus child-relative discovery. Compatible list-relative
+reuse, such as `product={ product }` inside different `.map()` roots, shares a
+child-relative seed shape through `declarationSegments` so the parent still owns
+the list wrapper and PHP context depth.
+
 ## Caveats
 
 ### This is currently experimental
