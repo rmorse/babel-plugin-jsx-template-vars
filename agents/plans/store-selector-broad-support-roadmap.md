@@ -10,6 +10,9 @@ This is a roadmap, not a single implementation plan. Detailed implementation
 plans should remain focused and link back here. The active detailed plan for
 multi-source object-root path-polymorphism is
 [store-selector-multi-source-path-plan.md](./store-selector-multi-source-path-plan.md).
+The next detailed proposal for making static component graphs feel more
+drop-in is
+[store-selector-drop-in-static-support-plan.md](./store-selector-drop-in-static-support-plan.md).
 
 ## What Broad Support Means
 
