@@ -44,7 +44,7 @@ they simply return a selector-derived value or a pure projection of one.
 The recommended direction is to support a transparent subset:
 
 - configured app-owned selector hooks such as `useAppSelector`
-- `useMemo` with a pure selector-derived return expression
+- import-bound React `useMemo` with a pure selector-derived return expression
 - same-file custom hooks with a single static return
 - cross-file custom hooks after same-file summaries are proven
 - object-return hooks when properties are statically selector-derived
@@ -137,6 +137,11 @@ hook summary model.
    selector local-name set. It should not wait for transparent custom-hook
    summary machinery.
 
+9. **React built-ins are binding-aware, not name-aware.**
+   `useMemo` support must prove that the callee binding comes from React.
+   Local functions named `useMemo`, shadowed imports, and unrelated packages
+   remain unsupported.
+
 ## Supported Candidate Shapes
 
 ### 1. Configured App-Owned Selector Hooks
@@ -194,16 +199,27 @@ Expected:
 
 Rules:
 
-- callee must be `useMemo` or `React.useMemo`
+- callee must be import-bound to React, not name-matched:
+  - `import { useMemo } from 'react'; useMemo(...)`
+  - `import { useMemo as useStableMemo } from 'react'; useStableMemo(...)`
+  - `import * as React from 'react'; React.useMemo(...)`
+  - `import React from 'react'; React.useMemo(...)`
+- a local function or variable named `useMemo` is not transparent
 - first argument must be an arrow/function expression
-- body must be a single expression or single `return`
+- first slice supports expression-body returns only
+- block bodies, even with one `return`, remain diagnostic-only until the
+  expression-body path is proven
 - return expression must resolve through existing selector alias logic
+- first slice return kinds are scalar paths, object-root preservation, and
+  list-root/list-relative preservation when the memo returns the original
+  selector-derived value
 - dependency array is not used to prove the template path
 - dependency array may be recorded in debug metadata for review
 
 Fail-closed siblings:
 
 ```jsx
+function useMemo(fn) { return fn(); }
 useMemo(() => compute(hero), [ hero ]);
 useMemo(() => cond ? hero.title : other.title, [ hero, other ]);
 useMemo(() => {
@@ -213,7 +229,7 @@ useMemo(() => {
 useMemo(() => useStoreSelector((state) => state.hero), []);
 ```
 
-### 3. `useMemo` Object Return
+### 3. Deferred `useMemo` Object Return
 
 ```jsx
 const hero = useStoreSelector((state) => state.hero);
@@ -231,8 +247,14 @@ Expected:
 <Header title="{{hero.title}}" status="{{hero.status}}" />
 ```
 
-Implementation should reuse the same synthetic-property model as static object
-spreads:
+This is intentionally **not** in the first `useMemo` slice. Object returns need
+the same object member alias contract as custom object-return hooks, including
+destructuring, static spread consumption, object-root descriptor provenance, and
+list-relative member shapes. Until Phase 5, `useMemo` object literals should be
+diagnostic-only.
+
+When enabled, implementation should reuse the same synthetic-property model as
+static object spreads:
 
 - scalar properties can become member aliases
 - object-root properties require descriptor provenance
@@ -482,6 +504,36 @@ Policy:
 - `ref.current` rendered or passed to selector-traced child props fails closed
 - selector-derived data stored into `ref.current` fails closed if consumed
 
+### Mutable Hook Taint Model
+
+Stateful and mutable hooks should not register normal selector aliases from
+their arguments. Instead, the collector should record taint metadata:
+
+```json
+{
+  "kind": "unsupported-hook-state-flow",
+  "hookName": "useState",
+  "sourceSegments": ["hero", "title"],
+  "stateBinding": "title",
+  "setterBinding": "setTitle",
+  "refBinding": null,
+  "hookCall": "useState(hero.title)"
+}
+```
+
+Rules:
+
+- selector-derived values entering `useState`, `useReducer`, or `useRef` do not
+  create replacement/control/list declarations
+- setter calls such as `setTitle(hero.title)` taint the target state binding
+- `ref.current = hero.title` taints the ref binding
+- effect-driven writes to tainted state/ref bindings stay unsupported if the
+  mutable value later reaches output
+- rendering tainted state, passing tainted state to selector-traced child props,
+  using tainted refs as replacement/control/list data, or rendering
+  `ref.current` hard-errors
+- effect-only reads that never feed output may remain metadata-only
+
 ### `useEffect` / `useLayoutEffect`
 
 Effects do not return render data. Any selector-derived value used only inside
@@ -524,6 +576,26 @@ Context is runtime graph data. Generic context tracing remains out of scope.
 Configured context adapters could be researched later, but should not block
 transparent hook support.
 
+### Opaque React Runtime Hooks
+
+Concurrency, subscription, identity, and transition hooks are not selector data
+sources:
+
+- `useDeferredValue`
+- `useSyncExternalStore`
+- `useId`
+- `useTransition`
+- `useOptimistic`
+- `useActionState`
+
+Policy:
+
+- selector-derived values entering these hooks are recorded as unsupported hook
+  metadata
+- if their returned value reaches replacement/control/list output or
+  selector-traced child props, hard-error
+- otherwise they remain review/debug metadata only
+
 ## Hook Summary Model
 
 Add a hook summary layer that can answer:
@@ -533,7 +605,10 @@ When call expression `useX(arg0, arg1)` appears at this callsite,
 what selector-derived value does it return?
 ```
 
-Suggested summary shape:
+Suggested summary shape must carry the same expression-info contract the
+collector already uses. A hook summary is not just a canonical path string; it
+must preserve declaration relativity, dynamic-root provenance, list context,
+and object-member maps when those are supported.
 
 ```json
 {
@@ -541,12 +616,33 @@ Suggested summary shape:
   "filename": "App.jsx",
   "params": ["hero"],
   "returnKind": "path",
-  "returnSegments": ["hero", "title"],
+  "expressionInfo": {
+    "segments": ["hero", "title"],
+    "declarationSegments": ["hero", "title"],
+    "dynamicRoot": false,
+    "dynamicRootSegments": null,
+    "listRelative": null,
+    "objectMembers": null
+  },
   "dependencies": ["hero"],
   "source": "same-file",
   "strategy": "transparent-hook-summary"
 }
 ```
+
+Fields:
+
+- `segments`: canonical selector path segments
+- `declarationSegments`: path segments relative to the template declaration
+  context; this is load-bearing for list-relative PHP depth
+- `dynamicRoot`: whether the return preserves an object-root descriptor
+- `dynamicRootSegments`: object-root path used for descriptor composition
+- `listRelative`: source/declaration/context-depth metadata for list roots and
+  list item values
+- `objectMembers`: member-to-expression-info map for object-return hooks; this
+  remains disabled until Phase 5
+- `returnKind`: `scalar-path`, `object-root`, `list-root`, `list-item`,
+  `object-map`, or `unsupported`
 
 For parameterized hooks, summary return paths are local to parameters until
 callsite resolution:
@@ -556,7 +652,14 @@ callsite resolution:
   "hookName": "useHeroTitle",
   "params": ["hero"],
   "returnKind": "path",
-  "returnSegments": ["$param:hero", "title"]
+  "expressionInfo": {
+    "segments": ["$param:hero", "title"],
+    "declarationSegments": ["$param:hero", "title"],
+    "dynamicRoot": false,
+    "dynamicRootSegments": null,
+    "listRelative": null,
+    "objectMembers": null
+  }
 }
 ```
 
@@ -574,6 +677,11 @@ If `featuredHero` resolves to `featured.hero`, the call resolves to:
   "declarationSegments": ["featured", "hero", "title"]
 }
 ```
+
+If the argument resolves to a dynamic object root or a list-relative value, the
+callsite must substitute the full expression-info object, not just splice
+canonical segments. This is what lets hook summaries participate in descriptor
+composition, list-relative declaration slicing, and PHP context-depth handling.
 
 ### Internal Selector Consumption
 
@@ -656,6 +764,34 @@ Hook flow should enter through the same path:
 
 This keeps output controllers unchanged.
 
+### Collector Activation
+
+The collector must not require a direct selector import in the current file
+once transparent hook summaries exist. A consumer may import only a summarized
+hook:
+
+```jsx
+import { useHero } from './hooks';
+
+const App = () => {
+  const hero = useHero();
+  return <Header hero={ hero } />;
+};
+```
+
+That file has no `useStoreSelector` import, but still needs selector tracing.
+Collector activation should consider:
+
+- direct selector imports
+- configured selector hook imports
+- same-file transparent hook candidates
+- imported hook summaries from the manifest
+- hook callsites that can resolve to summaries
+- seed aliases / dynamic-root props from component tracing
+
+Without this activation input, cross-file hook consumers would skip collection
+before `resolveTransparentHookCallInfo` can run.
+
 ## Manifest Integration
 
 Cross-file hook summaries should be manifest-owned:
@@ -697,6 +833,7 @@ Use stable diagnostic kinds:
 - `unsupported-hook-ref-flow`
 - `unsupported-hook-callback-flow`
 - `unsupported-hook-argument-flow`
+- `unsupported-hook-opaque-flow`
 - `unsupported-hook-import`
 - `ambiguous-hook-return`
 - `configured-selector-hook-unresolved`
@@ -722,7 +859,12 @@ Add review-mode metadata:
       "filename": "App.jsx",
       "strategy": "same-file-transparent-hook",
       "returnKind": "path",
-      "localReturnPath": "hero.title"
+      "calleeBinding": "useMemo imported from react",
+      "localReturnPath": "hero.title",
+      "segments": ["hero", "title"],
+      "declarationSegments": ["hero", "title"],
+      "dynamicRoot": false,
+      "listRelative": null
     }
   ],
   "hookCallsites": [
@@ -730,7 +872,9 @@ Add review-mode metadata:
       "componentName": "App",
       "hookName": "useHeroTitle",
       "argumentPaths": ["hero"],
-      "compiledPath": "hero.title"
+      "returnKind": "scalar-path",
+      "compiledPath": "hero.title",
+      "dependencyPaths": ["hero"]
     }
   ],
   "skippedHooks": [
@@ -745,6 +889,34 @@ Add review-mode metadata:
 
 Debug metadata must explain both successful and skipped hook paths.
 
+## First-Wave Implementation Scope
+
+The first implementation stream should stay intentionally narrow:
+
+1. Baseline diagnostics and taint handling for state/ref/reducer/callback flows.
+2. Configured app-owned selector hooks as import-bound selector sources.
+3. Import-bound direct React `useMemo` expression bodies only.
+
+Supported first-wave `useMemo` return kinds:
+
+- scalar selector path
+- object-root preservation for child descriptor composition
+- list-root/list-relative preservation when the memo returns the original
+  selector-derived value
+
+Explicitly not in the first wave:
+
+- object literals / object-return hooks
+- block-bodied memo callbacks
+- custom hook summaries
+- cross-file hook summaries
+- non-hook helper summaries
+- tuple returns
+- safe-list-chain transforms such as `useMemo(() => products.filter(...))`
+
+First-wave debug metadata must include callee binding, return kind, compiled
+path, dependency-array raw paths, and skip reason.
+
 ## Implementation Phases
 
 ### Phase 0: Hook Safety Hardening
@@ -754,8 +926,12 @@ Goal: fix live unsafe baseline behavior before adding positive hook support.
 Tasks:
 
 - suppress selector-member declarations inside stateful hook arguments
+- add mutable-hook taint tracking for state bindings, setter bindings, refs,
+  and `ref.current` writes
 - add fail-closed tests for selector-derived values through `useState`,
   `useReducer`, `useRef`, and `useCallback`
+- add fail-closed tests for `setTitle(hero.title)`, `ref.current = hero.title`,
+  effect-driven state/ref writes, and rendered `ref.current`
 - add metadata tests for selector-derived values used only in `useEffect`
   without template output
 - ensure no case silently renders empty output with `warnOnUnsupported: false`
@@ -766,6 +942,7 @@ Exit gates:
   `{{hero.title}}` / PHP equivalents from the initializer argument
 - dangerous state/ref/callback template flows hard-error with stable hook
   diagnostic kinds
+- setter/ref mutation paths hard-error when the mutated value reaches output
 - irrelevant effect-only usage does not break output
 - metadata records skipped hook boundaries
 - unsupported hook metadata is present even with warnings suppressed
@@ -798,19 +975,26 @@ Goal: support pure `useMemo` return expressions.
 
 Positive gates:
 
+- import-bound `useMemo`, renamed `useMemo`, React namespace `React.useMemo`,
+  and React default/namespace member forms are recognized only when the binding
+  resolves to React
 - scalar replacement in HBS/PHP
 - control condition in HBS/PHP
 - object-root prop passed to child component
 - list-relative prop passed inside `.map`
 - list root preserved through `useMemo(() => products)` and then mapped
+- static optional member in memo return
 - dependency array recorded in debug metadata
 
 Fail-closed gates:
 
+- local fake `useMemo`
 - helper call in memo body
 - conditional return
 - block body with side effects
+- block body with a return remains diagnostic-only in the first slice
 - computed member return
+- object literal return before Phase 5
 - selector-derived value escapes through unsupported object spread
 - hook-in-callback such as `useMemo(() => useStoreSelector(...))`
 
@@ -855,7 +1039,6 @@ Positive gates:
 - object-root preservation
 - compatible list-relative path
 - hook calls another transparent hook
-- object return with scalar properties
 - local multi-source callsites compose per callsite when compatible
 
 Fail-closed gates:
@@ -864,6 +1047,7 @@ Fail-closed gates:
 - mixed list/non-list parameter usage
 - incompatible list-relative parameter usage
 - computed property access
+- object return before Phase 5
 - object return with spread
 - tuple return
 - return function/callback
@@ -875,6 +1059,7 @@ Goal: support destructuring/member access from transparent object-return hooks.
 
 Positive gates:
 
+- `const view = useMemo(() => ({ title: hero.title }), [ hero ]); view.title`
 - `const view = useHeroView(hero); view.title`
 - `const { title } = useHeroView(hero)`
 - child props from object return
@@ -964,24 +1149,33 @@ Rationale:
 
 1. Is the transparent hook summary model the right abstraction, or should hook
    calls be lowered directly into local aliases?
-2. Should `useMemo` dependency arrays be validated strictly, ignored for path
+2. Does the summary contract carry enough of the existing expression-info shape
+   (`segments`, `declarationSegments`, dynamic roots, object members, and
+   list-relative provenance) for descriptors and PHP depth?
+3. Are the import-bound React built-in rules strict enough to prevent local
+   fake `useMemo` functions from becoming transparent?
+4. Should `useMemo` dependency arrays be validated strictly, ignored for path
    proof, or recorded only in debug metadata?
-3. Does Phase 0 correctly handle the live stateful-hook argument leak by
+5. Does Phase 0 correctly handle the live stateful-hook argument leak by
    suppressing declarations inside `useState` / `useRef` / `useReducer`
-   initializers?
-4. Should state/ref/callback hooks hard-error immediately when selector-derived
+   initializers and tracking setter/ref writes as taint?
+6. Should state/ref/callback hooks hard-error immediately when selector-derived
    data enters them, or only when their returned value reaches template output?
-5. Is configured app-owned selector hook support correctly moved before
+7. Is configured app-owned selector hook support correctly moved before
    `useMemo` and custom hook summaries?
-6. Is the design note for hook-internal selectors sufficient to avoid
+8. Is the design note for hook-internal selectors sufficient to avoid
    `assertNoUnprocessedStoreSelectorReferences` failures and double emission?
-7. Is ambiguity inheritance for parameterized hooks sufficiently specified?
-8. Should same-file custom hooks support object returns in the first hook slice,
+9. Is ambiguity inheritance for parameterized hooks sufficiently specified?
+10. Should same-file custom hooks support object returns in the first hook slice,
    or only after scalar/object-root returns are proven?
-9. Should tuple returns ever be supported for common hooks like
+11. Should hook object returns remain diagnostic-only until the dedicated Phase
+    5 object-member alias contract lands?
+12. Does collector activation cover hook-only consumer components that import a
+    summarized hook but do not import a selector source directly?
+13. Should tuple returns ever be supported for common hooks like
    `const [hero] = useHeroTuple()`?
-10. What debug metadata is sufficient for reviewers to explain a skipped hook
+14. What debug metadata is sufficient for reviewers to explain a skipped hook
    path?
-11. Should cross-file hook summaries reuse the component manifest pass, or run as
+15. Should cross-file hook summaries reuse the component manifest pass, or run as
    a separate prepass phase?
-12. Are there common natural hook patterns missing from this plan?
+16. Are there common natural hook patterns missing from this plan?
