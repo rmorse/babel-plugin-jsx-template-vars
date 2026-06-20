@@ -60,6 +60,7 @@ const {
 	assertNoUnprocessedStoreSelectorReferences,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
+	removeUnusedImportSpecifiers,
 	removeStoreSelectorImportSpecifiers,
 } = require( './store-selector-template-vars' );
 const defaultLanguage = 'handlebars';
@@ -173,7 +174,7 @@ function templateVarsVisitor( babel, config ) {
 				return;
 			}
 
-			const selectorImports = collectStoreSelectorImports( programPath, babel );
+			const selectorImports = collectStoreSelectorImports( programPath, babel, config );
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
 			const debugEntries = [];
@@ -206,6 +207,7 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorComponentPaths: componentPaths,
 						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
+						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 						storeSelectorNeutralizeSelectors: false,
 					} );
 					selectorResults.set( componentName, selectorResult );
@@ -270,6 +272,7 @@ function templateVarsVisitor( babel, config ) {
 					storeSelectorComponentPaths: componentPaths,
 					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
+					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 				} );
 				selectorResults.set( componentName, selectorResult );
 
@@ -381,6 +384,7 @@ function templateVarsVisitor( babel, config ) {
 
 			assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel );
 			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
+			removeUnusedImportSpecifiers( selectorImports.reactHookImportSpecifiers );
 
 			if ( debugStoreSelectors ) {
 				state.file.metadata.storeSelectorTemplateVars = [

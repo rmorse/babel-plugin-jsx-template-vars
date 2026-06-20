@@ -7,6 +7,7 @@ const {
 
 const STORE_SELECTOR_MODULE = 'babel-plugin-jsx-template-vars/store';
 const STORE_SELECTOR_EXPORT = 'useStoreSelector';
+const REACT_MODULE = 'react';
 const SAFE_LIST_CHAIN_METHODS = new Set( [
 	'filter',
 	'slice',
@@ -14,6 +15,21 @@ const SAFE_LIST_CHAIN_METHODS = new Set( [
 	'toSorted',
 	'reverse',
 	'toReversed',
+] );
+const REACT_STATEFUL_HOOKS = new Set( [
+	'useState',
+	'useReducer',
+	'useRef',
+	'useCallback',
+	'useEffect',
+	'useLayoutEffect',
+	'useDeferredValue',
+	'useSyncExternalStore',
+	'useId',
+	'useTransition',
+	'useOptimistic',
+	'useActionState',
+	'useImperativeHandle',
 ] );
 
 function isStoreSelectorEnabled( config = {} ) {
@@ -40,31 +56,44 @@ function isStaticMemberExpressionNode( expression, babel ) {
 	) && ! expression.computed;
 }
 
-function collectStoreSelectorImports( programPath, babel ) {
+function collectStoreSelectorImports( programPath, babel, config = {} ) {
 	const { types } = babel;
 	const localNames = new Set();
 	const localBindings = [];
 	const importSpecifiers = [];
+	const reactHookImportSpecifiers = [];
+	const configuredLocalNames = new Set();
+	const configuredHooks = getConfiguredSelectorHooks( config );
 
 	programPath.get( 'body' ).forEach( ( childPath ) => {
 		const node = childPath.node;
-		if ( ! types.isImportDeclaration( node ) || node.source.value !== STORE_SELECTOR_MODULE ) {
+		if ( ! types.isImportDeclaration( node ) ) {
 			return;
 		}
 
+		const source = node.source.value;
 		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
 			const specifier = specifierPath.node;
-			if (
-				types.isImportSpecifier( specifier ) &&
-				types.isIdentifier( specifier.imported ) &&
-				specifier.imported.name === STORE_SELECTOR_EXPORT
-			) {
-				localNames.add( specifier.local.name );
-				const binding = specifierPath.scope.getBinding( specifier.local.name );
-				if ( binding ) {
-					localBindings.push( binding );
+			if ( source === STORE_SELECTOR_MODULE ) {
+				if (
+					types.isImportSpecifier( specifier ) &&
+					types.isIdentifier( specifier.imported ) &&
+					specifier.imported.name === STORE_SELECTOR_EXPORT
+				) {
+					addSelectorImportSpecifier( specifierPath, localNames, localBindings, importSpecifiers );
 				}
-				importSpecifiers.push( specifierPath );
+				return;
+			}
+
+			const configuredHook = configuredHooks.find( hook => hook.source === source && importSpecifierMatchesConfiguredHook( specifier, hook, types ) );
+			if ( configuredHook ) {
+				addSelectorImportSpecifier( specifierPath, localNames, localBindings, importSpecifiers );
+				configuredLocalNames.add( specifier.local.name );
+				return;
+			}
+
+			if ( source === REACT_MODULE && isReactHookImportSpecifier( specifier, types ) ) {
+				reactHookImportSpecifiers.push( specifierPath );
 			}
 		} );
 	} );
@@ -73,7 +102,56 @@ function collectStoreSelectorImports( programPath, babel ) {
 		localNames,
 		localBindings,
 		importSpecifiers,
+		reactHookImportSpecifiers,
+		configuredLocalNames,
 	};
+}
+
+function getConfiguredSelectorHooks( config = {} ) {
+	const options = typeof config.experimentalStoreSelectors === 'object' && config.experimentalStoreSelectors !== null ?
+		config.experimentalStoreSelectors :
+		{};
+	const hooks = Array.isArray( options.selectorHooks ) ? options.selectorHooks : [];
+	return hooks.filter( hook => (
+		hook &&
+		typeof hook.source === 'string' &&
+		typeof hook.importName === 'string' &&
+		( typeof hook.selectorArg === 'undefined' || hook.selectorArg === 0 )
+	) );
+}
+
+function importSpecifierMatchesConfiguredHook( specifier, hook, types ) {
+	if (
+		types.isImportSpecifier( specifier ) &&
+		types.isIdentifier( specifier.imported ) &&
+		specifier.imported.name === hook.importName
+	) {
+		return true;
+	}
+
+	return types.isImportDefaultSpecifier( specifier ) && hook.importName === 'default';
+}
+
+function isReactHookImportSpecifier( specifier, types ) {
+	if (
+		types.isImportSpecifier( specifier ) &&
+		types.isIdentifier( specifier.imported ) &&
+		( specifier.imported.name === 'useMemo' || REACT_STATEFUL_HOOKS.has( specifier.imported.name ) )
+	) {
+		return true;
+	}
+
+	return types.isImportDefaultSpecifier( specifier ) || types.isImportNamespaceSpecifier( specifier );
+}
+
+function addSelectorImportSpecifier( specifierPath, localNames, localBindings, importSpecifiers ) {
+	const specifier = specifierPath.node;
+	localNames.add( specifier.local.name );
+	const binding = specifierPath.scope.getBinding( specifier.local.name );
+	if ( binding ) {
+		localBindings.push( binding );
+	}
+	importSpecifiers.push( specifierPath );
 }
 
 function removeStoreSelectorImportSpecifiers( importSpecifiers ) {
@@ -90,6 +168,50 @@ function removeStoreSelectorImportSpecifiers( importSpecifiers ) {
 
 		specifierPath.remove();
 	} );
+}
+
+function removeUnusedImportSpecifiers( importSpecifiers ) {
+	importSpecifiers.forEach( ( specifierPath ) => {
+		if ( ! specifierPath.parentPath || ! specifierPath.node?.local ) {
+			return;
+		}
+
+		const localName = specifierPath.node.local.name;
+		const binding = specifierPath.scope.getBinding( localName );
+		if ( binding && hasLiveBindingReference( specifierPath, localName, binding ) ) {
+			return;
+		}
+
+		const importPath = specifierPath.parentPath;
+		if ( importPath.node.specifiers.length === 1 ) {
+			importPath.remove();
+			return;
+		}
+
+		specifierPath.remove();
+	} );
+}
+
+function hasLiveBindingReference( specifierPath, localName, binding ) {
+	const programPath = specifierPath.findParent( path => path.isProgram && path.isProgram() );
+	if ( ! programPath ) {
+		return false;
+	}
+
+	let hasReference = false;
+	programPath.traverse( {
+		Identifier( path ) {
+			if ( path.node.name !== localName || ! path.isReferencedIdentifier() ) {
+				return;
+			}
+
+			if ( path.scope.getBinding( localName ) === binding ) {
+				hasReference = true;
+				path.stop();
+			}
+		},
+	} );
+	return hasReference;
 }
 
 function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, babel, config = {} ) {
@@ -797,14 +919,19 @@ class StoreSelectorCollector {
 		this.declarations = new Set();
 		this.declarationProvenance = new Map();
 		this.selectorDeclarations = [];
+		this.transparentHookDeclarations = [];
 		this.aliasEntries = [];
 		this.aliasesByBinding = new WeakMap();
 		this.memberAliasesByBinding = new WeakMap();
 		this.mapCallPaths = new Set();
 		this.unsupportedChildPropExpressions = new WeakSet();
+		this.unsupportedHookArgumentExpressions = new WeakSet();
 		this.unsupportedPaths = [];
 		this.childPropTraces = [];
 		this.childPropSeedTraces = [];
+		this.hookTaintsByBinding = new WeakMap();
+		this.hookSetterTargetsByBinding = new WeakMap();
+		this.refBindings = new WeakSet();
 	}
 
 	collect() {
@@ -820,11 +947,13 @@ class StoreSelectorCollector {
 		this.collectMapShapes();
 		this.collectLocalAliases();
 		this.collectMapShapes();
+		this.collectHookTaints();
 		this.collectChildComponentPropUsage();
 		this.collectAliasUsage();
 		this.collectOpaqueHelperUsage();
 		if ( this.config.storeSelectorNeutralizeSelectors !== false ) {
 			this.neutralizeSelectorDeclarations();
+			this.neutralizeTransparentHookDeclarations();
 		}
 
 		return this.createResult();
@@ -894,7 +1023,11 @@ class StoreSelectorCollector {
 				}
 
 				const selectorSegments = this.parseSelectorCall( init, path );
-				this.registerAlias( id.name, selectorSegments, path );
+				this.registerAlias( id.name, selectorSegments, path, {
+					source: this.config.storeSelectorConfiguredLocalNames?.has?.( init.callee.name ) ?
+						'configured-selector-hook' :
+						'selector',
+				} );
 				this.selectorDeclarations.push( {
 					path,
 					segments: selectorSegments,
@@ -914,20 +1047,35 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				path.get( 'arguments' ).forEach( ( argumentPath ) => {
-				const segments = this.resolveExpressionSegments( argumentPath.node, argumentPath );
-				if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+				if ( this.isReactHookCall( path.node, path ) ) {
 					return;
 				}
 
-				const message = `Store selector value "${ stringifySegments( segments ) }" is passed to helper "${ this.getCalleeName( path.node.callee ) }", but helper-body field inference is not supported in this experiment slice.`;
-				this.recordUnsupported( 'helper', segments, message );
-				diagnostics.unsupported(
-					argumentPath,
-					message,
-					this.config
-				);
-			} );
+				if ( this.isHookLikeUseMemoCall( path.node ) ) {
+					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+					if ( selectorSources.length > 0 ) {
+						diagnostics.error(
+							path,
+							`Store selector unsupported-hook-call: useMemo must be imported from React before it can summarize selector-derived values such as "${ stringifySegments( selectorSources[ 0 ] ) }".`
+						);
+					}
+					return;
+				}
+
+				path.get( 'arguments' ).forEach( ( argumentPath ) => {
+					const segments = this.resolveExpressionSegments( argumentPath.node, argumentPath );
+					if ( ! segments || ! isSelectorDerivedPath( segments ) ) {
+						return;
+					}
+
+					const message = `Store selector value "${ stringifySegments( segments ) }" is passed to helper "${ this.getCalleeName( path.node.callee ) }", but helper-body field inference is not supported in this experiment slice.`;
+					this.recordUnsupported( 'helper', segments, message );
+					diagnostics.unsupported(
+						argumentPath,
+						message,
+						this.config
+					);
+				} );
 			},
 		} );
 	}
@@ -944,7 +1092,7 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				const sourceInfo = this.resolveExpressionInfo( init, path );
+				const sourceInfo = this.resolveExpressionInfo( init, path.get( 'init' ) );
 				if ( ! sourceInfo ) {
 					if ( this.isUnsupportedSelectorChainCall( init, path ) ) {
 						this.throwUnsupportedListChain( path );
@@ -958,6 +1106,12 @@ class StoreSelectorCollector {
 						dynamicRoot: sourceInfo.dynamicRoot,
 						dynamicRootSegments: sourceInfo.dynamicRootSegments,
 					} );
+					if ( this.isReactUseMemoCall( init, path.get( 'init' ) ) ) {
+						this.transparentHookDeclarations.push( {
+							path,
+							segments: sourceInfo.segments,
+						} );
+					}
 					if ( this.isSafeListChainCall( init ) ) {
 						this.registerSafeListChainCallbackAliases(
 							path.get( 'init' ),
@@ -986,7 +1140,7 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				const sourceInfo = this.resolveExpressionInfo( right, path );
+				const sourceInfo = this.resolveExpressionInfo( right, path.get( 'right' ) );
 				if ( sourceInfo ) {
 					this.registerAlias( left.name, sourceInfo.segments, path, {
 						declarationSegments: sourceInfo.declarationSegments,
@@ -1015,10 +1169,243 @@ class StoreSelectorCollector {
 		} );
 	}
 
+	collectHookTaints() {
+		const { types } = this.babel;
+		this.componentPath.traverse( {
+			VariableDeclarator: ( path ) => {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				const { id, init } = path.node;
+				if ( ! types.isCallExpression( init ) ) {
+					return;
+				}
+
+				const hookName = this.getReactHookCallName( init, path );
+				if ( ! hookName ) {
+					return;
+				}
+
+				if ( hookName === 'useState' || hookName === 'useReducer' ) {
+					this.collectStateHookTaint( path, hookName );
+					return;
+				}
+
+				if ( hookName === 'useRef' ) {
+					this.collectRefHookTaint( path );
+					return;
+				}
+
+				if ( hookName === 'useCallback' ) {
+					this.collectCallbackHookTaint( path );
+				}
+			},
+			CallExpression: ( path ) => {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				const hookName = this.getReactHookCallName( path.node, path );
+				if ( hookName === 'useEffect' || hookName === 'useLayoutEffect' ) {
+					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+					if ( selectorSources.length > 0 ) {
+						this.recordUnsupported( 'unsupported-hook-argument-flow', selectorSources[ 0 ], `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used inside ${ hookName }; effect-only hook usage is ignored by template output.`, {
+							hookName,
+							sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+							sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+						} );
+					}
+				}
+
+				const callee = path.node.callee;
+				if ( ! types.isIdentifier( callee ) ) {
+					return;
+				}
+
+				const binding = path.scope.getBinding( callee.name );
+				const stateTarget = binding ? this.hookSetterTargetsByBinding.get( binding.identifier ) : null;
+				if ( ! stateTarget ) {
+					return;
+				}
+
+				const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+				if ( selectorSources.length === 0 ) {
+					return;
+				}
+
+				this.markPathsAsUnsupportedHookArguments( path.get( 'arguments' ) );
+				const taint = this.createHookTaint( 'unsupported-hook-state-flow', 'useState setter', selectorSources, path );
+				this.hookTaintsByBinding.set( stateTarget.stateBinding.identifier, taint );
+				this.recordUnsupportedHookTaint( taint );
+			},
+			AssignmentExpression: ( path ) => {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				const { left, right } = path.node;
+				if ( ! this.isRefCurrentMemberExpression( left ) ) {
+					return;
+				}
+
+				const refBinding = path.scope.getBinding( left.object.name );
+				if ( ! refBinding || ! this.refBindings.has( refBinding.identifier ) ) {
+					return;
+				}
+
+				const rightPath = path.get( 'right' );
+				const selectorSources = this.collectSelectorDerivedSegments( rightPath );
+				if ( selectorSources.length === 0 ) {
+					return;
+				}
+
+				this.unsupportedHookArgumentExpressions.add( right );
+				const taint = this.createHookTaint( 'unsupported-hook-ref-flow', 'useRef.current', selectorSources, path );
+				this.hookTaintsByBinding.set( refBinding.identifier, taint );
+				this.recordUnsupportedHookTaint( taint );
+			},
+		} );
+	}
+
+	collectStateHookTaint( path, hookName ) {
+		const { types } = this.babel;
+		const { id, init } = path.node;
+		if ( ! types.isArrayPattern( id ) ) {
+			return;
+		}
+
+		const stateElement = id.elements[ 0 ];
+		const setterElement = id.elements[ 1 ];
+		if ( ! types.isIdentifier( stateElement ) ) {
+			return;
+		}
+
+		const stateBinding = path.scope.getBinding( stateElement.name );
+		if ( ! stateBinding ) {
+			return;
+		}
+
+		if ( types.isIdentifier( setterElement ) ) {
+			const setterBinding = path.scope.getBinding( setterElement.name );
+			if ( setterBinding ) {
+				this.hookSetterTargetsByBinding.set( setterBinding.identifier, {
+					stateBinding,
+					hookName,
+				} );
+			}
+		}
+
+		const argumentPaths = path.get( 'init.arguments' ).slice( hookName === 'useReducer' ? 1 : 0 );
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
+		if ( selectorSources.length === 0 ) {
+			return;
+		}
+
+		this.markPathsAsUnsupportedHookArguments( argumentPaths );
+		const taint = this.createHookTaint( 'unsupported-hook-state-flow', hookName, selectorSources, path );
+		this.hookTaintsByBinding.set( stateBinding.identifier, taint );
+		this.recordUnsupportedHookTaint( taint );
+	}
+
+	collectRefHookTaint( path ) {
+		const { types } = this.babel;
+		const { id } = path.node;
+		if ( ! types.isIdentifier( id ) ) {
+			return;
+		}
+
+		const refBinding = path.scope.getBinding( id.name );
+		if ( ! refBinding ) {
+			return;
+		}
+
+		this.refBindings.add( refBinding.identifier );
+		const argumentPaths = path.get( 'init.arguments' );
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
+		if ( selectorSources.length === 0 ) {
+			return;
+		}
+
+		this.markPathsAsUnsupportedHookArguments( argumentPaths );
+		const taint = this.createHookTaint( 'unsupported-hook-ref-flow', 'useRef', selectorSources, path );
+		this.hookTaintsByBinding.set( refBinding.identifier, taint );
+		this.recordUnsupportedHookTaint( taint );
+	}
+
+	collectCallbackHookTaint( path ) {
+		const { types } = this.babel;
+		const { id } = path.node;
+		if ( ! types.isIdentifier( id ) ) {
+			return;
+		}
+
+		const binding = path.scope.getBinding( id.name );
+		if ( ! binding ) {
+			return;
+		}
+
+		const argumentPaths = path.get( 'init.arguments' );
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
+		if ( selectorSources.length === 0 ) {
+			return;
+		}
+
+		this.markPathsAsUnsupportedHookArguments( argumentPaths );
+		const taint = this.createHookTaint( 'unsupported-hook-callback-flow', 'useCallback', selectorSources, path );
+		this.hookTaintsByBinding.set( binding.identifier, taint );
+		this.recordUnsupportedHookTaint( taint );
+	}
+
+	collectSelectorDerivedSegmentsFromPaths( expressionPaths ) {
+		const sources = new Map();
+		expressionPaths.forEach( ( expressionPath ) => {
+			this.collectSelectorDerivedSegments( expressionPath ).forEach( ( segments ) => {
+				sources.set( stringifySegments( segments ), segments );
+			} );
+		} );
+		return Array.from( sources.values() );
+	}
+
+	markPathsAsUnsupportedHookArguments( expressionPaths ) {
+		expressionPaths.forEach( ( expressionPath ) => {
+			if ( expressionPath?.node ) {
+				this.unsupportedHookArgumentExpressions.add( expressionPath.node );
+			}
+		} );
+	}
+
+	createHookTaint( kind, hookName, selectorSources, path ) {
+		return {
+			kind,
+			hookName,
+			sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+			sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+			message: `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" entered ${ hookName }, which is runtime hook state and cannot be used as static template data.`,
+			path,
+		};
+	}
+
+	recordUnsupportedHookTaint( taint ) {
+		this.recordUnsupported( taint.kind, taint.sourceSegments[ 0 ], taint.message, {
+			hookName: taint.hookName,
+			sourcePaths: taint.sourcePaths,
+			sourceSegments: taint.sourceSegments,
+		} );
+	}
+
 	collectAliasUsage() {
 		this.componentPath.traverse( {
 			Identifier: ( path ) => {
 				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				if ( this.isInsideUnsupportedHookArgument( path ) ) {
+					return;
+				}
+
+				if ( this.isInsideReactHookDependencyArray( path ) ) {
 					return;
 				}
 
@@ -1028,6 +1415,11 @@ class StoreSelectorCollector {
 
 				if ( this.isUnsupportedChildPropExpression( path ) ) {
 					return;
+				}
+
+				const hookTaint = this.resolveHookTaintForIdentifier( path.node.name, path );
+				if ( hookTaint ) {
+					this.throwUnsupportedHookTaint( path, hookTaint );
 				}
 
 				const segments = this.resolveIdentifierSegments( path.node.name, path );
@@ -1040,6 +1432,19 @@ class StoreSelectorCollector {
 			'MemberExpression|OptionalMemberExpression': ( path ) => {
 				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
 					return;
+				}
+
+				if ( this.isInsideUnsupportedHookArgument( path ) ) {
+					return;
+				}
+
+				if ( this.isInsideReactHookDependencyArray( path ) ) {
+					return;
+				}
+
+				const hookTaint = this.resolveHookTaintForMemberExpression( path.node, path );
+				if ( hookTaint && ! this.isPartialMemberExpression( path ) ) {
+					this.throwUnsupportedHookTaint( path, hookTaint );
 				}
 
 				if ( ! this.isUnsupportedChildPropExpression( path ) && this.isComputedSelectorMemberExpression( path ) ) {
@@ -1875,6 +2280,140 @@ class StoreSelectorCollector {
 		return '<unknown>';
 	}
 
+	isHookLikeUseMemoCall( node ) {
+		if ( ! this.babel.types.isCallExpression( node ) ) {
+			return false;
+		}
+
+		if ( this.babel.types.isIdentifier( node.callee ) ) {
+			return node.callee.name === 'useMemo';
+		}
+
+		return (
+			this.babel.types.isMemberExpression( node.callee ) &&
+			! node.callee.computed &&
+			this.babel.types.isIdentifier( node.callee.property ) &&
+			node.callee.property.name === 'useMemo'
+		);
+	}
+
+	isReactUseMemoCall( node, path ) {
+		return this.getReactHookCallName( node, path ) === 'useMemo';
+	}
+
+	isReactHookCall( node, path ) {
+		return Boolean( this.getReactHookCallName( node, path ) );
+	}
+
+	getReactHookCallName( node, path ) {
+		const { types } = this.babel;
+		if ( ! types.isCallExpression( node ) ) {
+			return null;
+		}
+
+		if ( types.isIdentifier( node.callee ) ) {
+			const hookName = node.callee.name;
+			if ( hookName !== 'useMemo' && ! REACT_STATEFUL_HOOKS.has( hookName ) ) {
+				return null;
+			}
+
+			const binding = path.scope.getBinding( hookName );
+			return this.isReactNamedHookBinding( binding, hookName ) ? hookName : null;
+		}
+
+		if (
+			types.isMemberExpression( node.callee ) &&
+			! node.callee.computed &&
+			types.isIdentifier( node.callee.object ) &&
+			types.isIdentifier( node.callee.property )
+		) {
+			const hookName = node.callee.property.name;
+			if ( hookName !== 'useMemo' && ! REACT_STATEFUL_HOOKS.has( hookName ) ) {
+				return null;
+			}
+
+			const binding = path.scope.getBinding( node.callee.object.name );
+			return this.isReactNamespaceBinding( binding ) ? hookName : null;
+		}
+
+		return null;
+	}
+
+	isReactNamedHookBinding( binding, hookName ) {
+		const { types } = this.babel;
+		const node = binding?.path?.node;
+		const parent = binding?.path?.parentPath?.node;
+		return Boolean(
+			binding &&
+			types.isImportSpecifier( node ) &&
+			types.isIdentifier( node.imported ) &&
+			node.imported.name === hookName &&
+			types.isImportDeclaration( parent ) &&
+			parent.source.value === REACT_MODULE
+		);
+	}
+
+	isReactNamespaceBinding( binding ) {
+		const { types } = this.babel;
+		const node = binding?.path?.node;
+		const parent = binding?.path?.parentPath?.node;
+		return Boolean(
+			binding &&
+			( types.isImportDefaultSpecifier( node ) || types.isImportNamespaceSpecifier( node ) ) &&
+			types.isImportDeclaration( parent ) &&
+			parent.source.value === REACT_MODULE
+		);
+	}
+
+	isRefCurrentMemberExpression( expression ) {
+		return Boolean(
+			this.babel.types.isMemberExpression( expression ) &&
+			! expression.computed &&
+			this.babel.types.isIdentifier( expression.object ) &&
+			this.babel.types.isIdentifier( expression.property ) &&
+			expression.property.name === 'current'
+		);
+	}
+
+	containsStoreSelectorCall( path ) {
+		let found = false;
+		if ( this.isStoreSelectorCall( path.node ) ) {
+			return true;
+		}
+		path.traverse( {
+			CallExpression: ( callPath ) => {
+				if ( this.isStoreSelectorCall( callPath.node ) ) {
+					found = true;
+					callPath.stop();
+				}
+			},
+		} );
+		return found;
+	}
+
+	containsComputedSelectorMemberExpression( path ) {
+		let found = false;
+		if (
+			(
+				this.babel.types.isMemberExpression( path.node ) ||
+				( typeof this.babel.types.isOptionalMemberExpression === 'function' && this.babel.types.isOptionalMemberExpression( path.node ) ) ||
+				path.node?.type === 'OptionalMemberExpression'
+			) &&
+			this.isComputedSelectorMemberExpression( path )
+		) {
+			return true;
+		}
+		path.traverse( {
+			'MemberExpression|OptionalMemberExpression': ( memberPath ) => {
+				if ( this.isComputedSelectorMemberExpression( memberPath ) ) {
+					found = true;
+					memberPath.stop();
+				}
+			},
+		} );
+		return found;
+	}
+
 	getChildComponentInfo( name ) {
 		const elementName = this.getJSXElementName( name );
 		if ( ! elementName ) {
@@ -1929,6 +2468,10 @@ class StoreSelectorCollector {
 			return this.resolveIdentifierInfo( expression.name, path );
 		}
 
+		if ( types.isCallExpression( expression ) && this.isReactUseMemoCall( expression, path ) ) {
+			return this.resolveUseMemoExpressionInfo( expression, path );
+		}
+
 		if ( this.isStaticMemberExpressionNode( expression ) && ! expression.computed && types.isIdentifier( expression.property ) ) {
 			const memberInfo = this.resolveMemberAliasInfo( expression, path );
 			if ( memberInfo ) {
@@ -1949,6 +2492,58 @@ class StoreSelectorCollector {
 		}
 
 		return null;
+	}
+
+	resolveUseMemoExpressionInfo( expression, path ) {
+		const callbackPath = path.get( 'arguments' )[ 0 ];
+		const callback = callbackPath?.node;
+		if (
+			! this.babel.types.isArrowFunctionExpression( callback ) &&
+			! this.babel.types.isFunctionExpression( callback )
+		) {
+			this.throwUnsupportedHookReturnIfSelectorDerived( path, path.get( 'arguments' ), 'useMemo must receive a static callback before it can summarize selector-derived values.' );
+			return null;
+		}
+
+		if ( this.containsStoreSelectorCall( callbackPath ) ) {
+			diagnostics.error(
+				callbackPath,
+				'Store selector unsupported-hook-nested: useMemo callbacks cannot contain store selector calls. Assign the selector result before the memo call.'
+			);
+		}
+
+		if ( this.babel.types.isBlockStatement( callback.body ) ) {
+			this.throwUnsupportedHookReturnIfSelectorDerived( path, [ callbackPath.get( 'body' ) ], 'useMemo block bodies are not supported in this experiment slice. Use an expression body that returns a selector-derived path.' );
+			return null;
+		}
+
+		const returnPath = callbackPath.get( 'body' );
+		if ( this.containsComputedSelectorMemberExpression( returnPath ) ) {
+			diagnostics.error(
+				returnPath,
+				'Store selector unsupported-hook-return: useMemo computed member access is not supported. Use a static member path such as hero.title.'
+			);
+		}
+
+		const info = this.resolveExpressionInfo( callback.body, returnPath );
+		if ( info && isSelectorDerivedPath( info.segments ) ) {
+			return info;
+		}
+
+		this.throwUnsupportedHookReturnIfSelectorDerived( path, [ returnPath ], 'useMemo return expressions must resolve to a selector-derived static path, object root, or list root.' );
+		return null;
+	}
+
+	throwUnsupportedHookReturnIfSelectorDerived( path, expressionPaths, reason ) {
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( Array.isArray( expressionPaths ) ? expressionPaths : [ expressionPaths ] );
+		if ( selectorSources.length === 0 ) {
+			return;
+		}
+
+		diagnostics.error(
+			path,
+			`Store selector unsupported-hook-return: ${ reason } Affected selector path: "${ stringifySegments( selectorSources[ 0 ] ) }".`
+		);
 	}
 
 	resolveMemberAliasInfo( expression, path ) {
@@ -1996,6 +2591,58 @@ class StoreSelectorCollector {
 			dynamicRoot: alias.dynamicRoot,
 			dynamicRootSegments: alias.dynamicRootSegments,
 		} : null;
+	}
+
+	resolveHookTaintForIdentifier( name, path ) {
+		const binding = path.scope.getBinding( name );
+		return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
+	}
+
+	resolveHookTaintForMemberExpression( expression, path ) {
+		if ( ! this.isRefCurrentMemberExpression( expression ) ) {
+			return null;
+		}
+
+		const binding = path.scope.getBinding( expression.object.name );
+		return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
+	}
+
+	throwUnsupportedHookTaint( path, taint ) {
+		diagnostics.error(
+			path,
+			`Store selector ${ taint.kind }: ${ taint.message }`
+		);
+	}
+
+	isInsideUnsupportedHookArgument( path ) {
+		let currentPath = path;
+		while ( currentPath && currentPath !== this.componentPath ) {
+			if ( this.unsupportedHookArgumentExpressions.has( currentPath.node ) ) {
+				return true;
+			}
+			currentPath = currentPath.parentPath;
+		}
+		return false;
+	}
+
+	isInsideReactHookDependencyArray( path ) {
+		let currentPath = path;
+		while ( currentPath && currentPath !== this.componentPath ) {
+			const node = currentPath.node;
+			const parentPath = currentPath.parentPath;
+			if (
+				this.babel.types.isArrayExpression( node ) &&
+				this.babel.types.isCallExpression( parentPath?.node )
+			) {
+				const args = parentPath.get( 'arguments' );
+				const index = args.findIndex( argumentPath => argumentPath.node === node );
+				if ( index > 0 && this.isReactHookCall( parentPath.node, parentPath ) ) {
+					return true;
+				}
+			}
+			currentPath = parentPath;
+		}
+		return false;
 	}
 
 	addDeclarationForExpression( path ) {
@@ -2083,6 +2730,12 @@ class StoreSelectorCollector {
 	neutralizeSelectorDeclarations() {
 		this.selectorDeclarations.forEach( ( selectorDeclaration ) => {
 			selectorDeclaration.path.node.init = this.createNeutralExpression( selectorDeclaration.segments );
+		} );
+	}
+
+	neutralizeTransparentHookDeclarations() {
+		this.transparentHookDeclarations.forEach( ( hookDeclaration ) => {
+			hookDeclaration.path.node.init = this.createNeutralExpression( hookDeclaration.segments );
 		} );
 	}
 
@@ -2403,5 +3056,6 @@ module.exports = {
 	createAliasResolver,
 	isStoreSelectorEnabled,
 	isStoreSelectorDebugEnabled,
+	removeUnusedImportSpecifiers,
 	removeStoreSelectorImportSpecifiers,
 };
