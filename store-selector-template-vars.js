@@ -2026,12 +2026,11 @@ class StoreSelectorCollector {
 	}
 
 	isTransparentHookSummaryCall( expression, path ) {
-		if ( ! this.babel.types.isCallExpression( expression ) || ! this.babel.types.isIdentifier( expression.callee ) ) {
+		if ( ! this.babel.types.isCallExpression( expression ) ) {
 			return false;
 		}
 
-		const binding = path.scope.getBinding( expression.callee.name );
-		return Boolean( binding && this.config.storeSelectorHookSummariesByBinding?.has?.( binding.identifier ) );
+		return Boolean( this.getTransparentHookCalleeInfo( expression, path ).summary );
 	}
 
 	inlineTransparentJSXHookCalls() {
@@ -2041,20 +2040,16 @@ class StoreSelectorCollector {
 					return;
 				}
 
-				if ( ! this.babel.types.isIdentifier( path.node.callee ) ) {
-					return;
-				}
-
-				const binding = path.scope.getBinding( path.node.callee.name );
-				const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
-				const unsupported = binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
+				const calleeInfo = this.getTransparentHookCalleeInfo( path.node, path );
+				const summary = calleeInfo.summary;
+				const unsupported = calleeInfo.unsupported;
 				if ( ! summary || summary.returnKind !== 'jsx' ) {
 					if ( unsupported && this.canInlineJSXHookCall( path ) ) {
 						const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
 						if ( selectorSources.length > 0 ) {
 							diagnostics.error(
 								path,
-								`Store selector ${ unsupported.kind || 'unsupported-hook-call' }: JSX-returning hook "${ unsupported.hookName || path.node.callee.name }" cannot be rendered from this unsupported hook body (${ unsupported.reason || 'unsupported hook summary' }).`
+								`Store selector ${ unsupported.kind || 'unsupported-hook-call' }: JSX-returning hook "${ unsupported.hookName || calleeInfo.displayName }" cannot be rendered from this unsupported hook body (${ unsupported.reason || 'unsupported hook summary' }).`
 							);
 						}
 					}
@@ -2566,12 +2561,11 @@ class StoreSelectorCollector {
 	}
 
 	getUnsupportedTransparentHookCall( expression, path ) {
-		if ( ! this.babel.types.isCallExpression( expression ) || ! this.babel.types.isIdentifier( expression.callee ) ) {
+		if ( ! this.babel.types.isCallExpression( expression ) ) {
 			return null;
 		}
 
-		const binding = path.scope.getBinding( expression.callee.name );
-		return binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
+		return this.getTransparentHookCalleeInfo( expression, path ).unsupported || null;
 	}
 
 	collectAliasUsage() {
@@ -3884,20 +3878,20 @@ class StoreSelectorCollector {
 	}
 
 	resolveTransparentHookSummaryInfo( expression, path ) {
-		if ( ! this.babel.types.isIdentifier( expression.callee ) ) {
+		if ( ! this.babel.types.isCallExpression( expression ) ) {
 			return null;
 		}
 
-		const binding = path.scope.getBinding( expression.callee.name );
-		const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
-		const unsupported = binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
+		const calleeInfo = this.getTransparentHookCalleeInfo( expression, path );
+		const summary = calleeInfo.summary;
+		const unsupported = calleeInfo.unsupported;
 		const argumentPaths = path.get( 'arguments' ) || [];
 		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
 		if ( ! summary ) {
 			if ( unsupported && selectorSources.length > 0 ) {
 				diagnostics.error(
 					path,
-					`Store selector ${ unsupported.kind }: hook "${ unsupported.hookName }" cannot summarize selector-derived values such as "${ stringifySegments( selectorSources[ 0 ] ) }" (${ unsupported.reason }).`
+					`Store selector ${ unsupported.kind }: hook "${ unsupported.hookName || calleeInfo.displayName }" cannot summarize selector-derived values such as "${ stringifySegments( selectorSources[ 0 ] ) }" (${ unsupported.reason }).`
 				);
 			}
 			return null;
@@ -3996,6 +3990,38 @@ class StoreSelectorCollector {
 		}
 
 		return null;
+	}
+
+	getTransparentHookCalleeInfo( expression, path ) {
+		const { types } = this.babel;
+		if ( ! types.isCallExpression( expression ) ) {
+			return {};
+		}
+
+		if ( types.isIdentifier( expression.callee ) ) {
+			const binding = path.scope.getBinding( expression.callee.name );
+			return {
+				displayName: expression.callee.name,
+				summary: binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null,
+				unsupported: binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null,
+			};
+		}
+
+		if (
+			types.isMemberExpression( expression.callee ) &&
+			! expression.callee.computed &&
+			types.isIdentifier( expression.callee.object ) &&
+			types.isIdentifier( expression.callee.property )
+		) {
+			const binding = path.scope.getBinding( expression.callee.object.name );
+			return {
+				displayName: `${ expression.callee.object.name }.${ expression.callee.property.name }`,
+				summary: binding ? this.config.storeSelectorHookSummariesByBinding?.getNamespaceMember?.( binding.identifier, expression.callee.property.name ) : null,
+				unsupported: binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.getNamespaceMember?.( binding.identifier, expression.callee.property.name ) : null,
+			};
+		}
+
+		return {};
 	}
 
 	throwUnsupportedHookReturnIfSelectorDerived( path, expressionPaths, reason ) {

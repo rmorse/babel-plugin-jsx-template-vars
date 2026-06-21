@@ -371,9 +371,10 @@ lists and nested lists, static optional member chains such as `hero?.title`,
 function declaration components, default imports, named/default-as-named
 barrels, namespace member components, transparent `memo`/`React.memo` wrappers,
 direct `children` passthrough, supported list children, inline object-literal
-scalar spreads, and direct transparent hook summaries. Dynamic components, HOCs,
-render props, arbitrary spreads, unconfigured package/workspace imports, generic
-context tracing, and shape-polymorphic output remain fail-closed boundaries.
+scalar spreads, and transparent hook summaries through supported
+direct/barrel/namespace/alias imports. Dynamic components, HOCs, render props,
+arbitrary spreads, unconfigured package/workspace imports, generic context
+tracing, and shape-polymorphic output remain fail-closed boundaries.
 
 Path-polymorphic object roots and list-relative reuse use two different
 mechanisms. Object roots such as `<Header hero={ homeHero } />` use parent

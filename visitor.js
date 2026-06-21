@@ -182,11 +182,13 @@ function templateVarsVisitor( babel, config ) {
 			const crossFileHookSummaries = createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename );
 			const hookSummaryLookup = createHookSummaryLookup(
 				hookSummaries.summariesByBinding,
-				crossFileHookSummaries.summariesByBinding
+				crossFileHookSummaries.summariesByBinding,
+				createNamespaceHookLookup( crossFileHookSummaries.summariesByNamespaceBinding )
 			);
 			const unsupportedHookSummaryLookup = createHookSummaryLookup(
 				hookSummaries.unsupportedByBinding,
-				crossFileHookSummaries.unsupportedByBinding
+				crossFileHookSummaries.unsupportedByBinding,
+				createNamespaceHookLookup( crossFileHookSummaries.unsupportedByNamespaceBinding )
 			);
 			const hookSummariesAvailable = hookSummaries.summaryRecords.length > 0 || crossFileHookSummaries.available;
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
@@ -557,11 +559,15 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 
 function createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename ) {
 	const summariesByBinding = new WeakMap();
+	const summariesByNamespaceBinding = new WeakMap();
 	const unsupportedByBinding = new WeakMap();
+	const unsupportedByNamespaceBinding = new WeakMap();
 	if ( storeSelectorOptions.crossFile !== true ) {
 		return {
 			summariesByBinding,
+			summariesByNamespaceBinding,
 			unsupportedByBinding,
+			unsupportedByNamespaceBinding,
 			available: false,
 		};
 	}
@@ -572,6 +578,21 @@ function createCrossFileHookSummariesByBinding( programPath, storeSelectorOption
 		.filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizeStoreSelectorFilename( filename ) );
 	let available = false;
 	Object.entries( summariesByLocalName ).forEach( ( [ localName, summary ] ) => {
+		const namespaceMember = splitNamespaceMemberName( localName );
+		if ( namespaceMember ) {
+			const binding = programPath.scope.getBinding( namespaceMember.namespaceLocalName );
+			if ( binding && summary ) {
+				let summariesByMember = summariesByNamespaceBinding.get( binding.identifier );
+				if ( ! summariesByMember ) {
+					summariesByMember = new Map();
+					summariesByNamespaceBinding.set( binding.identifier, summariesByMember );
+				}
+				summariesByMember.set( namespaceMember.memberName, summary );
+				available = true;
+			}
+			return;
+		}
+
 		const binding = programPath.scope.getBinding( localName );
 		if ( binding && summary ) {
 			summariesByBinding.set( binding.identifier, summary );
@@ -579,6 +600,26 @@ function createCrossFileHookSummariesByBinding( programPath, storeSelectorOption
 		}
 	} );
 	skippedHooks.forEach( ( skippedHook ) => {
+		const namespaceMember = splitNamespaceMemberName( skippedHook.localName );
+		if ( namespaceMember ) {
+			const binding = programPath.scope.getBinding( namespaceMember.namespaceLocalName );
+			if ( binding ) {
+				let unsupportedByMember = unsupportedByNamespaceBinding.get( binding.identifier );
+				if ( ! unsupportedByMember ) {
+					unsupportedByMember = new Map();
+					unsupportedByNamespaceBinding.set( binding.identifier, unsupportedByMember );
+				}
+				unsupportedByMember.set( namespaceMember.memberName, {
+					kind: skippedHook.kind || 'unsupported-hook-import',
+					hookName: skippedHook.localName,
+					localName: skippedHook.localName,
+					reason: skippedHook.message || skippedHook.kind || 'unsupported hook import',
+				} );
+				available = true;
+			}
+			return;
+		}
+
 		const binding = programPath.scope.getBinding( skippedHook.localName );
 		if ( binding ) {
 			unsupportedByBinding.set( binding.identifier, {
@@ -593,7 +634,9 @@ function createCrossFileHookSummariesByBinding( programPath, storeSelectorOption
 
 	return {
 		summariesByBinding,
+		summariesByNamespaceBinding,
 		unsupportedByBinding,
+		unsupportedByNamespaceBinding,
 		available,
 	};
 }
@@ -612,6 +655,40 @@ function createHookSummaryLookup( ...maps ) {
 		has( key ) {
 			return maps.some( map => Boolean( map?.has?.( key ) ) );
 		},
+		getNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			for ( const map of maps ) {
+				const value = map?.getNamespaceMember?.( namespaceBindingIdentifier, memberName );
+				if ( value ) {
+					return value;
+				}
+			}
+			return undefined;
+		},
+		hasNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return maps.some( map => Boolean( map?.hasNamespaceMember?.( namespaceBindingIdentifier, memberName ) ) );
+		},
+	};
+}
+
+function createNamespaceHookLookup( namespaceBindingMap ) {
+	return {
+		getNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return namespaceBindingMap?.get?.( namespaceBindingIdentifier )?.get( memberName );
+		},
+		hasNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return Boolean( namespaceBindingMap?.get?.( namespaceBindingIdentifier )?.has( memberName ) );
+		},
+	};
+}
+
+function splitNamespaceMemberName( localName ) {
+	const parts = typeof localName === 'string' ? localName.split( '.' ) : [];
+	if ( parts.length !== 2 || ! parts[ 0 ] || ! parts[ 1 ] ) {
+		return null;
+	}
+	return {
+		namespaceLocalName: parts[ 0 ],
+		memberName: parts[ 1 ],
 	};
 }
 

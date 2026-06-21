@@ -8,17 +8,17 @@ Current PR status: the initial 80/20 wave is implemented and covered by
 unit/e2e fixtures, including function declaration components, default imports,
 named/default-as-named barrels, namespace member components, unique star
 re-exports, transparent `memo`/`React.memo` wrappers, explicit resolver aliases,
-direct cross-file transparent hook summaries, and the
+transparent hook summaries through supported default/barrel/namespace/alias
+imports, and the
 `store-selector-drop-in-static-matrix` validation fixture. The validation fixture
 now combines default/barrel/namespace/function/wrapper/static-spread/children,
-direct transparent hook summaries, object-root descriptors, and list-relative
-reuse with HBS/PHP parity.
+transparent hook summaries through barrel and namespace imports, object-root
+descriptors, and list-relative reuse with HBS/PHP parity.
 
 Remaining work in this plan should be read as follow-up breadth and hardening:
-package/workspace resolver design, hook resolution through the shared barrel and
-namespace resolver, broader static spread analysis, children manipulation
-research, `forwardRef` policy, anonymous defaults, and real external app
-validation.
+package/workspace resolver design, broader static spread analysis, children
+manipulation research, `forwardRef` policy, anonymous defaults, and real
+external app validation.
 
 This plan extends the broad-support roadmap with a specific goal: make the
 store-selector experiment feel as close to drop-in as possible for ordinary

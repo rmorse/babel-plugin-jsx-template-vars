@@ -280,6 +280,7 @@ function collectRawComponentImports( programPath, filename ) {
 function collectRawHookImports( programPath, filename, selectorImports = {} ) {
 	const imports = [];
 	const selectorLocalNames = selectorImports.localNames || new Set();
+	const namespaceCandidates = [];
 	programPath.get( 'body' ).forEach( ( childPath ) => {
 		const node = childPath.node;
 		if ( ! babel.types.isImportDeclaration( node ) || node.source.value === STORE_SELECTOR_MODULE || node.source.value === 'react' ) {
@@ -310,10 +311,73 @@ function collectRawHookImports( programPath, filename, selectorImports = {} ) {
 					source: node.source.value,
 					filename,
 				} );
+				return;
+			}
+
+			if ( babel.types.isImportNamespaceSpecifier( specifier ) ) {
+				namespaceCandidates.push( {
+					kind: 'namespace',
+					localName: specifier.local.name,
+					importedName: '*',
+					source: node.source.value,
+					filename,
+					binding: specifierPath.scope.getBinding( specifier.local.name ),
+				} );
 			}
 		} );
 	} );
+	const namespaceHookMembers = collectUsedNamespaceHookMembers( programPath, namespaceCandidates );
+	namespaceCandidates.forEach( ( candidate ) => {
+		if ( namespaceHookMembers.get( candidate.localName )?.size > 0 ) {
+			imports.push( {
+				kind: candidate.kind,
+				localName: candidate.localName,
+				importedName: candidate.importedName,
+				source: candidate.source,
+				filename: candidate.filename,
+			} );
+		}
+	} );
 	return imports;
+}
+
+function collectUsedNamespaceHookMembers( programPath, namespaceCandidates ) {
+	const membersByLocalName = new Map();
+	if ( namespaceCandidates.length === 0 ) {
+		return membersByLocalName;
+	}
+
+	const candidatesByLocalName = new Map( namespaceCandidates.map( candidate => [ candidate.localName, candidate ] ) );
+	programPath.traverse( {
+		CallExpression( callPath ) {
+			const callee = callPath.node.callee;
+			if (
+				! babel.types.isMemberExpression( callee ) ||
+				callee.computed ||
+				! babel.types.isIdentifier( callee.object ) ||
+				! babel.types.isIdentifier( callee.property ) ||
+				! isHookName( callee.property.name )
+			) {
+				return;
+			}
+
+			const candidate = candidatesByLocalName.get( callee.object.name );
+			if ( ! candidate ) {
+				return;
+			}
+			if ( candidate.binding && callPath.scope.getBinding( callee.object.name ) !== candidate.binding ) {
+				return;
+			}
+
+			let members = membersByLocalName.get( candidate.localName );
+			if ( ! members ) {
+				members = new Set();
+				membersByLocalName.set( candidate.localName, members );
+			}
+			members.add( callee.property.name );
+		},
+	} );
+	return membersByLocalName;
 }
 
 function getFileExports( programPath, componentPaths, types ) {
@@ -445,18 +509,39 @@ function getFileHookExports( programPath, summariesByName, types ) {
 			return;
 		}
 
+		if ( types.isExportAllDeclaration( node ) ) {
+			exports.set( `*:${ node.source?.value || '' }`, {
+				exportedName: '*',
+				source: node.source?.value,
+				kind: 'star-reexport',
+			} );
+			return;
+		}
+
 		if ( ! types.isExportNamedDeclaration( node ) ) {
 			return;
 		}
 
 		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
 			const specifier = specifierPath.node;
-			if ( ! types.isExportSpecifier( specifier ) || node.source ) {
+			if ( ! types.isExportSpecifier( specifier ) ) {
 				return;
 			}
 
 			const localName = getExportSpecifierName( specifier.local );
 			const exportedName = getExportSpecifierName( specifier.exported );
+			if ( ! localName || ! exportedName ) {
+				return;
+			}
+			if ( node.source ) {
+				exports.set( exportedName, {
+					exportedName,
+					importedName: localName,
+					source: node.source.value,
+					kind: localName === 'default' ? 'reexport-default-as-named' : 'reexport-named',
+				} );
+				return;
+			}
 			if ( localName && exportedName && summariesByName.has( localName ) ) {
 				exports.set( exportedName, {
 					exportedName,
@@ -800,7 +885,12 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 			}
 
 			const targetRecord = records.get( targetFilename );
-			const resolvedHook = resolveImportedHook( importInfo, targetRecord );
+			if ( importInfo.kind === 'namespace' ) {
+				addNamespaceHookImports( record, importInfo, targetRecord, records, targetFilename, diagnostics, debug, resolver );
+				return;
+			}
+
+			const resolvedHook = resolveImportedHook( importInfo, targetRecord, records, resolver );
 			if ( resolvedHook?.unsupported ) {
 				const diagnostic = {
 					kind: resolvedHook.kind || 'unsupported-hook-import',
@@ -808,11 +898,11 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 					source: importInfo.source,
 					localName: importInfo.localName,
 					importedName: importInfo.importedName,
-					targetFilename,
+					targetFilename: resolvedHook.filename || targetFilename,
 					message: resolvedHook.message || `Store selector cross-file hook tracing could not resolve "${ importInfo.localName }" from "${ importInfo.source }" to a supported transparent hook export.`,
 				};
 				diagnostics.push( diagnostic );
-				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo, targetFilename ) );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo, resolvedHook.filename || targetFilename ) );
 				return;
 			}
 
@@ -834,7 +924,7 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 			record.hookImports.set( importInfo.localName, {
 				localName: importInfo.localName,
 				hookName: resolvedHook.hookName,
-				filename: targetFilename,
+				filename: resolvedHook.filename || targetFilename,
 				summary: resolvedHook.summary,
 			} );
 			debug.hookImportEdges.push( {
@@ -842,29 +932,158 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 				importSource: importInfo.source,
 				localName: importInfo.localName,
 				importedName: importInfo.importedName,
-				targetFilename,
+				targetFilename: resolvedHook.filename || targetFilename,
+				resolvedFromFilename: targetFilename,
 				targetHookName: resolvedHook.hookName,
-				exportKind: resolvedHook.kind,
+				exportKind: resolvedHook.exportKind,
+				exportHops: resolvedHook.exportHops || [],
 			} );
 		} );
 	} );
 }
 
-function resolveImportedHook( importInfo, targetRecord ) {
-	if ( ! targetRecord ) {
-		return null;
+function resolveImportedHook( importInfo, targetRecord, records, resolver ) {
+	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
+	return resolveExportedHook( targetRecord, exportedName, records, resolver, new Set() );
+}
+
+function resolveExportedHook( targetRecord, exportedName, records, resolver, seen ) {
+	if ( ! targetRecord || ! exportedName ) {
+		return {
+			unsupported: true,
+			kind: 'unsupported-hook-import',
+		};
 	}
 
-	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
+	const visitKey = `${ targetRecord.filename }::hook::${ exportedName }`;
+	if ( seen.has( visitKey ) ) {
+		return {
+			unsupported: true,
+			kind: 'unsupported-hook-reexport',
+			message: `Store selector cross-file hook tracing found a re-export cycle while resolving "${ exportedName }" from "${ targetRecord.filename }".`,
+		};
+	}
+	seen.add( visitKey );
+
 	const exportInfo = targetRecord.hookExports?.get( exportedName );
 	if ( exportInfo?.summary?.returnKind === 'jsx' ) {
 		return {
 			unsupported: true,
 			kind: 'unsupported-cross-file-jsx-hook',
-			message: `Store selector cross-file hook tracing resolved "${ importInfo.localName }" to JSX-returning hook "${ exportInfo.hookName }", but cross-file JSX hook render summaries are deferred to the shared import/export resolver.`,
+			message: `Store selector cross-file hook tracing resolved "${ exportedName }" to JSX-returning hook "${ exportInfo.hookName }", but cross-file JSX hook render summaries are deferred to the shared import/export resolver.`,
 		};
 	}
-	return exportInfo?.summary ? exportInfo : null;
+
+	if ( exportInfo?.summary ) {
+		return {
+			hookName: exportInfo.hookName,
+			summary: exportInfo.summary,
+			filename: targetRecord.filename,
+			exportKind: exportInfo.kind,
+			exportHops: [],
+		};
+	}
+
+	if ( exportInfo?.unsupported ) {
+		return {
+			unsupported: true,
+			kind: exportInfo.kind,
+		};
+	}
+
+	if ( exportInfo?.source ) {
+		const reexportFilename = resolveImportFilename( targetRecord.filename, exportInfo.source, records, resolver );
+		if ( ! reexportFilename ) {
+			return {
+				unsupported: true,
+				kind: 'unsupported-hook-reexport',
+				message: `Store selector cross-file hook tracing could not resolve re-export "${ exportInfo.source }" from "${ targetRecord.filename }".`,
+			};
+		}
+		const reexportRecord = records.get( reexportFilename );
+		const resolved = resolveExportedHook( reexportRecord, exportInfo.importedName, records, resolver, seen );
+		if ( resolved.hookName ) {
+			return {
+				...resolved,
+				exportKind: exportInfo.kind,
+				exportHops: [
+					{
+						filename: targetRecord.filename,
+						source: exportInfo.source,
+						importedName: exportInfo.importedName,
+						exportedName: exportInfo.exportedName,
+						targetFilename: reexportFilename,
+					},
+					...( resolved.exportHops || [] ),
+				],
+			};
+		}
+		return resolved;
+	}
+
+	if ( exportedName !== 'default' ) {
+		const starResolved = resolveStarExportedHook( targetRecord, exportedName, records, resolver, seen );
+		if ( starResolved.hookName || starResolved.unsupported ) {
+			return starResolved;
+		}
+	}
+
+	return {
+		unsupported: true,
+		kind: 'unsupported-hook-import',
+	};
+}
+
+function resolveStarExportedHook( targetRecord, exportedName, records, resolver, seen ) {
+	const starExports = Array.from( targetRecord.hookExports?.values() || [] )
+		.filter( exportInfo => exportInfo.exportedName === '*' && exportInfo.source );
+	if ( starExports.length === 0 ) {
+		return {};
+	}
+
+	const matches = [];
+	for ( const starExport of starExports ) {
+		const reexportFilename = resolveImportFilename( targetRecord.filename, starExport.source, records, resolver );
+		if ( ! reexportFilename ) {
+			continue;
+		}
+		const reexportRecord = records.get( reexportFilename );
+		const resolved = resolveExportedHook( reexportRecord, exportedName, records, resolver, new Set( seen ) );
+		if ( resolved.hookName ) {
+			matches.push( {
+				...resolved,
+				exportHops: [
+					{
+						filename: targetRecord.filename,
+						source: starExport.source,
+						importedName: exportedName,
+						exportedName,
+						targetFilename: reexportFilename,
+						star: true,
+					},
+					...( resolved.exportHops || [] ),
+				],
+			} );
+		}
+	}
+
+	const uniqueKeys = new Set( matches.map( match => `${ match.filename }::${ match.hookName }` ) );
+	if ( uniqueKeys.size > 1 ) {
+		return {
+			unsupported: true,
+			kind: 'ambiguous-star-hook-export',
+			message: `Store selector cross-file hook tracing found ambiguous star exports for "${ exportedName }" in "${ targetRecord.filename }".`,
+		};
+	}
+
+	if ( matches.length >= 1 ) {
+		return {
+			...matches[ 0 ],
+			exportKind: 'star-reexport',
+		};
+	}
+
+	return {};
 }
 
 function addNamespaceComponentImports( record, importInfo, targetRecord, records, targetFilename, debug, resolver ) {
@@ -894,6 +1113,63 @@ function addNamespaceComponentImports( record, importInfo, targetRecord, records
 			targetFilename: resolvedFilename,
 			resolvedFromFilename: targetFilename,
 			targetComponentName: resolved.componentName,
+			exportKind: resolved.exportKind,
+			exportHops: resolved.exportHops || [],
+			strategy: 'namespace-member',
+		} );
+	} );
+}
+
+function addNamespaceHookImports( record, importInfo, targetRecord, records, targetFilename, diagnostics, debug, resolver ) {
+	const exportedNames = Array.from( targetRecord.hookExports?.keys() || [] )
+		.filter( exportedName => exportedName !== 'default' && ! String( exportedName ).startsWith( '*' ) )
+		.sort();
+
+	exportedNames.forEach( exportedName => {
+		const resolved = resolveExportedHook( targetRecord, exportedName, records, resolver, new Set() );
+		const localName = `${ importInfo.localName }.${ exportedName }`;
+		if ( resolved.unsupported ) {
+			const diagnostic = {
+				kind: resolved.kind || 'unsupported-hook-import',
+				filename: record.filename,
+				source: importInfo.source,
+				localName,
+				namespaceLocalName: importInfo.localName,
+				importedName: exportedName,
+				targetFilename: resolved.filename || targetFilename,
+				message: resolved.message || `Store selector cross-file hook tracing could not resolve namespace hook "${ localName }" from "${ importInfo.source }" to a supported transparent hook export.`,
+			};
+			diagnostics.push( diagnostic );
+			debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, {
+				...importInfo,
+				localName,
+				importedName: exportedName,
+			}, resolved.filename || targetFilename ) );
+			return;
+		}
+
+		if ( ! resolved.hookName ) {
+			return;
+		}
+
+		const resolvedFilename = resolved.filename || targetFilename;
+		record.hookImports.set( localName, {
+			localName,
+			namespaceLocalName: importInfo.localName,
+			importedName: exportedName,
+			hookName: resolved.hookName,
+			filename: resolvedFilename,
+			summary: resolved.summary,
+		} );
+		debug.hookImportEdges.push( {
+			sourceFilename: record.filename,
+			importSource: importInfo.source,
+			localName,
+			namespaceLocalName: importInfo.localName,
+			importedName: exportedName,
+			targetFilename: resolvedFilename,
+			resolvedFromFilename: targetFilename,
+			targetHookName: resolved.hookName,
 			exportKind: resolved.exportKind,
 			exportHops: resolved.exportHops || [],
 			strategy: 'namespace-member',
@@ -1108,7 +1384,21 @@ function createHookSummariesByFile( records ) {
 
 function createRecordHookSummaryLookup( record ) {
 	const importedSummariesByBinding = new WeakMap();
+	const importedSummariesByNamespaceBinding = new WeakMap();
 	record.hookImports.forEach( ( hookImport, localName ) => {
+		if ( hookImport.namespaceLocalName ) {
+			const namespaceBinding = record.programPath.scope.getBinding( hookImport.namespaceLocalName );
+			if ( namespaceBinding ) {
+				let summariesByMember = importedSummariesByNamespaceBinding.get( namespaceBinding.identifier );
+				if ( ! summariesByMember ) {
+					summariesByMember = new Map();
+					importedSummariesByNamespaceBinding.set( namespaceBinding.identifier, summariesByMember );
+				}
+				summariesByMember.set( hookImport.importedName, hookImport.summary );
+			}
+			return;
+		}
+
 		const binding = record.programPath.scope.getBinding( localName );
 		if ( binding ) {
 			importedSummariesByBinding.set( binding.identifier, hookImport.summary );
@@ -1123,6 +1413,12 @@ function createRecordHookSummaryLookup( record ) {
 		has( key ) {
 			return record.hookSummaries.summariesByBinding.has( key ) ||
 				importedSummariesByBinding.has( key );
+		},
+		getNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return importedSummariesByNamespaceBinding.get( namespaceBindingIdentifier )?.get( memberName );
+		},
+		hasNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return Boolean( importedSummariesByNamespaceBinding.get( namespaceBindingIdentifier )?.has( memberName ) );
 		},
 	};
 }

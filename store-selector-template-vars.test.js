@@ -2767,6 +2767,267 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
+	it('supports transparent hook imports through named and default-as-named barrels', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+
+				export default function useHeroKicker(hero) {
+					return hero.kicker;
+				}
+			`,
+			'index.jsx': `
+				export { useHeroTitle } from './hooks.jsx';
+				export { default as useHeroKicker } from './hooks.jsx';
+			`,
+			'App.jsx': `
+				import { useHeroTitle, useHeroKicker } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					const kicker = useHeroKicker(hero);
+					return <h1>{ title } { kicker }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.hookImportEdges).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				localName: 'useHeroTitle',
+				importedName: 'useHeroTitle',
+				targetFilename: path.join(root, 'hooks.jsx'),
+				targetHookName: 'useHeroTitle',
+				exportKind: 'reexport-named',
+			}),
+			expect.objectContaining({
+				localName: 'useHeroKicker',
+				importedName: 'useHeroKicker',
+				targetFilename: path.join(root, 'hooks.jsx'),
+				targetHookName: 'useHeroKicker',
+				exportKind: 'reexport-default-as-named',
+			}),
+		]));
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}} {{hero.kicker}}</h1>');
+	});
+
+	it('supports transparent hook imports through unique star re-export barrels', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+			`,
+			'index.jsx': `
+				export * from './hooks.jsx';
+			`,
+			'App.jsx': `
+				import { useHeroTitle } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.hookImportEdges).toEqual([
+			expect.objectContaining({
+				localName: 'useHeroTitle',
+				importedName: 'useHeroTitle',
+				targetFilename: path.join(root, 'hooks.jsx'),
+				targetHookName: 'useHeroTitle',
+				exportKind: 'star-reexport',
+			}),
+		]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('supports transparent namespace hook member calls', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+			`,
+			'App.jsx': `
+				import * as Hooks from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = Hooks.useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.hookImportEdges).toEqual([
+			expect.objectContaining({
+				localName: 'Hooks.useHeroTitle',
+				namespaceLocalName: 'Hooks',
+				importedName: 'useHeroTitle',
+				targetFilename: path.join(root, 'hooks.jsx'),
+				targetHookName: 'useHeroTitle',
+				strategy: 'namespace-member',
+			}),
+		]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('supports transparent hook imports through explicit resolver aliases', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks/useHeroTitle.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+			`,
+			'App.jsx': `
+				import { useHeroTitle } from '@hooks/useHeroTitle';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const resolver = {
+			aliases: {
+				'@hooks': path.join(root, 'hooks'),
+			},
+		};
+		const manifest = createStoreSelectorCrossFileManifest(files, { resolver });
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			{
+				...createCrossFileOptions(manifest),
+				resolver,
+			}
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.debug.hookImportEdges).toEqual([
+			expect.objectContaining({
+				importSource: '@hooks/useHeroTitle',
+				localName: 'useHeroTitle',
+				targetFilename: path.join(root, 'hooks/useHeroTitle.jsx'),
+				targetHookName: 'useHeroTitle',
+			}),
+		]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('hard-errors ambiguous star re-exported hooks when selector-derived output depends on them', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'primaryHooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+			`,
+			'secondaryHooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.kicker;
+				}
+			`,
+			'index.jsx': `
+				export * from './primaryHooks.jsx';
+				export * from './secondaryHooks.jsx';
+			`,
+			'App.jsx': `
+				import { useHeroTitle } from './index.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const appFilename = path.join(root, 'App.jsx');
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(manifest.diagnostics).toEqual([
+			expect.objectContaining({
+				kind: 'ambiguous-star-hook-export',
+				source: './index.jsx',
+				localName: 'useHeroTitle',
+				importedName: 'useHeroTitle',
+			}),
+		]);
+		expect(() => transformTemplateVars(files[appFilename], {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		}, {
+			filename: appFilename,
+		})).toThrow(/ambiguous-star-hook-export/);
+	});
+
 	it('records unresolved cross-file hook imports as skipped hook diagnostics when unused', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({

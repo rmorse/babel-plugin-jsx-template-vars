@@ -40,11 +40,12 @@ both components and hooks:
 - `export *` ambiguity handling
 - type-only import/export filtering across resolver hops
 
-The current hook work introduced hook import summary records so cross-file hooks
-can function before the full drop-in resolver exists. That should be treated as
-a temporary slice of the same concept, not a second long-term resolver. When the
-drop-in resolver work resumes, hook imports and component imports should resolve
-through one shared export graph with typed targets:
+The hook work introduced hook import summary records so cross-file hooks could
+function before the broader drop-in resolver existed. The drop-in static-support
+track has since added hook resolution through the same supported
+default/barrel/namespace/alias export graph shapes used by component tracing.
+Longer-term package/workspace resolution should keep that shared typed-edge
+model instead of adding a second hook-only resolver:
 
 ```txt
 resolvedImportEdge
@@ -64,9 +65,9 @@ The shared resolver must preserve wrong-kind diagnostics:
 - an ambiguous export that could be a component or hook stays fail-closed until
   the export graph proves the target kind
 
-Do not add hook-specific barrel, namespace, alias, or package resolution as a
-parallel implementation. Add those shapes once in the drop-in resolver and make
-the hook summary builder consume the same resolved edges as component tracing.
+Do not add future package/workspace resolution as a parallel hook-only
+implementation. Add those shapes once in the drop-in resolver and make the hook
+summary builder consume the same resolved edges as component tracing.
 
 The one hook-local follow-up worth keeping near this milestone is a relink
 guard: if a manifest contains a hook summary for a local binding but the per-file
@@ -712,8 +713,8 @@ This should reuse the import/export graph from the drop-in static support work.
 
 Rules:
 
-- direct/named/default/barrel/namespace hook imports should eventually use the
-  same resolver surface as component imports
+- direct/named/default/barrel/namespace/alias hook imports use the same
+  supported resolver surface as component imports
 - same static hook body restrictions as same-file hooks
 - hook summaries should be manifest records, not per-file transform side effects
 - unresolved/unsupported hook imports remain manifest diagnostics until
@@ -1474,8 +1475,8 @@ Rationale:
 - JSX-returning hooks are render-flow summaries. They should be proven while
   the hook summary model is fresh, before package/barrel/namespace resolver
   breadth adds more graph complexity.
-- Resolver breadth for hook imports should still land in the broader drop-in
-  resolver plan, not as hook-specific resolver code.
+- Additional package/workspace resolver breadth for hook imports should still
+  land in the broader drop-in resolver plan, not as hook-specific resolver code.
 
 ## Non-Goals
 
@@ -1487,7 +1488,7 @@ Rationale:
 - Arbitrary HOC or helper execution
 - Inferring selector hooks by local name only
 - Supporting every library hook
-- Package/barrel/namespace hook resolution outside the shared drop-in resolver
+- Package/workspace hook resolution outside the shared drop-in resolver
 - Dynamic JSX-producing hooks that require executing application logic
 
 ## Review Questions

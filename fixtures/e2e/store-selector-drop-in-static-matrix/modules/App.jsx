@@ -1,6 +1,6 @@
-import { Header, Panel } from './index.jsx';
+import { Header, Panel, useCurrentHero } from './index.jsx';
 import * as Cards from './Cards.jsx';
-import { useCurrentHero, useHeroView } from './hooks.jsx';
+import * as Hooks from './hooks.jsx';
 import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 const App = () => {
@@ -8,7 +8,7 @@ const App = () => {
 	const articleHero = useStoreSelector((state) => state.article.hero);
 	const products = useStoreSelector((state) => state.products);
 	const currentHero = useCurrentHero(hero);
-	const articleView = useHeroView(articleHero);
+	const articleView = Hooks.useHeroView(articleHero);
 	const panelProps = { title: currentHero.kicker };
 
 	return (
