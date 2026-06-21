@@ -31,6 +31,19 @@ const REACT_STATEFUL_HOOKS = new Set( [
 	'useActionState',
 	'useImperativeHandle',
 ] );
+const REACT_TRANSPARENT_VALUE_HOOKS = new Set( [
+	'useDeferredValue',
+] );
+const REACT_EFFECT_HOOKS = new Set( [
+	'useEffect',
+	'useLayoutEffect',
+] );
+const REACT_SPECIAL_TAINT_HOOKS = new Set( [
+	'useState',
+	'useReducer',
+	'useRef',
+	'useCallback',
+] );
 
 function isStoreSelectorEnabled( config = {} ) {
 	return config.experimentalStoreSelectors === true || (
@@ -1983,6 +1996,16 @@ class StoreSelectorCollector {
 
 				if ( hookName === 'useCallback' ) {
 					this.collectCallbackHookTaint( path );
+					return;
+				}
+
+				if (
+					! REACT_TRANSPARENT_VALUE_HOOKS.has( hookName ) &&
+					! REACT_EFFECT_HOOKS.has( hookName ) &&
+					! REACT_SPECIAL_TAINT_HOOKS.has( hookName ) &&
+					hookName !== 'useMemo'
+				) {
+					this.collectOpaqueRuntimeHookTaint( path, hookName );
 				}
 			},
 			CallExpression: ( path ) => {
@@ -1991,10 +2014,29 @@ class StoreSelectorCollector {
 				}
 
 				const hookName = this.getReactHookCallName( path.node, path );
-				if ( hookName === 'useEffect' || hookName === 'useLayoutEffect' ) {
+				if ( REACT_EFFECT_HOOKS.has( hookName ) ) {
 					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
 					if ( selectorSources.length > 0 ) {
 						this.recordUnsupported( 'unsupported-hook-argument-flow', selectorSources[ 0 ], `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used inside ${ hookName }; effect-only hook usage is ignored by template output.`, {
+							hookName,
+							sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+							sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+						} );
+					}
+				}
+
+				if (
+					hookName &&
+					! REACT_TRANSPARENT_VALUE_HOOKS.has( hookName ) &&
+					! REACT_EFFECT_HOOKS.has( hookName ) &&
+					! REACT_SPECIAL_TAINT_HOOKS.has( hookName ) &&
+					hookName !== 'useMemo' &&
+					! ( types.isVariableDeclarator( path.parentPath?.node ) && path.parentPath.node.init === path.node )
+				) {
+					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+					if ( selectorSources.length > 0 ) {
+						this.markPathsAsUnsupportedHookArguments( path.get( 'arguments' ) );
+						this.recordUnsupported( 'unsupported-hook-opaque-flow', selectorSources[ 0 ], `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" entered ${ hookName }, which is runtime hook state and cannot be used as static template data.`, {
 							hookName,
 							sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
 							sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
@@ -2086,6 +2128,22 @@ class StoreSelectorCollector {
 		const taint = this.createHookTaint( 'unsupported-hook-state-flow', hookName, selectorSources, path );
 		stateBindings.forEach( stateBinding => {
 			this.hookTaintsByBinding.set( stateBinding.identifier, taint );
+		} );
+		this.recordUnsupportedHookTaint( taint );
+	}
+
+	collectOpaqueRuntimeHookTaint( path, hookName ) {
+		const { id } = path.node;
+		const argumentPaths = path.get( 'init.arguments' );
+		const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( argumentPaths );
+		if ( selectorSources.length === 0 ) {
+			return;
+		}
+
+		this.markPathsAsUnsupportedHookArguments( argumentPaths );
+		const taint = this.createHookTaint( 'unsupported-hook-opaque-flow', hookName, selectorSources, path );
+		this.getPatternBindings( id, path ).forEach( binding => {
+			this.hookTaintsByBinding.set( binding.identifier, taint );
 		} );
 		this.recordUnsupportedHookTaint( taint );
 	}
@@ -3428,6 +3486,10 @@ class StoreSelectorCollector {
 			return this.resolveUseMemoExpressionInfo( expression, path );
 		}
 
+		if ( path.node === expression && types.isCallExpression( expression ) && this.isReactTransparentValueHookCall( expression, path ) ) {
+			return this.resolveTransparentValueHookExpressionInfo( expression, path );
+		}
+
 		if ( path.node === expression && types.isCallExpression( expression ) ) {
 			const hookSummaryInfo = this.resolveTransparentHookSummaryInfo( expression, path );
 			if ( hookSummaryInfo ) {
@@ -3454,6 +3516,39 @@ class StoreSelectorCollector {
 			return this.resolveExpressionInfo( expression.callee.object, path );
 		}
 
+		return null;
+	}
+
+	isReactTransparentValueHookCall( expression, path ) {
+		const hookName = this.getReactHookCallName( expression, path );
+		return REACT_TRANSPARENT_VALUE_HOOKS.has( hookName );
+	}
+
+	resolveTransparentValueHookExpressionInfo( expression, path ) {
+		const hookName = this.getReactHookCallName( expression, path );
+		const argumentPaths = path.get( 'arguments' );
+		if ( argumentPaths.length !== 1 ) {
+			this.throwUnsupportedHookReturnIfSelectorDerived(
+				path,
+				argumentPaths,
+				`${ hookName } must receive exactly one static selector-derived value before it can be summarized.`
+			);
+			return null;
+		}
+
+		const info = this.resolveExpressionInfo( expression.arguments[ 0 ], argumentPaths[ 0 ] );
+		if ( info && ( isSelectorDerivedPath( info.segments ) || info.objectMembers ) ) {
+			return {
+				...info,
+				transparentHook: hookName,
+			};
+		}
+
+		this.throwUnsupportedHookReturnIfSelectorDerived(
+			path,
+			argumentPaths,
+			`${ hookName } arguments must resolve to selector-derived static paths before they can be summarized.`
+		);
 		return null;
 	}
 

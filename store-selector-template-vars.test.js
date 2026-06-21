@@ -653,6 +653,156 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{title}}</li>{{/products}}</ul>');
 	});
 
+	it('supports useDeferredValue scalar projections', async () => {
+		const source = `
+			import { useDeferredValue } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const title = useDeferredValue(hero.title);
+				return <h1>{ title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useDeferredValue');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('supports renamed useDeferredValue object-root preservation for child descriptors', async () => {
+		const source = `
+			import { useDeferredValue as deferValue } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const currentHero = deferValue(homeHero);
+				return <Header hero={ currentHero } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{home.hero.title}}</h1>');
+	});
+
+	it('supports useDeferredValue list-root preservation before map', async () => {
+		const source = `
+			import { useDeferredValue } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const products = useStoreSelector((state) => state.products);
+				const visibleProducts = useDeferredValue(products);
+				return (
+					<ul>
+						{ visibleProducts.map((product) => (
+							<li>{ product.title }</li>
+						)) }
+					</ul>
+				);
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<ul>{{#products}}<li>{{title}}</li>{{/products}}</ul>');
+	});
+
+	it('hard-errors when opaque runtime hook results carry selector-derived values to output', () => {
+		const source = `
+			import { useSyncExternalStore } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const subscribe = () => () => {};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const title = useSyncExternalStore(subscribe, () => hero.title);
+				return <h1>{ title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-opaque-flow/);
+	});
+
+	it('hard-errors when opaque runtime hook tuple results carry selector-derived values to output', () => {
+		const source = `
+			import { useTransition } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const [ pending ] = useTransition(hero.title);
+				return <h1>{ pending }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-opaque-flow/);
+	});
+
+	it('records opaque runtime hook argument metadata without changing unrelated output', () => {
+		const source = `
+			import { useImperativeHandle } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const ref = {};
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				useImperativeHandle(ref, () => ({ title: hero.title }));
+				return <h1>{ hero.kicker }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const result = transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				debug: true,
+			},
+			warnOnUnsupported: false,
+		});
+
+		expect(result.code).toContain('value: "hero.kicker"');
+		expect(result.code).not.toContain('value: "hero.title"');
+		expect(result.metadata.storeSelectorTemplateVarsUnsupported).toEqual([
+			expect.objectContaining({
+				componentName: 'App',
+				unsupported: [
+					expect.objectContaining({
+						kind: 'unsupported-hook-opaque-flow',
+						hookName: 'useImperativeHandle',
+						sourcePaths: [ 'hero.title' ],
+					}),
+				],
+			}),
+		]);
+	});
+
 	it('fails closed for selector-derived local fake useMemo calls', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
