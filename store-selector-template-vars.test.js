@@ -285,6 +285,112 @@ describe('experimental store selectors', () => {
 		})).toThrow(/unsupported-hook-state-flow/);
 	});
 
+	it('supports renamed React useMemo imports', async () => {
+		const source = `
+			import { useMemo as memoize } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const title = memoize(() => hero.title, [ hero ]);
+				return <h1>{ title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('memoize');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('hard-errors when renamed React state hooks carry selector-derived values to output', () => {
+		const source = `
+			import { useState as useReactState } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const [ title ] = useReactState(hero.title);
+				return <h1>{ title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-state-flow/);
+	});
+
+	it('hard-errors when renamed React ref current values reach output', () => {
+		const source = `
+			import { useRef as useReactRef } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const titleRef = useReactRef(hero.title);
+				return <h1>{ titleRef.current }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-ref-flow/);
+	});
+
+	it('hard-errors when renamed React callbacks are used as template data', () => {
+		const source = `
+			import { useCallback as useReactCallback } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ renderTitle }) => <h1>{ renderTitle }</h1>;
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const renderTitle = useReactCallback(() => hero.title, [ hero ]);
+				return <Header renderTitle={ renderTitle } />;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-callback-flow/);
+	});
+
+	it('hard-errors when destructured state hook values carry selector data to output', () => {
+		const source = `
+			import { useState } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const [{ title }] = useState({ title: hero.title });
+				return <h1>{ title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-state-flow/);
+	});
+
 	it('hard-errors when selector-derived ref current values reach output', () => {
 		const source = `
 			import { useRef } from 'react';
@@ -914,6 +1020,30 @@ describe('experimental store selectors', () => {
 
 		expect(code).not.toContain('const view = useHeroView(hero)');
 		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
+	});
+
+	it('supports derived object-return hook spreads into object-root child props', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function useHeroView(hero) {
+				return { hero };
+			}
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			const App = () => {
+				const homeHero = useStoreSelector((state) => state.home.hero);
+				const view = useHeroView(homeHero);
+				return <Header {...view} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{home.hero.title}}</h1>');
 	});
 
 	it('fails closed for derived object-return hooks with methods', () => {
@@ -1981,6 +2111,61 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
+	it('supports cross-file source hooks that wrap configured selector hooks', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				import { useAppSelector } from '@/store/hooks';
+
+				export function useHero() {
+					return useAppSelector((state) => state.hero);
+				}
+			`,
+			'App.jsx': `
+				import { useHero } from './hooks.jsx';
+
+				const App = () => {
+					const hero = useHero();
+					return <h1>{ hero.title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const selectorHookConfig = {
+			experimentalStoreSelectors: {
+				selectorHooks: [
+					{
+						source: '@/store/hooks',
+						importName: 'useAppSelector',
+					},
+				],
+			},
+		};
+		const manifest = createStoreSelectorCrossFileManifest(files, {
+			config: selectorHookConfig,
+		});
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			{
+				experimentalStoreSelectors: {
+					crossFile: true,
+					__crossFileManifest: manifest,
+					selectorHooks: selectorHookConfig.experimentalStoreSelectors.selectorHooks,
+				},
+				warnOnUnsupported: false,
+			}
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
 	it('supports cross-file transparent default hook function imports', async () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -2061,17 +2246,15 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
-	it('records unresolved cross-file hook imports as skipped hook diagnostics', () => {
+	it('records unresolved cross-file hook imports as skipped hook diagnostics when unused', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'App.jsx': `
-				import { useHeroTitle } from './missing-hooks.jsx';
-				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+				import { useHero } from './missing-hooks.jsx';
 
 				const App = () => {
-					const hero = useStoreSelector((state) => state.hero);
-					const title = useHeroTitle(hero);
-					return <h1>{ title }</h1>;
+					const hero = useHero();
+					return <h1>Static</h1>;
 				};
 
 				module.exports = { App };
@@ -2096,27 +2279,57 @@ describe('experimental store selectors', () => {
 				kind: 'unresolved-hook-import',
 				filename: appFilename,
 				source: './missing-hooks.jsx',
-				localName: 'useHeroTitle',
+				localName: 'useHero',
 			}),
 		]);
 		expect(result.metadata.storeSelectorTemplateVarsCrossFile).toEqual(expect.objectContaining({
 			skippedHooks: [
 				expect.objectContaining({
 					kind: 'unresolved-hook-import',
-					localName: 'useHeroTitle',
+					localName: 'useHero',
 					source: './missing-hooks.jsx',
 				}),
 			],
 			diagnostics: [
 				expect.objectContaining({
 					kind: 'unresolved-hook-import',
-					localName: 'useHeroTitle',
+					localName: 'useHero',
 				}),
 			],
 		}));
 	});
 
-	it('records unsupported imported hook bodies as skipped hook diagnostics', () => {
+	it('hard-errors when unresolved imported source hook results reach output', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'App.jsx': `
+				import { useHero } from './missing-hooks.jsx';
+
+				const App = () => {
+					const hero = useHero();
+					return <h1>{ hero.title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const appFilename = path.join(root, 'App.jsx');
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(() => transformTemplateVars(files[appFilename], {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		}, {
+			filename: appFilename,
+		})).toThrow(/unresolved-hook-import/);
+	});
+
+	it('records unsupported imported hook bodies as skipped hook diagnostics when unused', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
 			'hooks.jsx': `
@@ -2126,12 +2339,9 @@ describe('experimental store selectors', () => {
 			`,
 			'App.jsx': `
 				import { useHeroTitle } from './hooks.jsx';
-				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
 				const App = () => {
-					const hero = useStoreSelector((state) => state.hero);
-					const title = useHeroTitle(hero);
-					return <h1>{ title }</h1>;
+					return <h1>Static</h1>;
 				};
 
 				module.exports = { App };
@@ -2170,6 +2380,43 @@ describe('experimental store selectors', () => {
 				}),
 			],
 		}));
+	});
+
+	it('hard-errors when unsupported imported derived hook results reach output', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroTitle(hero) {
+					return formatTitle(hero.title);
+				}
+			`,
+			'App.jsx': `
+				import { useHeroTitle } from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const appFilename = path.join(root, 'App.jsx');
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(() => transformTemplateVars(files[appFilename], {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		}, {
+			filename: appFilename,
+		})).toThrow(/unsupported-hook-import/);
 	});
 
 	it('uses cross-file derived hook imports during child descriptor discovery', async () => {
@@ -4414,7 +4661,7 @@ describe('experimental store selectors', () => {
 		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('unsupported spread props'));
 	});
 
-	it('records unsupported metadata for object-root const object spreads', () => {
+	it('renders object-root selector fields from single-use const object spreads', async () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
 
@@ -4429,27 +4676,9 @@ describe('experimental store selectors', () => {
 			module.exports = { App };
 		`;
 
-		const result = transformTemplateVars(source, {
-			language: 'handlebars',
-			experimentalStoreSelectors: true,
-			warnOnUnsupported: false,
-		});
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
 
-		expect(result.metadata.storeSelectorTemplateVarsUnsupported).toEqual([
-			expect.objectContaining({
-				componentName: 'App',
-				unsupported: [
-					expect.objectContaining({
-						kind: 'child-prop-boundary',
-						boundary: 'JSXSpreadAttribute',
-						componentName: 'Header',
-						propName: 'hero',
-						target: 'Header.hero',
-						sourcePaths: [ 'hero' ],
-					}),
-				],
-			}),
-		]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
 	});
 
 	it('does not globally alias child props with multiple selector sources', async () => {

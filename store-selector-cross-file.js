@@ -29,7 +29,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 		importCycles: [],
 		ambiguousSeeds: [],
 	};
-	const records = createFileRecords( files, diagnostics, debug );
+	const records = createFileRecords( files, diagnostics, debug, options.config || {} );
 	resolveRecordImports( records, diagnostics, debug, resolver );
 	detectImportCycles( records, diagnostics, debug );
 
@@ -147,7 +147,7 @@ function annotateSelectorResultSource( selectorResult, sourceFilename, sourceCom
 	};
 }
 
-function createFileRecords( files, diagnostics, debug ) {
+function createFileRecords( files, diagnostics, debug, config = {} ) {
 	const normalizedFiles = normalizeFiles( files );
 	const records = new Map();
 
@@ -182,7 +182,7 @@ function createFileRecords( files, diagnostics, debug ) {
 		} );
 
 		const componentPaths = getTopLevelComponentPaths( programPath, babel.types );
-		const selectorImports = collectStoreSelectorImports( programPath, babel );
+		const selectorImports = collectStoreSelectorImports( programPath, babel, config );
 		const hookSummaries = collectTransparentHookSummaries( programPath, selectorImports, babel );
 		records.set( filename, {
 			filename,
@@ -197,7 +197,7 @@ function createFileRecords( files, diagnostics, debug ) {
 			imports: new Map(),
 			hookImports: new Map(),
 			rawImports: collectRawComponentImports( programPath, filename ),
-			rawHookImports: collectRawHookImports( programPath, filename ),
+			rawHookImports: collectRawHookImports( programPath, filename, selectorImports ),
 		} );
 	} );
 
@@ -277,8 +277,9 @@ function collectRawComponentImports( programPath, filename ) {
 	return imports;
 }
 
-function collectRawHookImports( programPath, filename ) {
+function collectRawHookImports( programPath, filename, selectorImports = {} ) {
 	const imports = [];
+	const selectorLocalNames = selectorImports.localNames || new Set();
 	programPath.get( 'body' ).forEach( ( childPath ) => {
 		const node = childPath.node;
 		if ( ! babel.types.isImportDeclaration( node ) || node.source.value === STORE_SELECTOR_MODULE || node.source.value === 'react' ) {
@@ -287,6 +288,9 @@ function collectRawHookImports( programPath, filename ) {
 
 		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
 			const specifier = specifierPath.node;
+			if ( selectorLocalNames.has( specifier.local?.name ) ) {
+				return;
+			}
 			if ( babel.types.isImportSpecifier( specifier ) && isHookName( specifier.local.name ) ) {
 				imports.push( {
 					kind: 'named',

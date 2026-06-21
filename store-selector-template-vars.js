@@ -787,7 +787,7 @@ function hookBodyContainsDisallowedHookCall( functionPath, babel ) {
 	let found = false;
 	functionPath.traverse( {
 		CallExpression( path ) {
-			const calleeName = getStaticCalleeName( path.node.callee, babel );
+			const calleeName = getReactHookCallNameForCall( path.node, path, babel ) || getStaticCalleeName( path.node.callee, babel );
 			if ( calleeName && REACT_STATEFUL_HOOKS.has( calleeName ) ) {
 				found = true;
 				path.stop();
@@ -819,6 +819,65 @@ function getStaticCalleeName( callee, babel ) {
 	}
 
 	return null;
+}
+
+function getReactHookCallNameForCall( node, path, babel ) {
+	const { types } = babel;
+	if ( ! types.isCallExpression( node ) ) {
+		return null;
+	}
+
+	if ( types.isIdentifier( node.callee ) ) {
+		const binding = path.scope.getBinding( node.callee.name );
+		return getReactNamedHookBindingName( binding, babel );
+	}
+
+	if (
+		types.isMemberExpression( node.callee ) &&
+		! node.callee.computed &&
+		types.isIdentifier( node.callee.object ) &&
+		types.isIdentifier( node.callee.property )
+	) {
+		const hookName = node.callee.property.name;
+		if ( hookName !== 'useMemo' && ! REACT_STATEFUL_HOOKS.has( hookName ) ) {
+			return null;
+		}
+
+		const binding = path.scope.getBinding( node.callee.object.name );
+		return isReactNamespaceBindingNode( binding, babel ) ? hookName : null;
+	}
+
+	return null;
+}
+
+function getReactNamedHookBindingName( binding, babel ) {
+	const { types } = babel;
+	const node = binding?.path?.node;
+	const parent = binding?.path?.parentPath?.node;
+	if (
+		! binding ||
+		! types.isImportSpecifier( node ) ||
+		! types.isIdentifier( node.imported ) ||
+		! types.isImportDeclaration( parent ) ||
+		parent.source.value !== REACT_MODULE
+	) {
+		return null;
+	}
+
+	const hookName = node.imported.name;
+	return hookName === 'useMemo' || REACT_STATEFUL_HOOKS.has( hookName ) ? hookName : null;
+}
+
+function isReactNamespaceBindingNode( binding, babel ) {
+	const { types } = babel;
+	const node = binding?.path?.node;
+	const parent = binding?.path?.parentPath?.node;
+	return Boolean(
+		binding &&
+		( types.isImportDefaultSpecifier( node ) || types.isImportNamespaceSpecifier( node ) ) &&
+		types.isImportDeclaration( parent ) &&
+		parent.source.value === REACT_MODULE
+	);
 }
 
 function parseStoreSelectorCall( callExpression, path, babel ) {
@@ -1789,6 +1848,7 @@ class StoreSelectorCollector {
 
 				const sourceInfo = this.resolveExpressionInfo( init, path.get( 'init' ) );
 				if ( ! sourceInfo ) {
+					this.registerUnsupportedTransparentHookResultTaint( path );
 					if ( this.isUnsupportedSelectorChainCall( init, path ) ) {
 						this.throwUnsupportedListChain( path );
 					}
@@ -2001,12 +2061,8 @@ class StoreSelectorCollector {
 
 		const stateElement = id.elements[ 0 ];
 		const setterElement = id.elements[ 1 ];
-		if ( ! types.isIdentifier( stateElement ) ) {
-			return;
-		}
-
-		const stateBinding = path.scope.getBinding( stateElement.name );
-		if ( ! stateBinding ) {
+		const stateBindings = this.getPatternBindings( stateElement, path );
+		if ( stateBindings.length === 0 ) {
 			return;
 		}
 
@@ -2014,7 +2070,7 @@ class StoreSelectorCollector {
 			const setterBinding = path.scope.getBinding( setterElement.name );
 			if ( setterBinding ) {
 				this.hookSetterTargetsByBinding.set( setterBinding.identifier, {
-					stateBinding,
+					stateBinding: stateBindings[ 0 ],
 					hookName,
 				} );
 			}
@@ -2028,8 +2084,49 @@ class StoreSelectorCollector {
 
 		this.markPathsAsUnsupportedHookArguments( argumentPaths );
 		const taint = this.createHookTaint( 'unsupported-hook-state-flow', hookName, selectorSources, path );
-		this.hookTaintsByBinding.set( stateBinding.identifier, taint );
+		stateBindings.forEach( stateBinding => {
+			this.hookTaintsByBinding.set( stateBinding.identifier, taint );
+		} );
 		this.recordUnsupportedHookTaint( taint );
+	}
+
+	getPatternBindings( patternNode, path ) {
+		const names = new Set();
+		const collect = ( node ) => {
+			if ( ! node ) {
+				return;
+			}
+
+			if ( this.babel.types.isIdentifier( node ) ) {
+				names.add( node.name );
+				return;
+			}
+
+			if ( this.babel.types.isObjectPattern( node ) ) {
+				node.properties.forEach( ( property ) => {
+					if ( this.babel.types.isRestElement( property ) ) {
+						collect( property.argument );
+						return;
+					}
+					collect( property.value );
+				} );
+				return;
+			}
+
+			if ( this.babel.types.isArrayPattern( node ) ) {
+				node.elements.forEach( collect );
+				return;
+			}
+
+			if ( this.babel.types.isAssignmentPattern( node ) ) {
+				collect( node.left );
+			}
+		};
+
+		collect( patternNode );
+		return Array.from( names )
+			.map( name => path.scope.getBinding( name ) )
+			.filter( Boolean );
 	}
 
 	collectRefHookTaint( path ) {
@@ -2116,6 +2213,49 @@ class StoreSelectorCollector {
 			sourcePaths: taint.sourcePaths,
 			sourceSegments: taint.sourceSegments,
 		} );
+	}
+
+	registerUnsupportedTransparentHookResultTaint( path ) {
+		const { id, init } = path.node;
+		const unsupported = this.getUnsupportedTransparentHookCall( init, path.get( 'init' ) );
+		if ( ! unsupported ) {
+			return;
+		}
+
+		const bindings = this.getPatternBindings( id, path );
+		if ( bindings.length === 0 ) {
+			return;
+		}
+
+		const taint = {
+			kind: unsupported.kind || 'unsupported-hook-import',
+			hookName: unsupported.hookName || unsupported.localName || this.getCalleeName( init.callee ),
+			sourceSegments: [],
+			sourcePaths: [],
+			message: `hook "${ unsupported.hookName || unsupported.localName || this.getCalleeName( init.callee ) }" could not be summarized as static selector data (${ unsupported.reason || unsupported.kind || 'unsupported hook import' }).`,
+			path,
+		};
+		bindings.forEach( binding => {
+			this.hookTaintsByBinding.set( binding.identifier, taint );
+		} );
+		this.unsupportedPaths.push( {
+			kind: taint.kind,
+			path: '',
+			segments: [],
+			message: taint.message,
+			hookName: taint.hookName,
+			sourcePaths: [],
+			sourceSegments: [],
+		} );
+	}
+
+	getUnsupportedTransparentHookCall( expression, path ) {
+		if ( ! this.babel.types.isCallExpression( expression ) || ! this.babel.types.isIdentifier( expression.callee ) ) {
+			return null;
+		}
+
+		const binding = path.scope.getBinding( expression.callee.name );
+		return binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
 	}
 
 	collectAliasUsage() {
@@ -2270,6 +2410,11 @@ class StoreSelectorCollector {
 					return;
 				}
 
+				const spreadTaint = this.resolveHookTaintForExpression( path.node.argument, path.get( 'argument' ) );
+				if ( spreadTaint ) {
+					this.throwUnsupportedHookTaint( path, spreadTaint );
+				}
+
 				const spreadObjectPath = this.getStaticObjectSpreadObjectPath( path, false );
 				const selectorSources = this.collectSelectorDerivedSegments( spreadObjectPath || path.get( 'argument' ) );
 				if ( selectorSources.length === 0 ) {
@@ -2340,6 +2485,11 @@ class StoreSelectorCollector {
 
 				const expressionInfo = this.resolveExpressionInfo( value.expression, path );
 				if ( ! expressionInfo || ! isSelectorDerivedPath( expressionInfo.segments ) ) {
+					const hookTaint = this.resolveHookTaintForExpression( value.expression, expressionPath );
+					if ( hookTaint ) {
+						this.throwUnsupportedHookTaint( path, hookTaint );
+					}
+
 					if ( this.isDynamicRootChildProp( elementName, path.node.name.name ) ) {
 						diagnostics.error(
 							path,
@@ -2483,18 +2633,8 @@ class StoreSelectorCollector {
 			for ( const [ propName, memberInfo ] of objectResultMembers.members.entries() ) {
 				const selectorSources = [ memberInfo.segments ];
 				if ( this.isPotentialDynamicRootBoundary( elementName, propName, selectorSources ) ) {
-					const message = `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used as object-root spread prop "${ propName }" for child component "${ elementName }".`;
-					this.unsupportedChildPropExpressions.add( path.node.argument );
-					this.recordUnsupported( 'child-prop-boundary', selectorSources[ 0 ], message, {
-						boundary: 'JSXSpreadAttribute',
-						componentName: elementName,
-						propName,
-						target: `${ elementName }.${ propName }`,
-						sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
-						sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
-					} );
-					diagnostics.unsupported( path, message, this.config );
-					return true;
+					this.addSpreadChildPropTrace( path, elementName, propName, memberInfo );
+					continue;
 				}
 
 				const declaration = stringifySegments( memberInfo.declarationSegments || memberInfo.segments );
@@ -2537,22 +2677,80 @@ class StoreSelectorCollector {
 			}
 
 			if ( this.isPotentialDynamicRootBoundary( elementName, propName, selectorSources ) ) {
-				const message = `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used as object-root spread prop "${ propName }" for child component "${ elementName }".`;
-				this.unsupportedChildPropExpressions.add( property.value );
-				this.recordUnsupported( 'child-prop-boundary', selectorSources[ 0 ], message, {
-					boundary: 'JSXSpreadAttribute',
-					componentName: elementName,
-					propName,
-					target: `${ elementName }.${ propName }`,
-					sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
-					sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
-				} );
-				diagnostics.unsupported( path, message, this.config );
-				return true;
+				const valueInfo = this.resolveExpressionInfo( valuePath.node, valuePath );
+				if ( valueInfo && isSelectorDerivedPath( valueInfo.segments ) ) {
+					this.addSpreadChildPropTrace( path, elementName, propName, valueInfo );
+					continue;
+				}
+
+				diagnostics.error(
+					path,
+					`Store selector unsupported-object-root-expression: spread prop "${ propName }" for child component "${ elementName }" uses an unsupported object-root expression (${ selectorSources.map( source => stringifySegments( source ) ).join( ', ' ) }). Pass a selector-derived object root directly.`
+				);
 			}
 		}
 
 		return true;
+	}
+
+	addSpreadChildPropTrace( path, elementName, propName, expressionInfo ) {
+		const segments = normalizeCanonicalSegments( expressionInfo.segments || [] );
+		const declarationSegments = normalizeCanonicalSegments( expressionInfo.declarationSegments || expressionInfo.segments || [] );
+		if ( segments.length === 0 ) {
+			return;
+		}
+
+		this.unsupportedChildPropExpressions.add( path.node.argument );
+		if ( this.isDynamicRootChildProp( elementName, propName ) ) {
+			this.childPropTraces.push( {
+				componentName: elementName,
+				propName,
+				path: stringifySegments( segments ),
+				segments,
+				dynamicRoot: true,
+				dynamicRootSegments: expressionInfo.dynamicRootSegments,
+			} );
+			return;
+		}
+
+		if ( this.shouldSeedObjectRootChildProp( elementName, propName, segments ) ) {
+			this.childPropSeedTraces.push( {
+				componentName: elementName,
+				propName,
+				path: stringifySegments( segments ),
+				segments,
+				declarationSegments,
+				dynamicRoot: expressionInfo.dynamicRoot,
+				dynamicRootSegments: expressionInfo.dynamicRootSegments,
+			} );
+			return;
+		}
+
+		if ( this.canTraceChildProp( elementName, segments ) ) {
+			this.childPropTraces.push( {
+				componentName: elementName,
+				propName,
+				path: stringifySegments( segments ),
+				segments,
+			} );
+			return;
+		}
+
+		if ( this.canSeedChildProp( elementName, segments ) ) {
+			this.addParentListDeclarationForSeed( declarationSegments );
+			this.childPropSeedTraces.push( {
+				componentName: elementName,
+				propName,
+				path: stringifySegments( segments ),
+				segments,
+				declarationSegments: this.getChildSeedDeclarationSegments( {
+					segments,
+					declarationSegments,
+				} ),
+				dynamicRoot: expressionInfo.dynamicRoot,
+				dynamicRootSegments: expressionInfo.dynamicRootSegments,
+			} );
+		}
 	}
 
 	getObjectResultSpreadMembers( path ) {
@@ -3094,13 +3292,7 @@ class StoreSelectorCollector {
 		}
 
 		if ( types.isIdentifier( node.callee ) ) {
-			const hookName = node.callee.name;
-			if ( hookName !== 'useMemo' && ! REACT_STATEFUL_HOOKS.has( hookName ) ) {
-				return null;
-			}
-
-			const binding = path.scope.getBinding( hookName );
-			return this.isReactNamedHookBinding( binding, hookName ) ? hookName : null;
+			return getReactHookCallNameForCall( node, path, this.babel );
 		}
 
 		if (
@@ -3122,29 +3314,11 @@ class StoreSelectorCollector {
 	}
 
 	isReactNamedHookBinding( binding, hookName ) {
-		const { types } = this.babel;
-		const node = binding?.path?.node;
-		const parent = binding?.path?.parentPath?.node;
-		return Boolean(
-			binding &&
-			types.isImportSpecifier( node ) &&
-			types.isIdentifier( node.imported ) &&
-			node.imported.name === hookName &&
-			types.isImportDeclaration( parent ) &&
-			parent.source.value === REACT_MODULE
-		);
+		return getReactNamedHookBindingName( binding, this.babel ) === hookName;
 	}
 
 	isReactNamespaceBinding( binding ) {
-		const { types } = this.babel;
-		const node = binding?.path?.node;
-		const parent = binding?.path?.parentPath?.node;
-		return Boolean(
-			binding &&
-			( types.isImportDefaultSpecifier( node ) || types.isImportNamespaceSpecifier( node ) ) &&
-			types.isImportDeclaration( parent ) &&
-			parent.source.value === REACT_MODULE
-		);
+		return isReactNamespaceBindingNode( binding, this.babel );
 	}
 
 	isRefCurrentMemberExpression( expression ) {
@@ -3535,13 +3709,39 @@ class StoreSelectorCollector {
 		return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
 	}
 
+	resolveHookTaintForExpression( expression, path ) {
+		if ( this.babel.types.isIdentifier( expression ) ) {
+			return this.resolveHookTaintForIdentifier( expression.name, path );
+		}
+
+		if ( this.isStaticMemberExpressionNode( expression ) ) {
+			return this.resolveHookTaintForMemberExpression( expression, path );
+		}
+
+		return null;
+	}
+
 	resolveHookTaintForMemberExpression( expression, path ) {
-		if ( ! this.isRefCurrentMemberExpression( expression ) ) {
+		if ( this.isRefCurrentMemberExpression( expression ) ) {
+			const binding = path.scope.getBinding( expression.object.name );
+			return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
+		}
+
+		const rootName = this.getStaticMemberRootName( expression );
+		const binding = rootName ? path.scope.getBinding( rootName ) : null;
+		return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
+	}
+
+	getStaticMemberRootName( expression ) {
+		if ( this.babel.types.isIdentifier( expression ) ) {
+			return expression.name;
+		}
+
+		if ( ! this.isStaticMemberExpressionNode( expression ) ) {
 			return null;
 		}
 
-		const binding = path.scope.getBinding( expression.object.name );
-		return binding ? this.hookTaintsByBinding.get( binding.identifier ) : null;
+		return this.getStaticMemberRootName( expression.object );
 	}
 
 	throwUnsupportedHookTaint( path, taint ) {

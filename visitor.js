@@ -184,6 +184,10 @@ function templateVarsVisitor( babel, config ) {
 				hookSummaries.summariesByBinding,
 				crossFileHookSummaries.summariesByBinding
 			);
+			const unsupportedHookSummaryLookup = createHookSummaryLookup(
+				hookSummaries.unsupportedByBinding,
+				crossFileHookSummaries.unsupportedByBinding
+			);
 			const hookSummariesAvailable = hookSummaries.summaryRecords.length > 0 || crossFileHookSummaries.available;
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
@@ -218,7 +222,7 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
 						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 						storeSelectorHookSummariesByBinding: hookSummaryLookup,
-						storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
+						storeSelectorUnsupportedHookSummariesByBinding: unsupportedHookSummaryLookup,
 						storeSelectorHookSummariesAvailable: hookSummariesAvailable,
 						storeSelectorNeutralizeSelectors: false,
 					} );
@@ -286,7 +290,7 @@ function templateVarsVisitor( babel, config ) {
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
 					storeSelectorHookSummariesByBinding: hookSummaryLookup,
-					storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
+					storeSelectorUnsupportedHookSummariesByBinding: unsupportedHookSummaryLookup,
 					storeSelectorHookSummariesAvailable: hookSummariesAvailable,
 				} );
 				selectorResults.set( componentName, selectorResult );
@@ -553,15 +557,19 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 
 function createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename ) {
 	const summariesByBinding = new WeakMap();
+	const unsupportedByBinding = new WeakMap();
 	if ( storeSelectorOptions.crossFile !== true ) {
 		return {
 			summariesByBinding,
+			unsupportedByBinding,
 			available: false,
 		};
 	}
 
 	const hookSummariesByFile = storeSelectorOptions.__crossFileManifest?.hookSummariesByFile || {};
 	const summariesByLocalName = getCrossFileManifestEntry( hookSummariesByFile, filename ) || {};
+	const skippedHooks = ( storeSelectorOptions.__crossFileManifest?.debug?.skippedHooks || [] )
+		.filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizeStoreSelectorFilename( filename ) );
 	let available = false;
 	Object.entries( summariesByLocalName ).forEach( ( [ localName, summary ] ) => {
 		const binding = programPath.scope.getBinding( localName );
@@ -570,9 +578,22 @@ function createCrossFileHookSummariesByBinding( programPath, storeSelectorOption
 			available = true;
 		}
 	} );
+	skippedHooks.forEach( ( skippedHook ) => {
+		const binding = programPath.scope.getBinding( skippedHook.localName );
+		if ( binding ) {
+			unsupportedByBinding.set( binding.identifier, {
+				kind: skippedHook.kind || 'unsupported-hook-import',
+				hookName: skippedHook.localName,
+				localName: skippedHook.localName,
+				reason: skippedHook.message || skippedHook.kind || 'unsupported hook import',
+			} );
+			available = true;
+		}
+	} );
 
 	return {
 		summariesByBinding,
+		unsupportedByBinding,
 		available,
 	};
 }
