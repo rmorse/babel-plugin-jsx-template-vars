@@ -2,7 +2,12 @@
 
 ## Status
 
-Draft research and implementation plan for reviewer analysis.
+Implementation plan for the transparent hook-flow milestone.
+
+The core hook-flow milestone has been implemented through the current hook
+stream. The remaining hook-related work in this document should be read as
+either a narrow diagnostic hardening follow-up or as part of the broader
+drop-in import/export resolver track, not as unfinished core hook-flow work.
 
 This plan extends the store-selector drop-in work with a focused goal:
 support natural React hook-shaped value flow when the hook is statically
@@ -18,6 +23,55 @@ It complements:
 The drop-in static support plan covers component identity, imports, exports,
 wrappers, JSX member components, spreads, and children. This plan covers value
 flow through hook calls inside those components.
+
+## Milestone Boundary And Deferred Resolver Work
+
+The hook milestone intentionally supports direct statically resolved hook
+summaries and configured selector hooks. It does not attempt to make every
+project import shape work for hooks independently of components.
+
+The broader drop-in track owns all import/export breadth that should apply to
+both components and hooks:
+
+- named and renamed barrel re-exports
+- default-as-named barrel re-exports
+- namespace imports and namespace exports
+- explicit aliases, workspace maps, package maps, and package `exports`
+- `export *` ambiguity handling
+- type-only import/export filtering across resolver hops
+
+The current hook work introduced hook import summary records so cross-file hooks
+can function before the full drop-in resolver exists. That should be treated as
+a temporary slice of the same concept, not a second long-term resolver. When the
+drop-in resolver work resumes, hook imports and component imports should resolve
+through one shared export graph with typed targets:
+
+```txt
+resolvedImportEdge
+  localName
+  importedName
+  targetFilename
+  targetExportName
+  targetKind: "component" | "hook" | "other"
+  exportEdgeChain[]
+  resolverStrategy
+```
+
+The shared resolver must preserve wrong-kind diagnostics:
+
+- a component JSX tag resolving to a hook export is unsupported
+- a hook call resolving to a component export is unsupported
+- an ambiguous export that could be a component or hook stays fail-closed until
+  the export graph proves the target kind
+
+Do not add hook-specific barrel, namespace, alias, or package resolution as a
+parallel implementation. Add those shapes once in the drop-in resolver and make
+the hook summary builder consume the same resolved edges as component tracing.
+
+The one hook-local follow-up worth keeping near this milestone is a relink
+guard: if a manifest contains a hook summary for a local binding but the per-file
+transform cannot re-bind that hook call, the transform should report a
+diagnostic or hard-error instead of silently dropping the summary.
 
 ## Executive Summary
 
@@ -1181,8 +1235,10 @@ Positive gates:
 
 - named hook import
 - default hook import if default support is enabled for functions
-- barrel hook import
-- hook import through explicit alias resolver
+- barrel hook import through the shared drop-in resolver, not a hook-specific
+  barrel implementation
+- hook import through explicit alias resolver only after the shared drop-in
+  resolver supports aliases
 - component tree using hook result across child descriptors
 
 Fail-closed gates:
@@ -1192,6 +1248,7 @@ Fail-closed gates:
 - import cycle involving hook file
 - ambiguous hook export
 - package hook import without explicit source-hook config
+- wrong-kind import where a hook call resolves to a component export
 
 ### Phase 7: Final Hook Fixture Matrix
 
@@ -1203,7 +1260,8 @@ Fixture should include:
 - `useMemo` scalar and object-root values
 - `useMemo` list-root preservation
 - same-file custom hook
-- cross-file custom hook through barrel
+- cross-file custom hook through barrel if the shared drop-in barrel resolver has
+  landed; otherwise direct/default cross-file hooks with barrel coverage deferred
 - hook-return object spread into child props
 - child component object-root descriptor
 - list-relative child prop

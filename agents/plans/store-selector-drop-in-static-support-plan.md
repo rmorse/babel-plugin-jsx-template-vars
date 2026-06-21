@@ -115,6 +115,51 @@ Already implemented:
 The remaining work is therefore not a ground-up design. It is controlled
 expansion of what the manifest can resolve and what the collector can prove.
 
+## Shared Component And Hook Resolver Requirement
+
+The transparent hook-flow milestone added cross-file hook summaries and direct
+hook import handling so hook values can participate in the existing selector
+flow. That implementation should not become a separate import system.
+
+All future import/export breadth in this plan must resolve components and hooks
+through the same manifest export graph. Barrels, namespace imports, aliases,
+package entries, and `export *` ambiguity rules should be implemented once, then
+consumed by both:
+
+- component tracing, for JSX tags and child callsites
+- hook summary tracing, for transparent hook calls and configured selector-hook
+  sources
+
+The shared resolved edge shape should carry target kind explicitly:
+
+```txt
+resolvedImportEdge
+  localName
+  importedName
+  source
+  targetFilename
+  targetExportName
+  targetKind: "component" | "hook" | "other"
+  exportEdgeChain[]
+  resolverStrategy
+  skipReason?
+```
+
+Required policy:
+
+- JSX component references only consume edges with `targetKind: "component"`.
+- Transparent hook calls only consume edges with `targetKind: "hook"` unless the
+  hook is a configured selector-source import.
+- Wrong-kind edges are diagnostics, not best-effort fallbacks.
+- Unsupported edges remain manifest/debug diagnostics until selector-derived
+  data crosses them; at that point they hard-error with selector-path context.
+- Hook-specific direct import handling from the hook milestone must be migrated
+  into this shared resolver before adding hook barrels, hook namespace imports,
+  hook aliases, or hook package resolution.
+
+This prevents drift between component and hook resolution and keeps future
+barrel/namespace/alias support from being built twice.
+
 ## Diagnostic Severity Policy
 
 The import/export resolver should distinguish three levels of concern:
@@ -945,10 +990,14 @@ component adapter.
 Tasks:
 
 - Build an export table per file using component adapter identities.
+- Include hook summary identities in the same export table, with explicit
+  `targetKind` records.
 - Resolve default exports through explicit export declarations only.
 - Support `export default Header` where `Header` is an adapter-supported local
   component.
 - Support `export { Header as default }`.
+- Support default imports of transparent hooks only when the target export
+  resolves to a supported hook summary.
 - Support `export default function Header() {}` only if Phase 1's adapter
   already supports the declaration form without a special-case path.
 - Remove any name-match fallback.
@@ -961,6 +1010,10 @@ Exit gates:
 - default import works with list-relative child props where relevant
 - incompatible default-import child shapes hard-error
 - default non-component fails closed
+- default hook import resolves through the same export table when used as a
+  transparent hook
+- default hook import resolving to a component, and default component import
+  resolving to a hook, produce wrong-kind diagnostics
 - anonymous default functions diagnose until anonymous identities are designed
 - no seed invention on bad defaults
 
@@ -974,6 +1027,8 @@ Tasks:
 - Resolve `export { X as Y } from`.
 - Resolve `export { default as X } from`.
 - Resolve local import-then-export barrels.
+- Resolve barrel edges to typed component/hook targets through the shared export
+  graph.
 - Add export graph cycle detection.
 
 Exit gates:
@@ -982,7 +1037,10 @@ Exit gates:
 - named, renamed, and default-as-named barrel fixtures pass HBS/PHP
 - barrel import works with object-root descriptors and controls
 - barrel import works with list-relative child props where relevant
+- barrel-routed transparent hook import works with scalar, object-root, and
+  list-relative hook summaries
 - incompatible barrel-routed child shapes hard-error
+- wrong-kind barrel edge hard-errors only when selector-derived data crosses it
 - export cycle diagnostic
 - debug metadata shows every barrel hop
 - `export *` remains diagnostic-only
@@ -1045,6 +1103,9 @@ Tasks:
 - Resolve namespace member callsites to export graph entries.
 - Thread structured component references through child prop collection and
   manifest callsite contexts.
+- Use the same namespace edge representation for transparent hook member calls
+  if hook namespace support is accepted; otherwise emit explicit diagnostics for
+  namespace hook calls.
 - Add debug tag names for namespace components.
 
 Exit gates:
@@ -1052,6 +1113,8 @@ Exit gates:
 - namespace direct child object-root
 - namespace list-relative child
 - namespace through barrel
+- namespace hook member call either resolves through the shared typed edge model
+  or fails closed with a dedicated diagnostic
 - computed namespace member fails closed
 - package namespace stays diagnostic unless resolver says otherwise
 
@@ -1118,6 +1181,8 @@ Tasks:
 - Parse tsconfig/jsconfig paths if configured.
 - Resolve workspace/local package sources.
 - Resolve package exports for explicitly opted-in packages.
+- Apply resolver output to component imports and transparent hook imports through
+  the same typed edge records.
 - Keep arbitrary package imports diagnostic-only.
 
 Exit gates:
@@ -1126,6 +1191,7 @@ Exit gates:
 - tsconfig paths fixture
 - workspace package fixture
 - package exports fixture
+- alias/package import fixture for a transparent hook summary
 - out-of-root and unconfigured package fail closed
 - symlinked paths normalize to one canonical file or diagnose ambiguity
 - case-normalized duplicate paths diagnose on case-insensitive filesystems
@@ -1170,6 +1236,7 @@ Exit gates:
 - unique requested star export works
 - conflicting star exports fail closed
 - `export *` does not expose default
+- unique requested star export works for typed component and hook targets
 - local explicit export precedence is documented and tested
 - type-only star exports do not create runtime component edges
 - `export * as Cards` works or remains diagnostic with a stable kind
@@ -1207,6 +1274,8 @@ Fixtures should combine:
 - function declarations
 - memo wrappers
 - namespace member components if Phase 6 has landed
+- transparent hook imports through the same default/barrel/namespace/alias
+  shapes that components support
 - local static spreads if Phase 8 has landed
 - children wrappers if Phase 7 has landed
 - TypeScript syntax
@@ -1246,6 +1315,9 @@ Rationale:
 - Default imports and named barrels unlock many codebases and build resolver
   primitives needed by namespace/package support, while avoiding early `export *`
   ambiguity.
+- Import/export breadth must land through shared typed edges for components and
+  hooks, so direct hook-summary resolution from the hook milestone does not
+  drift from component resolution.
 - `memo` is high-frequency and transparent enough to include in the first wave;
   `forwardRef` is a separate wrapper slice.
 - The first wave should pause for real-app validation before adding long-tail
@@ -1277,6 +1349,8 @@ manifest-diagnostic-fail-all
 selector-path-unsupported-import
 unsupported-component-wrapper
 unsupported-component-function
+wrong-kind-import-target
+unsupported-hook-import-through-resolver
 unsupported-static-spread
 mutated-static-spread
 computed-spread-property
@@ -1294,6 +1368,7 @@ Every kind should include:
 - local name
 - target filename if resolved
 - target export/component if known
+- target kind (`component`, `hook`, or `other`) if known
 - callsite ID if JSX-specific
 - strategy/skip reason
 - actionable message
@@ -1306,6 +1381,7 @@ The debug payload should be able to answer:
 - Was it direct, default, barrel, namespace, alias, or package?
 - Which export chain was followed?
 - Which component declaration form was used?
+- Which hook summary or configured selector-hook source was used?
 - Was a transparent wrapper unwrapped?
 - Which props were direct, spread-derived, descriptor-derived, or static?
 - Which `children` policy applied?
@@ -1319,6 +1395,8 @@ exportEdges[]
 resolverEdges[]
 namespaceEdges[]
 componentDeclarations[]
+hookSummaries[]
+hookImportEdges[]
 wrapperUnwraps[]
 spreadPropSources[]
 childrenPolicies[]
