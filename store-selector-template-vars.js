@@ -651,17 +651,7 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 	const { types } = babel;
 	const expression = expressionPath.node;
 	if ( isJSXHookReturnExpression( expression, babel ) ) {
-		if ( jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel, [] ) ) {
-			return null;
-		}
-
-		return {
-			hookName: candidate.hookName,
-			returnKind: 'jsx',
-			params: [],
-			jsxNode: expression,
-			strategy: 'same-file-source-hook-jsx',
-		};
+		return null;
 	}
 
 	if ( isStoreSelectorCallNode( expression, selectorLocalNames, babel ) ) {

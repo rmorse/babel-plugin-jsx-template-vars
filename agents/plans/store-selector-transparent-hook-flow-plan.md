@@ -80,7 +80,9 @@ inline into authored JSX before selector child tracing, including direct rendere
 calls and fragment returns. Conditional/helper-generated JSX returns fail closed.
 Cross-file JSX-returning hooks remain intentionally unsupported until the shared
 drop-in resolver can transfer both hook summaries and referenced component
-bindings through one typed import/export graph.
+bindings through one typed import/export graph. Zero-argument/source
+JSX-returning hooks that close over hook-local selector bindings are also
+deferred because inline substitution does not safely transfer hook-local scope.
 
 Before returning fully to the broader drop-in import/export resolver work, add a
 focused hook expansion slice for natural custom-hook shapes that remain

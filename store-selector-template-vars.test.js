@@ -1468,6 +1468,32 @@ describe('experimental store selectors', () => {
 		}
 	);
 
+	it('fails closed for source JSX-returning hooks with internal selector bindings', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			function useHeroHeader() {
+				const hero = useStoreSelector((state) => state.hero);
+				return <Header hero={ hero } />;
+			}
+
+			const App = () => {
+				const header = useHeroHeader();
+				return <section>{ header }</section>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-body/);
+	});
+
 	it('fails closed when cross-file JSX-returning hooks are used before resolver support', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -1484,6 +1510,42 @@ describe('experimental store selectors', () => {
 					const hero = useStoreSelector((state) => state.hero);
 					const header = useHeroHeader(hero);
 					return <section>{ header }</section>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const appFilename = path.join(root, 'App.jsx');
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		expect(() => transformTemplateVars(files[appFilename], {
+			language: 'handlebars',
+			experimentalStoreSelectors: {
+				crossFile: true,
+				debug: true,
+				__crossFileManifest: manifest,
+			},
+			warnOnUnsupported: false,
+		}, {
+			filename: appFilename,
+		})).toThrow(/unsupported-cross-file-jsx-hook/);
+	});
+
+	it('fails closed for direct cross-file JSX-returning hook calls before resolver support', () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroHeader(hero) {
+					return <h1>{ hero.title }</h1>;
+				}
+			`,
+			'App.jsx': `
+				import { useHeroHeader } from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					return <section>{ useHeroHeader(hero) }</section>;
 				};
 
 				module.exports = { App };
