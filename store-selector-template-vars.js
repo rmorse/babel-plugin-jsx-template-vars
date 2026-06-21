@@ -245,6 +245,7 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 			declarationSegments: summary.declarationSegments,
 			params: summary.params,
 			suffixSegments: summary.suffixSegments,
+			objectMembers: serializeHookObjectMembers( summary.objectMembers ),
 			strategy: summary.strategy,
 		} );
 	} );
@@ -368,6 +369,21 @@ function createUnsupportedHookSummary( candidate, kind, reason ) {
 	};
 }
 
+function serializeHookObjectMembers( objectMembers ) {
+	if ( ! objectMembers ) {
+		return undefined;
+	}
+
+	return Array.from( objectMembers.entries() ).map( ( [ propName, info ] ) => ( {
+		propName,
+		segments: info.segments,
+		declarationSegments: info.declarationSegments,
+		suffixSegments: info.suffixSegments,
+		dynamicRoot: info.dynamicRoot,
+		dynamicRootSegments: info.dynamicRootSegments,
+	} ) );
+}
+
 function summarizeSourceHookReturn( candidate, selectorLocalNames, babel ) {
 	const { types } = babel;
 	const functionPath = candidate.functionPath;
@@ -434,6 +450,38 @@ function summarizeDerivedHookReturn( candidate, babel, summariesByBinding ) {
 	}
 
 	const paramName = params[ 0 ].name;
+	if ( babel.types.isObjectExpression( returnExpressionPath.node ) ) {
+		const objectMembers = summarizeObjectExpressionMembers(
+			returnExpressionPath,
+			( valuePath ) => {
+				const suffixSegments = parseDerivedHookReturnExpression(
+					valuePath,
+					paramName,
+					babel,
+					summariesByBinding
+				);
+				return suffixSegments ? {
+					segments: [ `$param:${ paramName }`, ...suffixSegments ],
+					declarationSegments: [ `$param:${ paramName }`, ...suffixSegments ],
+					suffixSegments,
+				} : null;
+			},
+			babel
+		);
+		if ( ! objectMembers ) {
+			return null;
+		}
+
+		return {
+			hookName: candidate.hookName,
+			returnKind: 'object-map',
+			params: [ paramName ],
+			paramName,
+			objectMembers,
+			strategy: 'same-file-derived-hook-object',
+		};
+	}
+
 	const suffixSegments = parseDerivedHookReturnExpression(
 		returnExpressionPath,
 		paramName,
@@ -521,6 +569,47 @@ function parseDerivedHookReturnExpression( expressionPath, paramName, babel, sum
 	return null;
 }
 
+function summarizeObjectExpressionMembers( expressionPath, resolveValueInfo, babel ) {
+	if ( ! babel.types.isObjectExpression( expressionPath.node ) ) {
+		return null;
+	}
+
+	const objectMembers = new Map();
+	for ( const propertyPath of expressionPath.get( 'properties' ) ) {
+		const property = propertyPath.node;
+		if ( ! babel.types.isObjectProperty( property ) || property.computed ) {
+			return null;
+		}
+
+		const propName = getObjectPropertyKeyName( property, babel );
+		if ( ! propName ) {
+			return null;
+		}
+
+		const valueInfo = resolveValueInfo( propertyPath.get( 'value' ) );
+		if ( ! valueInfo || ! isSelectorDerivedPath( valueInfo.segments ) ) {
+			return null;
+		}
+
+		objectMembers.set( propName, {
+			...valueInfo,
+			source: valueInfo.source || 'hook-object-member',
+		} );
+	}
+
+	return objectMembers.size > 0 ? objectMembers : null;
+}
+
+function getObjectPropertyKeyName( property, babel ) {
+	if ( babel.types.isIdentifier( property.key ) ) {
+		return property.key.name;
+	}
+	if ( babel.types.isStringLiteral( property.key ) ) {
+		return property.key.value;
+	}
+	return null;
+}
+
 function summarizeHookReturnExpression( candidate, expressionPath, selectorAliases, selectorLocalNames, babel ) {
 	const { types } = babel;
 	const expression = expressionPath.node;
@@ -548,7 +637,95 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 		};
 	}
 
+	if ( types.isObjectExpression( expression ) ) {
+		const objectMembers = summarizeObjectExpressionMembers(
+			expressionPath,
+			valuePath => summarizeSourceHookObjectMemberExpression( valuePath, selectorAliases, selectorLocalNames, babel ),
+			babel
+		);
+		if ( objectMembers ) {
+			return {
+				hookName: candidate.hookName,
+				returnKind: 'object-map',
+				objectMembers,
+				neutralizePaths: [],
+				strategy: 'same-file-source-hook-object',
+			};
+		}
+	}
+
 	return null;
+}
+
+function summarizeSourceHookObjectMemberExpression( expressionPath, selectorAliases, selectorLocalNames, babel ) {
+	const { types } = babel;
+	const expression = expressionPath.node;
+	if ( isStoreSelectorCallNode( expression, selectorLocalNames, babel ) ) {
+		const segments = parseStoreSelectorCall( expression, expressionPath, babel );
+		return {
+			segments,
+			declarationSegments: segments,
+			source: 'hook-object-member',
+		};
+	}
+
+	if ( types.isIdentifier( expression ) && selectorAliases.has( expression.name ) ) {
+		const alias = selectorAliases.get( expression.name );
+		return {
+			segments: alias.segments,
+			declarationSegments: alias.declarationSegments,
+			source: 'hook-object-member',
+		};
+	}
+
+	if ( isStaticMemberExpressionNode( expression, babel ) && types.isIdentifier( expression.property ) ) {
+		const objectInfo = summarizeSourceHookObjectMemberExpression(
+			expressionPath.get( 'object' ),
+			selectorAliases,
+			selectorLocalNames,
+			babel
+		);
+		return objectInfo ? {
+			...objectInfo,
+			segments: [ ...objectInfo.segments, expression.property.name ],
+			declarationSegments: [ ...( objectInfo.declarationSegments || objectInfo.segments ), expression.property.name ],
+		} : null;
+	}
+
+	return null;
+}
+
+function composeHookObjectMembers( argumentInfo, objectMembers ) {
+	const composed = new Map();
+	objectMembers.forEach( ( memberInfo, propName ) => {
+		const suffixSegments = normalizeCanonicalSegments( memberInfo.suffixSegments || [] );
+		composed.set( propName, {
+			segments: [ ...argumentInfo.segments, ...suffixSegments ],
+			declarationSegments: [ ...( argumentInfo.declarationSegments || argumentInfo.segments ), ...suffixSegments ],
+			dynamicRoot: argumentInfo.dynamicRoot,
+			dynamicRootSegments: argumentInfo.dynamicRootSegments,
+			source: memberInfo.source || 'hook-object-member',
+		} );
+	} );
+	return composed;
+}
+
+function createObjectExpressionFromHookObjectMembers( argumentNode, objectMembers, babel ) {
+	const { types } = babel;
+	return types.objectExpression(
+		Array.from( objectMembers.entries() ).map( ( [ propName, memberInfo ] ) => types.objectProperty(
+			types.identifier( propName ),
+			createExpressionFromBaseAndSuffix( argumentNode, memberInfo.suffixSegments || [], babel )
+		) )
+	);
+}
+
+function createExpressionFromBaseAndSuffix( baseNode, suffixSegments, babel ) {
+	const { types } = babel;
+	return normalizeCanonicalSegments( suffixSegments ).reduce(
+		( expression, segment ) => types.memberExpression( expression, types.identifier( segment ) ),
+		types.cloneNode( baseNode, true )
+	);
 }
 
 function neutralizeTransparentHookSummaries( hookSummaries, babel ) {
@@ -1414,6 +1591,8 @@ class StoreSelectorCollector {
 		this.aliasEntries = [];
 		this.aliasesByBinding = new WeakMap();
 		this.memberAliasesByBinding = new WeakMap();
+		this.objectResultBindings = new WeakSet();
+		this.objectResultSpreadableBindings = new WeakSet();
 		this.mapCallPaths = new Set();
 		this.unsupportedChildPropExpressions = new WeakSet();
 		this.unsupportedHookArgumentExpressions = new WeakSet();
@@ -1614,8 +1793,23 @@ class StoreSelectorCollector {
 				if ( sourceInfo.transparentHook ) {
 					this.transparentHookDeclarations.push( {
 						path,
-						segments: sourceInfo.segments,
+						segments: sourceInfo.segments || [],
+						replacementNode: sourceInfo.replacementNode,
 					} );
+				}
+
+				if ( sourceInfo.objectMembers ) {
+					if ( this.babel.types.isIdentifier( id ) ) {
+						this.registerObjectMemberAliases( id.name, sourceInfo.objectMembers, path, {
+							spreadable: Boolean( sourceInfo.replacementNode ),
+						} );
+						return;
+					}
+
+					if ( this.babel.types.isObjectPattern( id ) ) {
+						this.registerObjectPatternAliases( id, sourceInfo.objectMembers, path );
+					}
+					return;
 				}
 
 				if ( this.babel.types.isIdentifier( id ) ) {
@@ -2265,6 +2459,48 @@ class StoreSelectorCollector {
 
 	isSupportedStaticObjectSpread( path, elementName ) {
 		const { types } = this.babel;
+		const objectResultMembers = this.getObjectResultSpreadMembers( path );
+		if ( objectResultMembers ) {
+			if ( objectResultMembers.unsupported ) {
+				diagnostics.error(
+					path,
+					'Store selector unsupported-hook-object-flow: this transparent hook object result cannot be spread because it has no static callsite object replacement.'
+				);
+			}
+
+			for ( const [ propName, memberInfo ] of objectResultMembers.members.entries() ) {
+				const selectorSources = [ memberInfo.segments ];
+				if ( this.isPotentialDynamicRootBoundary( elementName, propName, selectorSources ) ) {
+					const message = `Store selector value "${ stringifySegments( selectorSources[ 0 ] ) }" is used as object-root spread prop "${ propName }" for child component "${ elementName }".`;
+					this.unsupportedChildPropExpressions.add( path.node.argument );
+					this.recordUnsupported( 'child-prop-boundary', selectorSources[ 0 ], message, {
+						boundary: 'JSXSpreadAttribute',
+						componentName: elementName,
+						propName,
+						target: `${ elementName }.${ propName }`,
+						sourcePaths: selectorSources.map( source => stringifySegments( source ) ),
+						sourceSegments: selectorSources.map( source => normalizeSegments( source ) ),
+					} );
+					diagnostics.unsupported( path, message, this.config );
+					return true;
+				}
+
+				const declaration = stringifySegments( memberInfo.declarationSegments || memberInfo.segments );
+				if ( declaration ) {
+					this.addDeclaration( declaration, {
+						kind: 'hook-object-spread',
+						sourcePath: stringifySegments( memberInfo.segments ),
+						sourceSegments: memberInfo.segments,
+						declarationSegments: memberInfo.declarationSegments,
+						componentName: elementName,
+						propName,
+					} );
+				}
+			}
+
+			return true;
+		}
+
 		const objectPath = this.getStaticObjectSpreadObjectPath( path, true );
 		if ( ! objectPath ) {
 			return false;
@@ -2305,6 +2541,31 @@ class StoreSelectorCollector {
 		}
 
 		return true;
+	}
+
+	getObjectResultSpreadMembers( path ) {
+		const argumentPath = path.get( 'argument' );
+		if ( ! this.babel.types.isIdentifier( argumentPath.node ) ) {
+			return null;
+		}
+
+		const binding = argumentPath.scope.getBinding( argumentPath.node.name );
+		if ( ! binding || ! this.objectResultBindings.has( binding.identifier ) ) {
+			return null;
+		}
+
+		if ( ! this.objectResultSpreadableBindings.has( binding.identifier ) ) {
+			return {
+				unsupported: true,
+				members: null,
+			};
+		}
+
+		const members = this.memberAliasesByBinding.get( binding.identifier );
+		return members ? {
+			unsupported: false,
+			members,
+		} : null;
 	}
 
 	getStaticObjectSpreadObjectPath( path, requireSafeBinding = true ) {
@@ -2597,6 +2858,59 @@ class StoreSelectorCollector {
 					declarationSegments: propertyDeclarationSegments,
 					dynamicRoot: options.dynamicRoot,
 					dynamicRootSegments: options.dynamicRootSegments,
+				} );
+			}
+		} );
+	}
+
+	registerObjectMemberAliases( localName, objectMembers, path, options = {} ) {
+		const binding = path.scope.getBinding( localName );
+		if ( ! binding ) {
+			return;
+		}
+
+		this.objectResultBindings.add( binding.identifier );
+		if ( options.spreadable ) {
+			this.objectResultSpreadableBindings.add( binding.identifier );
+		}
+		objectMembers.forEach( ( memberInfo, memberName ) => {
+			this.registerBindingMemberAlias( binding, localName, memberName, memberInfo.segments, {
+				declarationSegments: memberInfo.declarationSegments,
+				dynamicRoot: memberInfo.dynamicRoot,
+				dynamicRootSegments: memberInfo.dynamicRootSegments,
+				source: memberInfo.source || 'hook-object-member',
+			} );
+		} );
+	}
+
+	registerObjectPatternAliases( pattern, objectMembers, path ) {
+		( pattern.properties || [] ).forEach( ( property ) => {
+			if ( property.type === 'RestElement' ) {
+				return;
+			}
+
+			const propertyName = this.getPatternPropertyName( property );
+			const memberInfo = objectMembers.get( propertyName );
+			if ( ! propertyName || ! memberInfo ) {
+				return;
+			}
+
+			const value = property.value;
+			if ( this.babel.types.isIdentifier( value ) ) {
+				this.registerAlias( value.name, memberInfo.segments, path, {
+					declarationSegments: memberInfo.declarationSegments,
+					dynamicRoot: memberInfo.dynamicRoot,
+					dynamicRootSegments: memberInfo.dynamicRootSegments,
+					source: memberInfo.source || 'hook-object-member',
+				} );
+				return;
+			}
+
+			if ( this.babel.types.isObjectPattern( value ) ) {
+				this.registerPatternAliases( value, memberInfo.segments, path, {
+					declarationSegments: memberInfo.declarationSegments,
+					dynamicRoot: memberInfo.dynamicRoot,
+					dynamicRootSegments: memberInfo.dynamicRootSegments,
 				} );
 			}
 		} );
@@ -2988,6 +3302,20 @@ class StoreSelectorCollector {
 			);
 		}
 
+		if ( this.babel.types.isObjectExpression( callback.body ) ) {
+			const objectInfo = this.resolveObjectExpressionInfo( returnPath );
+			if ( objectInfo ) {
+				return {
+					...objectInfo,
+					transparentHook: 'useMemo',
+					replacementNode: this.babel.types.cloneNode( callback.body, true ),
+				};
+			}
+
+			this.throwUnsupportedHookReturnIfSelectorDerived( path, [ returnPath ], 'useMemo object returns must contain only static selector-derived properties.' );
+			return null;
+		}
+
 		const info = this.resolveExpressionInfo( callback.body, returnPath );
 		if ( info && isSelectorDerivedPath( info.segments ) ) {
 			return {
@@ -2998,6 +3326,22 @@ class StoreSelectorCollector {
 
 		this.throwUnsupportedHookReturnIfSelectorDerived( path, [ returnPath ], 'useMemo return expressions must resolve to a selector-derived static path, object root, or list root.' );
 		return null;
+	}
+
+	resolveObjectExpressionInfo( objectPath ) {
+		const objectMembers = summarizeObjectExpressionMembers(
+			objectPath,
+			valuePath => this.resolveExpressionInfo( valuePath.node, valuePath ),
+			this.babel
+		);
+		if ( ! objectMembers ) {
+			return null;
+		}
+
+		return {
+			objectMembers,
+			returnKind: 'object-map',
+		};
 	}
 
 	resolveTransparentHookSummaryInfo( expression, path ) {
@@ -3037,6 +3381,46 @@ class StoreSelectorCollector {
 				dynamicRoot: summary.dynamicRoot,
 				dynamicRootSegments: summary.dynamicRootSegments,
 				transparentHook: summary.hookName,
+			};
+		}
+
+		if ( summary.returnKind === 'object-map' ) {
+			if ( argumentPaths.length !== ( summary.params || [] ).length ) {
+				if ( selectorSources.length > 0 ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" expects ${ ( summary.params || [] ).length } static selector-derived argument(s).`
+					);
+				}
+				return null;
+			}
+
+			if ( argumentPaths.length === 0 ) {
+				return {
+					objectMembers: summary.objectMembers,
+					transparentHook: summary.hookName,
+				};
+			}
+
+			const argumentInfo = this.resolveExpressionInfo( expression.arguments[ 0 ], argumentPaths[ 0 ] );
+			if ( ! argumentInfo || ! isSelectorDerivedPath( argumentInfo.segments ) ) {
+				if ( selectorSources.length > 0 ) {
+					diagnostics.error(
+						path,
+						`Store selector unsupported-hook-call: hook "${ summary.hookName }" must receive a direct selector-derived argument before it can be summarized.`
+					);
+				}
+				return null;
+			}
+
+			return {
+				objectMembers: composeHookObjectMembers( argumentInfo, summary.objectMembers ),
+				transparentHook: summary.hookName,
+				replacementNode: createObjectExpressionFromHookObjectMembers(
+					expression.arguments[ 0 ],
+					summary.objectMembers,
+					this.babel
+				),
 			};
 		}
 
@@ -3189,6 +3573,12 @@ class StoreSelectorCollector {
 	addDeclarationForExpression( path ) {
 		const info = this.resolveExpressionInfo( path.node, path );
 		if ( ! info || ! isSelectorDerivedPath( info.segments ) ) {
+			if ( this.isBareObjectResultIdentifier( path ) ) {
+				diagnostics.error(
+					path,
+					'Store selector unsupported-hook-object-flow: transparent hook object results cannot be rendered directly. Use a static member such as view.title or destructure supported properties.'
+				);
+			}
 			return;
 		}
 
@@ -3208,6 +3598,15 @@ class StoreSelectorCollector {
 				declarationSegments: info.declarationSegments,
 			} );
 		}
+	}
+
+	isBareObjectResultIdentifier( path ) {
+		if ( ! this.babel.types.isIdentifier( path.node ) ) {
+			return false;
+		}
+
+		const binding = path.scope.getBinding( path.node.name );
+		return Boolean( binding && this.objectResultBindings.has( binding.identifier ) );
 	}
 
 	addDeclaration( declaration, provenance = {} ) {
@@ -3276,7 +3675,8 @@ class StoreSelectorCollector {
 
 	neutralizeTransparentHookDeclarations() {
 		this.transparentHookDeclarations.forEach( ( hookDeclaration ) => {
-			hookDeclaration.path.node.init = this.createNeutralExpression( hookDeclaration.segments );
+			hookDeclaration.path.node.init = hookDeclaration.replacementNode ||
+				this.createNeutralExpression( hookDeclaration.segments );
 		} );
 	}
 

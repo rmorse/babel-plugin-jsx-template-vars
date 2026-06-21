@@ -840,6 +840,159 @@ describe('experimental store selectors', () => {
 		})).toThrow(/unsupported-hook-body/);
 	});
 
+	it.each([
+		[ 'handlebars', '<h1>{{hero.title}}</h1>' ],
+		[ 'php', '<h1><?php echo $data[\'hero\'][\'title\']; ?></h1>' ],
+	])('supports useMemo object-return member access for %s', async (language, expected) => {
+		const source = `
+			import { useMemo } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const view = useMemo(() => ({ title: hero.title }), [ hero ]);
+				return <h1>{ view.title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture(language, source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('useMemo');
+		expect(normalizeTemplateOutput(output)).toBe(expected);
+	});
+
+	it('supports derived object-return hook destructuring', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function useHeroView(hero) {
+				return {
+					title: hero.title,
+					kicker: hero.kicker,
+				};
+			}
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const { title, kicker } = useHeroView(hero);
+				return <header><p>{ kicker }</p><h1>{ title }</h1></header>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
+	});
+
+	it('supports derived object-return hook spreads into scalar child props', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function useHeroView(hero) {
+				return {
+					title: hero.title,
+					kicker: hero.kicker,
+				};
+			}
+
+			const Header = ({ title, kicker }) => <header><p>{ kicker }</p><h1>{ title }</h1></header>;
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const view = useHeroView(hero);
+				return <Header {...view} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { code, output } = await renderTemplateFixture('handlebars', source, 'App', {}, selectorOptions);
+
+		expect(code).not.toContain('const view = useHeroView(hero)');
+		expect(normalizeTemplateOutput(output)).toBe('<header><p>{{hero.kicker}}</p><h1>{{hero.title}}</h1></header>');
+	});
+
+	it('fails closed for derived object-return hooks with methods', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function useHeroView(hero) {
+				return {
+					title() {
+						return hero.title;
+					},
+				};
+			}
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const view = useHeroView(hero);
+				return <h1>{ view.title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-body/);
+	});
+
+	it('fails closed for useMemo object-return hooks with helper properties', () => {
+		const source = `
+			import { useMemo } from 'react';
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				const view = useMemo(() => ({ title: formatTitle(hero.title) }), [ hero ]);
+				return <h1>{ view.title }</h1>;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-return/);
+	});
+
+	it('fails closed for source object-return hook spreads without callsite replacement', () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			function useHeroView() {
+				const hero = useStoreSelector((state) => state.hero);
+				return {
+					title: hero.title,
+				};
+			}
+
+			const Header = ({ title }) => <h1>{ title }</h1>;
+
+			const App = () => {
+				const view = useHeroView();
+				return <Header {...view} />;
+			};
+
+			module.exports = { App };
+		`;
+
+		expect(() => transformTemplateVars(source, {
+			language: 'handlebars',
+			experimentalStoreSelectors: true,
+			warnOnUnsupported: false,
+		})).toThrow(/unsupported-hook-object-flow/);
+	});
+
 	it('does not emit source hook declarations until the hook result is consumed', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
