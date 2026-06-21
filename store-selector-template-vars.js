@@ -318,6 +318,11 @@ function getTopLevelHookCandidates( programPath, babel ) {
 			return;
 		}
 
+		if ( types.isExportDefaultDeclaration( childPath.node ) ) {
+			collectFromDeclarationPath( childPath.get( 'declaration' ) );
+			return;
+		}
+
 		collectFromDeclarationPath( childPath );
 	} );
 

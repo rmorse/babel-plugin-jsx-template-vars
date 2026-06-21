@@ -426,6 +426,18 @@ function getFileHookExports( programPath, summariesByName, types ) {
 					kind: 'default-hook-identifier',
 				} );
 			}
+			if (
+				types.isFunctionDeclaration( declaration ) &&
+				declaration.id &&
+				summariesByName.has( declaration.id.name )
+			) {
+				exports.set( 'default', {
+					exportedName: 'default',
+					hookName: declaration.id.name,
+					summary: summariesByName.get( declaration.id.name ),
+					kind: 'default-hook-function-declaration',
+				} );
+			}
 			return;
 		}
 

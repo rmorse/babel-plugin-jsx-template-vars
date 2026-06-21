@@ -503,12 +503,15 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 	const callsiteContexts = getCrossFileManifestEntry( manifest.callsiteContextsByFile || {}, normalizedFilename ) || [];
 	const childRelativeDiscovery = getCrossFileManifestEntry( manifest.childRelativeDiscoveryByFile || {}, normalizedFilename ) || {};
 	const dynamicRootProps = getCrossFileManifestEntry( manifest.dynamicRootPropsByFile || {}, normalizedFilename ) || {};
+	const hookSummaries = getCrossFileManifestEntry( manifest.hookSummariesByFile || {}, normalizedFilename ) || {};
 	const importEdges = ( manifest.debug?.importEdges || [] ).filter( edge => normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename );
+	const hookImportEdges = ( manifest.debug?.hookImportEdges || [] ).filter( edge => normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename );
 	const seedEdges = ( manifest.debug?.seedEdges || [] ).filter( edge => (
 		normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename ||
 		normalizeStoreSelectorFilename( edge.targetFilename ) === normalizedFilename
 	) );
 	const skippedImports = ( manifest.debug?.skippedImports || [] ).filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizedFilename );
+	const skippedHooks = ( manifest.debug?.skippedHooks || [] ).filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizedFilename );
 	const diagnostics = ( manifest.diagnostics || [] ).filter( diagnostic => (
 		diagnostic.filename && normalizeStoreSelectorFilename( diagnostic.filename ) === normalizedFilename
 	) );
@@ -517,9 +520,12 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 		callsiteContexts.length === 0 &&
 		Object.keys( childRelativeDiscovery ).length === 0 &&
 		Object.keys( dynamicRootProps ).length === 0 &&
+		Object.keys( hookSummaries ).length === 0 &&
 		importEdges.length === 0 &&
+		hookImportEdges.length === 0 &&
 		seedEdges.length === 0 &&
 		skippedImports.length === 0 &&
+		skippedHooks.length === 0 &&
 		diagnostics.length === 0
 	) {
 		return null;
@@ -535,9 +541,12 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 		} ) ),
 		childRelativeDiscovery,
 		dynamicRootProps,
+		hookSummaries,
 		importEdges,
+		hookImportEdges,
 		seedEdges,
 		skippedImports,
+		skippedHooks,
 		diagnostics,
 	};
 }
