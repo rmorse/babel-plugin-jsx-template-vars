@@ -261,6 +261,7 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 			params: summary.params,
 			suffixSegments: summary.suffixSegments,
 			objectMembers: serializeHookObjectMembers( summary.objectMembers ),
+			hasJSXReturn: summary.returnKind === 'jsx',
 			strategy: summary.strategy,
 		} );
 	} );
@@ -471,6 +472,21 @@ function summarizeDerivedHookReturn( candidate, babel, summariesByBinding ) {
 	}
 
 	const paramName = params[ 0 ].name;
+	if ( isJSXHookReturnExpression( returnExpressionPath.node, babel ) ) {
+		if ( jsxReturnContainsUnsupportedDynamicFlow( returnExpressionPath, babel ) ) {
+			return null;
+		}
+
+		return {
+			hookName: candidate.hookName,
+			returnKind: 'jsx',
+			params: [ paramName ],
+			paramName,
+			jsxNode: returnExpressionPath.node,
+			strategy: 'same-file-derived-hook-jsx',
+		};
+	}
+
 	if ( babel.types.isObjectExpression( returnExpressionPath.node ) ) {
 		const objectMembers = summarizeObjectExpressionMembers(
 			returnExpressionPath,
@@ -634,6 +650,20 @@ function getObjectPropertyKeyName( property, babel ) {
 function summarizeHookReturnExpression( candidate, expressionPath, selectorAliases, selectorLocalNames, babel ) {
 	const { types } = babel;
 	const expression = expressionPath.node;
+	if ( isJSXHookReturnExpression( expression, babel ) ) {
+		if ( jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) ) {
+			return null;
+		}
+
+		return {
+			hookName: candidate.hookName,
+			returnKind: 'jsx',
+			params: [],
+			jsxNode: expression,
+			strategy: 'same-file-source-hook-jsx',
+		};
+	}
+
 	if ( isStoreSelectorCallNode( expression, selectorLocalNames, babel ) ) {
 		const segments = parseStoreSelectorCall( expression, expressionPath, babel );
 		return {
@@ -676,6 +706,41 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 	}
 
 	return null;
+}
+
+function isJSXHookReturnExpression( node, babel ) {
+	return Boolean( babel.types.isJSXElement( node ) || babel.types.isJSXFragment( node ) );
+}
+
+function jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) {
+	let found = false;
+	expressionPath.traverse( {
+		ConditionalExpression( path ) {
+			found = true;
+			path.stop();
+		},
+		LogicalExpression( path ) {
+			found = true;
+			path.stop();
+		},
+		CallExpression( path ) {
+			if ( path.node === expressionPath.node ) {
+				return;
+			}
+			const callee = path.node.callee;
+			if (
+				babel.types.isIdentifier( callee ) ||
+				(
+					babel.types.isMemberExpression( callee ) &&
+					! callee.computed
+				)
+			) {
+				found = true;
+				path.stop();
+			}
+		},
+	} );
+	return found;
 }
 
 function summarizeSourceHookObjectMemberExpression( expressionPath, selectorAliases, selectorLocalNames, babel ) {
@@ -747,6 +812,104 @@ function createExpressionFromBaseAndSuffix( baseNode, suffixSegments, babel ) {
 		( expression, segment ) => types.memberExpression( expression, types.identifier( segment ) ),
 		types.cloneNode( baseNode, true )
 	);
+}
+
+function cloneNodeWithHookParamSubstitutions( node, params, args, babel ) {
+	const { types } = babel;
+	const replacements = new Map();
+	params.forEach( ( paramName, index ) => {
+		const arg = args[ index ];
+		if ( arg ) {
+			replacements.set( paramName, arg );
+		}
+	} );
+
+	const root = types.cloneNode( node, true );
+	const visit = ( current, parent, key ) => {
+		if ( Array.isArray( current ) ) {
+			current.forEach( ( child, index ) => {
+				const replacement = visit( child, current, index );
+				if ( replacement ) {
+					current[ index ] = replacement;
+				}
+			} );
+			return null;
+		}
+
+		if ( ! current || typeof current !== 'object' || typeof current.type !== 'string' ) {
+			return null;
+		}
+
+		if (
+			types.isIdentifier( current ) &&
+			replacements.has( current.name ) &&
+			isHookParamReferenceIdentifier( current, parent, key, babel )
+		) {
+			return types.cloneNode( replacements.get( current.name ), true );
+		}
+
+		Object.keys( current ).forEach( childKey => {
+			if ( shouldSkipASTChildKey( childKey ) ) {
+				return;
+			}
+			const replacement = visit( current[ childKey ], current, childKey );
+			if ( replacement ) {
+				current[ childKey ] = replacement;
+			}
+		} );
+		return null;
+	};
+
+	visit( root, null, null );
+	return root;
+}
+
+function shouldSkipASTChildKey( key ) {
+	return key === 'loc' ||
+		key === 'start' ||
+		key === 'end' ||
+		key === 'extra' ||
+		key === 'leadingComments' ||
+		key === 'trailingComments' ||
+		key === 'innerComments';
+}
+
+function isHookParamReferenceIdentifier( node, parent, key, babel ) {
+	const { types } = babel;
+	if ( ! parent ) {
+		return true;
+	}
+
+	if ( types.isMemberExpression( parent ) && parent.property === node && ! parent.computed ) {
+		return false;
+	}
+
+	if ( parent.type === 'OptionalMemberExpression' && parent.property === node && ! parent.computed ) {
+		return false;
+	}
+
+	if ( types.isObjectProperty( parent ) && parent.key === node && ! parent.computed ) {
+		return false;
+	}
+
+	if ( types.isObjectMethod( parent ) && parent.key === node && ! parent.computed ) {
+		return false;
+	}
+
+	if (
+		types.isVariableDeclarator( parent ) && parent.id === node ||
+		types.isFunctionDeclaration( parent ) && parent.id === node ||
+		types.isFunctionExpression( parent ) && parent.id === node ||
+		( Array.isArray( parent.params ) && parent.params.includes( node ) )
+	) {
+		return false;
+	}
+
+	if ( key === 'name' && /^JSX/.test( parent.type ) ) {
+		return false;
+	}
+
+	return true;
 }
 
 function neutralizeTransparentHookSummaries( hookSummaries, babel ) {
@@ -1697,6 +1860,7 @@ class StoreSelectorCollector {
 		if ( this.selectorLocalNames.size > 0 ) {
 			this.collectSelectorAssignments();
 		}
+		this.inlineTransparentJSXHookCalls();
 		this.collectLocalAliases();
 		this.collectMapShapes();
 		this.collectLocalAliases();
@@ -1845,6 +2009,67 @@ class StoreSelectorCollector {
 
 		const binding = path.scope.getBinding( expression.callee.name );
 		return Boolean( binding && this.config.storeSelectorHookSummariesByBinding?.has?.( binding.identifier ) );
+	}
+
+	inlineTransparentJSXHookCalls() {
+		this.componentPath.traverse( {
+			CallExpression: ( path ) => {
+				if ( this.isInsideNestedFunction( path ) && ! this.isInsideMapCallback( path ) ) {
+					return;
+				}
+
+				if ( ! this.babel.types.isIdentifier( path.node.callee ) ) {
+					return;
+				}
+
+				const binding = path.scope.getBinding( path.node.callee.name );
+				const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
+				if ( ! summary || summary.returnKind !== 'jsx' ) {
+					return;
+				}
+
+				if ( ! this.canInlineJSXHookCall( path ) ) {
+					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+					if ( selectorSources.length > 0 ) {
+						diagnostics.error(
+							path,
+							`Store selector unsupported-hook-call: JSX-returning hook "${ summary.hookName }" can only be used as a rendered JSX value.`
+						);
+					}
+					return;
+				}
+
+				const params = summary.params || [];
+				if ( path.node.arguments.length !== params.length ) {
+					const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+					if ( selectorSources.length > 0 ) {
+						diagnostics.error(
+							path,
+							`Store selector unsupported-hook-call: JSX-returning hook "${ summary.hookName }" expects ${ params.length } static argument(s).`
+						);
+					}
+					return;
+				}
+
+				const replacement = cloneNodeWithHookParamSubstitutions(
+					summary.jsxNode,
+					params,
+					path.node.arguments,
+					this.babel
+				);
+				path.replaceWith( replacement );
+				path.skip();
+			},
+		} );
+	}
+
+	canInlineJSXHookCall( path ) {
+		const parent = path.parentPath?.node;
+		return Boolean(
+			( this.babel.types.isVariableDeclarator( parent ) && parent.init === path.node ) ||
+			( this.babel.types.isJSXExpressionContainer( parent ) && parent.expression === path.node ) ||
+			( this.babel.types.isReturnStatement( parent ) && parent.argument === path.node )
+		);
 	}
 
 	collectLocalAliases() {

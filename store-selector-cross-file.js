@@ -410,6 +410,9 @@ function getFileExports( programPath, componentPaths, types ) {
 function getFileHookExports( programPath, summariesByName, types ) {
 	const exports = new Map();
 	summariesByName.forEach( ( summary, hookName ) => {
+		if ( summary.returnKind === 'jsx' ) {
+			return;
+		}
 		exports.set( hookName, {
 			exportedName: hookName,
 			hookName,
@@ -422,7 +425,11 @@ function getFileHookExports( programPath, summariesByName, types ) {
 		const node = childPath.node;
 		if ( types.isExportDefaultDeclaration( node ) ) {
 			const declaration = node.declaration;
-			if ( types.isIdentifier( declaration ) && summariesByName.has( declaration.name ) ) {
+			if (
+				types.isIdentifier( declaration ) &&
+				summariesByName.has( declaration.name ) &&
+				summariesByName.get( declaration.name ).returnKind !== 'jsx'
+			) {
 				exports.set( 'default', {
 					exportedName: 'default',
 					hookName: declaration.name,
@@ -433,7 +440,8 @@ function getFileHookExports( programPath, summariesByName, types ) {
 			if (
 				types.isFunctionDeclaration( declaration ) &&
 				declaration.id &&
-				summariesByName.has( declaration.id.name )
+				summariesByName.has( declaration.id.name ) &&
+				summariesByName.get( declaration.id.name ).returnKind !== 'jsx'
 			) {
 				exports.set( 'default', {
 					exportedName: 'default',
@@ -457,7 +465,12 @@ function getFileHookExports( programPath, summariesByName, types ) {
 
 			const localName = getExportSpecifierName( specifier.local );
 			const exportedName = getExportSpecifierName( specifier.exported );
-			if ( localName && exportedName && summariesByName.has( localName ) ) {
+			if (
+				localName &&
+				exportedName &&
+				summariesByName.has( localName ) &&
+				summariesByName.get( localName ).returnKind !== 'jsx'
+			) {
 				exports.set( exportedName, {
 					exportedName,
 					hookName: localName,

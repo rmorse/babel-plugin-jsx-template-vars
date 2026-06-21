@@ -75,6 +75,13 @@ diagnostic or hard-error instead of silently dropping the summary.
 
 ## Next Slice: Static Custom Hook Flow Expansion
 
+Status: partly implemented. Same-file JSX-returning render-helper hooks now
+inline into authored JSX before selector child tracing, including direct rendered
+calls and fragment returns. Conditional/helper-generated JSX returns fail closed.
+Cross-file JSX-returning hooks remain intentionally unsupported until the shared
+drop-in resolver can transfer both hook summaries and referenced component
+bindings through one typed import/export graph.
+
 Before returning fully to the broader drop-in import/export resolver work, add a
 focused hook expansion slice for natural custom-hook shapes that remain
 statically provable. This slice should not add new package/barrel/namespace
@@ -151,6 +158,9 @@ return <section>{ header }</section>;
 When the hook returns JSX that is statically analyzable, treat it like a
 component/render summary rather than as arbitrary runtime JSX:
 
+- for same-file hooks, inline the returned JSX into the callsite before child
+  prop tracing so the existing component/list/control machinery sees ordinary
+  authored JSX
 - analyze the returned JSX with the same child prop tracing used for components
 - propagate selector-derived hook arguments into the returned JSX callsites
 - support returned JSX fragments and one static JSX expression
@@ -168,6 +178,8 @@ Fail closed for JSX-returning hooks when render flow is dynamic:
 - JSX produced through helper calls
 - runtime component selection or computed JSX tag names
 - hooks that mix JSX return with state/ref/effect-driven selector data
+- cross-file JSX-returning hooks until hook summaries and component binding
+  references are resolved through the shared drop-in import/export graph
 
 ### C. Shared Summary Contract
 
