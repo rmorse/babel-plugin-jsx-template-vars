@@ -42,9 +42,29 @@
 const {
 	getArrayFromExpression,
 } = require( './utils' );
+const path = require( 'path' );
 
 const templateVarsController = require( './controller' );
 const { createTemplateVarsRegistry } = require( './template-vars-registry' );
+const {
+	getTopLevelComponentPath,
+} = require( './component-adapter' );
+const {
+	collectStoreSelectorImports,
+	collectTransparentHookSummaries,
+	collectStoreSelectorChildPropFlows,
+	collectStoreSelectorTemplateVars,
+	createAliasResolver,
+	createStoreSelectorPropAliases,
+	createStoreSelectorSeedAliases,
+	createStoreSelectorDynamicRootAliases,
+	assertNoUnprocessedStoreSelectorReferences,
+	isStoreSelectorEnabled,
+	isStoreSelectorDebugEnabled,
+	neutralizeTransparentHookSummaries,
+	removeUnusedImportSpecifiers,
+	removeStoreSelectorImportSpecifiers,
+} = require( './store-selector-template-vars' );
 const defaultLanguage = 'handlebars';
 
 /**
@@ -96,8 +116,14 @@ function getTemplateVarsFromExpression( expression, types ) {
 function templateVarsVisitor( babel, config ) {
 	const { types } = babel;
 	const tidyOnly = config.tidyOnly ?? false;
+	const experimentalStoreSelectors = isStoreSelectorEnabled( config );
+	const debugStoreSelectors = isStoreSelectorDebugEnabled( config );
+	const storeSelectorOptions = typeof config.experimentalStoreSelectors === 'object' && config.experimentalStoreSelectors !== null ?
+		config.experimentalStoreSelectors :
+		{};
+	const pendingTemplateVars = new Map();
 
-	return {
+	const visitor = {
 		ExpressionStatement( path, state ) {
 			// Try to look for the property assignment of `templateVars` and:
 			// - Process the template vars for later
@@ -113,8 +139,17 @@ function templateVarsVisitor( babel, config ) {
 
 			// We know this exists because it was checked in getTemplateVarsFromExpression
 			const componentName = path.node.expression.left.object.name;
+			if ( experimentalStoreSelectors ) {
+				pendingTemplateVars.set( componentName, {
+					templateVars: templatePropsValue,
+					errorPath: path,
+				} );
+				path.remove();
+				return;
+			}
+
 			// Find the component path by name
-			const componentPath = getComponentPath( path.parentPath, componentName );
+			const componentPath = getComponentPath( path.parentPath, componentName, types );
 			
 			// Remove templateVars from the source
 			path.remove();
@@ -132,22 +167,712 @@ function templateVarsVisitor( babel, config ) {
 			const templateVars = createTemplateVarsRegistry( templatePropsValue, componentPath, babel, path );
 			templateVarsController.init( templateVars, componentName, componentPath, babel, config );
 		}
-	}
+	};
+
+	return {
+		visitor,
+		processProgram( programPath, state ) {
+			if ( ! experimentalStoreSelectors || tidyOnly ) {
+				return;
+			}
+
+			const selectorImports = collectStoreSelectorImports( programPath, babel, config );
+			const hookSummaries = collectTransparentHookSummaries( programPath, selectorImports, babel );
+			const filename = normalizeStoreSelectorFilename( state.file.opts.filename );
+			const crossFileHookSummaries = createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename );
+			const hookSummaryLookup = createHookSummaryLookup(
+				hookSummaries.summariesByBinding,
+				crossFileHookSummaries.summariesByBinding,
+				createNamespaceHookLookup( crossFileHookSummaries.summariesByNamespaceBinding )
+			);
+			const unsupportedHookSummaryLookup = createHookSummaryLookup(
+				hookSummaries.unsupportedByBinding,
+				crossFileHookSummaries.unsupportedByBinding,
+				createNamespaceHookLookup( crossFileHookSummaries.unsupportedByNamespaceBinding )
+			);
+			const hookSummariesAvailable = hookSummaries.summaryRecords.length > 0 || crossFileHookSummaries.available;
+			const componentPaths = getTopLevelComponentPaths( programPath, types );
+			const processedComponents = new Set();
+			const debugEntries = [];
+			const unsupportedEntries = [];
+			const componentNames = new Set( [
+				...componentPaths.keys(),
+				...getCrossFileComponentNames( storeSelectorOptions, filename ),
+			] );
+			const selectorResults = new Map();
+			const childPropTracesByComponent = new Map();
+			const seedAliasesByComponent = createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename );
+			const crossFileDynamicRootPropsByComponent = getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename );
+			const crossFileDebug = getCrossFileDebugForFile( storeSelectorOptions, filename );
+			const derivedUnsupportedRecords = [];
+
+			for ( let pass = 0; pass < Math.max( componentPaths.size, 1 ); pass++ ) {
+				selectorResults.clear();
+				childPropTracesByComponent.clear();
+				const childSeedTracesByComponent = new Map();
+				const dynamicRootPropsForCollection = mergeDynamicRootPropsByComponent(
+					createDynamicRootPropsByComponent( seedAliasesByComponent ),
+					crossFileDynamicRootPropsByComponent
+				);
+
+				componentPaths.forEach( ( componentPath, componentName ) => {
+					const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
+						...config,
+						storeSelectorComponentNames: componentNames,
+						storeSelectorComponentPaths: componentPaths,
+						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
+						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
+						storeSelectorHookSummariesByBinding: hookSummaryLookup,
+						storeSelectorUnsupportedHookSummariesByBinding: unsupportedHookSummaryLookup,
+						storeSelectorHookSummariesAvailable: hookSummariesAvailable,
+						storeSelectorNeutralizeSelectors: false,
+					} );
+					selectorResults.set( componentName, selectorResult );
+
+					collectStoreSelectorChildPropFlows( selectorResult, childPropTracesByComponent, childSeedTracesByComponent );
+				} );
+
+				let addedSeed = false;
+				childPropTracesByComponent.forEach( ( propTraces, componentName ) => {
+					const componentPath = componentPaths.get( componentName );
+					if ( ! componentPath ) {
+						return;
+					}
+
+					const dynamicRootAliases = createStoreSelectorDynamicRootAliases( componentPath, propTraces, babel );
+					dynamicRootAliases.forEach( ( seedAlias ) => {
+						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
+							addedSeed = true;
+						}
+					} );
+				} );
+
+				const dynamicRootPropsForPass = mergeDynamicRootPropsByComponent(
+					createDynamicRootPropsByComponent( seedAliasesByComponent ),
+					crossFileDynamicRootPropsByComponent
+				);
+				childSeedTracesByComponent.forEach( ( seedTraces, componentName ) => {
+					const componentPath = componentPaths.get( componentName );
+					if ( ! componentPath ) {
+						return;
+					}
+
+					const relatedFlows = childPropTracesByComponent.get( componentName ) || [];
+					const seedAliases = createStoreSelectorSeedAliases( componentPath, seedTraces, babel, {
+						...config,
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForPass,
+						storeSelectorUnsupportedRecords: derivedUnsupportedRecords,
+					}, relatedFlows );
+					seedAliases.forEach( ( seedAlias ) => {
+						if ( addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) ) {
+							addedSeed = true;
+						}
+					} );
+				} );
+
+				if ( ! addedSeed ) {
+					break;
+				}
+			}
+
+			const dynamicRootPropsByComponent = mergeDynamicRootPropsByComponent(
+				createDynamicRootPropsByComponent( seedAliasesByComponent ),
+				crossFileDynamicRootPropsByComponent
+			);
+
+			selectorResults.clear();
+			childPropTracesByComponent.clear();
+			componentPaths.forEach( ( componentPath, componentName ) => {
+				const selectorResult = collectStoreSelectorTemplateVars( componentPath, selectorImports.localNames, babel, {
+					...config,
+					storeSelectorComponentNames: componentNames,
+					storeSelectorComponentPaths: componentPaths,
+					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
+					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
+					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
+					storeSelectorHookSummariesByBinding: hookSummaryLookup,
+					storeSelectorUnsupportedHookSummariesByBinding: unsupportedHookSummaryLookup,
+					storeSelectorHookSummariesAvailable: hookSummariesAvailable,
+				} );
+				selectorResults.set( componentName, selectorResult );
+
+				collectStoreSelectorChildPropFlows( selectorResult, childPropTracesByComponent, new Map() );
+			} );
+
+			componentPaths.forEach( ( componentPath, componentName ) => {
+				const pending = pendingTemplateVars.get( componentName );
+				const selectorResult = selectorResults.get( componentName );
+				const propTraceResult = createStoreSelectorPropAliases(
+					componentPath,
+					childPropTracesByComponent.get( componentName ) || [],
+					babel,
+					{
+						...config,
+						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
+					}
+				);
+				const aliases = [
+					...selectorResult.aliases,
+					...propTraceResult.aliases,
+				];
+				const explicitTemplateVars = pending?.templateVars || [];
+				const explicitTemplateVarsSet = new Set( explicitTemplateVars );
+				const shadowedTemplateVars = selectorResult.declarations.filter( declaration => explicitTemplateVarsSet.has( declaration ) );
+				const selectorDeclarations = selectorResult.declarations.filter( declaration => ! explicitTemplateVarsSet.has( declaration ) );
+				const combinedTemplateVars = Array.from( new Set( [
+					...explicitTemplateVars,
+					...selectorDeclarations,
+					...propTraceResult.declarations,
+				] ) );
+				const dynamicRootAliases = ( seedAliasesByComponent.get( componentName ) || [] ).filter( alias => alias.dynamicRoot );
+				const dynamicRootDebugAliases = dynamicRootAliases.map( createDynamicRootDebugAlias );
+				const dynamicRootProps = dynamicRootPropsByComponent[ componentName ] || [];
+				if ( selectorResult.debug.unsupported.length > 0 ) {
+					unsupportedEntries.push( {
+						componentName,
+						unsupported: selectorResult.debug.unsupported,
+					} );
+				}
+
+				if (
+					debugStoreSelectors &&
+					(
+						selectorResult.hasSelectors ||
+						selectorResult.debug.rawDeclarations.length > 0 ||
+						selectorResult.debug.aliases.length > 0 ||
+						selectorResult.debug.unsupported.length > 0 ||
+						dynamicRootDebugAliases.length > 0 ||
+						dynamicRootProps.length > 0
+					)
+				) {
+					debugEntries.push( {
+						componentName,
+						rawDeclarations: selectorResult.debug.rawDeclarations,
+						declarations: selectorResult.debug.declarations,
+						aliases: selectorResult.debug.aliases,
+						listShapes: selectorResult.debug.listShapes,
+						declarationProvenance: selectorResult.debug.declarationProvenance,
+						unsupported: selectorResult.debug.unsupported,
+						childPropTraces: selectorResult.debug.childPropTraces,
+						incomingPropTraces: childPropTracesByComponent.get( componentName ) || [],
+						dynamicRootAliases: dynamicRootDebugAliases,
+						dynamicRootProps,
+						dynamicRootPropsByComponent,
+						explicitTemplateVars,
+						shadowedTemplateVars,
+						combinedTemplateVars,
+					} );
+				}
+
+				if ( combinedTemplateVars.length === 0 && aliases.length === 0 ) {
+					return;
+				}
+
+				const aliasResolver = createAliasResolver( aliases );
+				const templateVars = createTemplateVarsRegistry(
+					combinedTemplateVars,
+					componentPath,
+					babel,
+					pending?.errorPath || componentPath,
+					{ resolveSegments: aliasResolver }
+				);
+
+				templateVarsController.init( templateVars, componentName, componentPath, babel, {
+					...config,
+					storeSelectorAliases: aliases,
+					dynamicRootAliases,
+					dynamicRootPropsByComponent: dynamicRootPropsByComponent,
+				} );
+				processedComponents.add( componentName );
+			} );
+
+			mergeStoreSelectorUnsupportedRecords( unsupportedEntries, derivedUnsupportedRecords );
+
+			pendingTemplateVars.forEach( ( pending, componentName ) => {
+				if ( processedComponents.has( componentName ) ) {
+					return;
+				}
+
+				const componentPath = getComponentPath( programPath, componentName, types );
+				if ( ! componentPath ) {
+					return;
+				}
+
+				const templateVars = createTemplateVarsRegistry( pending.templateVars, componentPath, babel, pending.errorPath );
+				templateVarsController.init( templateVars, componentName, componentPath, babel, config );
+			} );
+
+			neutralizeTransparentHookSummaries( hookSummaries, babel );
+			assertNoUnprocessedStoreSelectorReferences( programPath, selectorImports, babel );
+			removeStoreSelectorImportSpecifiers( selectorImports.importSpecifiers );
+			removeUnusedImportSpecifiers( selectorImports.reactHookImportSpecifiers );
+
+			if ( debugStoreSelectors ) {
+				state.file.metadata.storeSelectorTemplateVars = [
+					...( state.file.metadata.storeSelectorTemplateVars || [] ),
+					...debugEntries,
+				];
+				if ( crossFileDebug ) {
+					state.file.metadata.storeSelectorTemplateVarsCrossFile = crossFileDebug;
+				}
+			}
+			if ( unsupportedEntries.length > 0 ) {
+				state.file.metadata.storeSelectorTemplateVarsUnsupported = [
+					...( state.file.metadata.storeSelectorTemplateVarsUnsupported || [] ),
+					...unsupportedEntries,
+				];
+			}
+		}
+	};
 };
 
 // Find and return a component (variable declaration) path via traversal by its name.
-function getComponentPath( path, componentName ) {
+function getComponentPath( path, componentName, types ) {
 	let componentPath;
 	path.traverse( {
 		VariableDeclaration( subPath ) {
-			const declarationName = subPath.node.declarations[0].id.name
-			if ( declarationName === componentName ) {
+			const component = getTopLevelComponentPath( subPath, types );
+			if ( component?.name === componentName ) {
+				componentPath = component.path;
+			}
+			subPath.skip();
+		},
+		FunctionDeclaration( subPath ) {
+			if ( subPath.node.id?.name === componentName ) {
 				componentPath = subPath;
 			}
 			subPath.skip();
 		}
 	} );
 	return componentPath;
+}
+
+function createInitialStoreSelectorSeedMap( componentPaths, storeSelectorOptions, filename ) {
+	const seedAliasesByComponent = new Map();
+	componentPaths.forEach( ( _componentPath, componentName ) => {
+		const seedAliases = [
+			...( storeSelectorOptions.__seedAliasesByComponent?.[ componentName ] || [] ),
+			...getCrossFileSeedAliases( storeSelectorOptions, filename, componentName ),
+		];
+		if ( seedAliases.length > 0 ) {
+			seedAliasesByComponent.set( componentName, [ ...seedAliases ] );
+		}
+	} );
+	return seedAliasesByComponent;
+}
+
+function getCrossFileComponentNames( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return [];
+	}
+
+	const componentNamesByFile = storeSelectorOptions.__crossFileManifest?.componentNamesByFile || {};
+	const componentNames = getCrossFileManifestEntry( componentNamesByFile, filename );
+	return Array.isArray( componentNames ) ? componentNames : [];
+}
+
+function getCrossFileSeedAliases( storeSelectorOptions, filename, componentName ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return [];
+	}
+
+	const seedAliasesByFile = storeSelectorOptions.__crossFileManifest?.seedAliasesByFile || {};
+	const seedAliasesByComponent = getCrossFileManifestEntry( seedAliasesByFile, filename );
+	const seedAliases = seedAliasesByComponent?.[ componentName ];
+	return Array.isArray( seedAliases ) ? seedAliases : [];
+}
+
+function getCrossFileDynamicRootPropsByComponent( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return {};
+	}
+
+	const dynamicRootPropsByFile = storeSelectorOptions.__crossFileManifest?.dynamicRootPropsByFile || {};
+	const propsByComponent = getCrossFileManifestEntry( dynamicRootPropsByFile, filename );
+	return propsByComponent && typeof propsByComponent === 'object' && ! Array.isArray( propsByComponent ) ?
+		propsByComponent :
+		{};
+}
+
+function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return null;
+	}
+
+	const manifest = storeSelectorOptions.__crossFileManifest;
+	if ( ! manifest ) {
+		return null;
+	}
+
+	const normalizedFilename = normalizeStoreSelectorFilename( filename );
+	const callsiteContexts = getCrossFileManifestEntry( manifest.callsiteContextsByFile || {}, normalizedFilename ) || [];
+	const childRelativeDiscovery = getCrossFileManifestEntry( manifest.childRelativeDiscoveryByFile || {}, normalizedFilename ) || {};
+	const dynamicRootProps = getCrossFileManifestEntry( manifest.dynamicRootPropsByFile || {}, normalizedFilename ) || {};
+	const hookSummaries = getCrossFileManifestEntry( manifest.hookSummariesByFile || {}, normalizedFilename ) || {};
+	const importEdges = ( manifest.debug?.importEdges || [] ).filter( edge => normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename );
+	const hookImportEdges = ( manifest.debug?.hookImportEdges || [] ).filter( edge => normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename );
+	const seedEdges = ( manifest.debug?.seedEdges || [] ).filter( edge => (
+		normalizeStoreSelectorFilename( edge.sourceFilename ) === normalizedFilename ||
+		normalizeStoreSelectorFilename( edge.targetFilename ) === normalizedFilename
+	) );
+	const skippedImports = ( manifest.debug?.skippedImports || [] ).filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizedFilename );
+	const skippedHooks = ( manifest.debug?.skippedHooks || [] ).filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizedFilename );
+	const diagnostics = ( manifest.diagnostics || [] ).filter( diagnostic => (
+		diagnostic.filename && normalizeStoreSelectorFilename( diagnostic.filename ) === normalizedFilename
+	) );
+
+	if (
+		callsiteContexts.length === 0 &&
+		Object.keys( childRelativeDiscovery ).length === 0 &&
+		Object.keys( dynamicRootProps ).length === 0 &&
+		Object.keys( hookSummaries ).length === 0 &&
+		importEdges.length === 0 &&
+		hookImportEdges.length === 0 &&
+		seedEdges.length === 0 &&
+		skippedImports.length === 0 &&
+		skippedHooks.length === 0 &&
+		diagnostics.length === 0
+	) {
+		return null;
+	}
+
+	return {
+		filename: normalizedFilename,
+		callsiteContexts: callsiteContexts.map( context => ( {
+			...context,
+			canonicalPath: stringifyStoreSelectorSegments( context.canonicalSegments || [] ),
+			declarationPath: stringifyStoreSelectorSegments( context.declarationSegments || [] ),
+			compiledPaths: getCompiledPathsForCallsiteContext( context, manifest ),
+		} ) ),
+		childRelativeDiscovery,
+		dynamicRootProps,
+		hookSummaries,
+		importEdges,
+		hookImportEdges,
+		seedEdges,
+		skippedImports,
+		skippedHooks,
+		diagnostics,
+	};
+}
+
+function createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename ) {
+	const summariesByBinding = new WeakMap();
+	const summariesByNamespaceBinding = new WeakMap();
+	const unsupportedByBinding = new WeakMap();
+	const unsupportedByNamespaceBinding = new WeakMap();
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return {
+			summariesByBinding,
+			summariesByNamespaceBinding,
+			unsupportedByBinding,
+			unsupportedByNamespaceBinding,
+			available: false,
+		};
+	}
+
+	const hookSummariesByFile = storeSelectorOptions.__crossFileManifest?.hookSummariesByFile || {};
+	const summariesByLocalName = getCrossFileManifestEntry( hookSummariesByFile, filename ) || {};
+	const skippedHooks = ( storeSelectorOptions.__crossFileManifest?.debug?.skippedHooks || [] )
+		.filter( entry => normalizeStoreSelectorFilename( entry.filename ) === normalizeStoreSelectorFilename( filename ) );
+	let available = false;
+	Object.entries( summariesByLocalName ).forEach( ( [ localName, summary ] ) => {
+		const namespaceMember = splitNamespaceMemberName( localName );
+		if ( namespaceMember ) {
+			const binding = programPath.scope.getBinding( namespaceMember.namespaceLocalName );
+			if ( binding && summary ) {
+				let summariesByMember = summariesByNamespaceBinding.get( binding.identifier );
+				if ( ! summariesByMember ) {
+					summariesByMember = new Map();
+					summariesByNamespaceBinding.set( binding.identifier, summariesByMember );
+				}
+				summariesByMember.set( namespaceMember.memberName, summary );
+				available = true;
+			}
+			return;
+		}
+
+		const binding = programPath.scope.getBinding( localName );
+		if ( binding && summary ) {
+			summariesByBinding.set( binding.identifier, summary );
+			available = true;
+		}
+	} );
+	skippedHooks.forEach( ( skippedHook ) => {
+		const namespaceMember = splitNamespaceMemberName( skippedHook.localName );
+		if ( namespaceMember ) {
+			const binding = programPath.scope.getBinding( namespaceMember.namespaceLocalName );
+			if ( binding ) {
+				let unsupportedByMember = unsupportedByNamespaceBinding.get( binding.identifier );
+				if ( ! unsupportedByMember ) {
+					unsupportedByMember = new Map();
+					unsupportedByNamespaceBinding.set( binding.identifier, unsupportedByMember );
+				}
+				unsupportedByMember.set( namespaceMember.memberName, {
+					kind: skippedHook.kind || 'unsupported-hook-import',
+					hookName: skippedHook.localName,
+					localName: skippedHook.localName,
+					reason: skippedHook.message || skippedHook.kind || 'unsupported hook import',
+				} );
+				available = true;
+			}
+			return;
+		}
+
+		const binding = programPath.scope.getBinding( skippedHook.localName );
+		if ( binding ) {
+			unsupportedByBinding.set( binding.identifier, {
+				kind: skippedHook.kind || 'unsupported-hook-import',
+				hookName: skippedHook.localName,
+				localName: skippedHook.localName,
+				reason: skippedHook.message || skippedHook.kind || 'unsupported hook import',
+			} );
+			available = true;
+		}
+	} );
+
+	return {
+		summariesByBinding,
+		summariesByNamespaceBinding,
+		unsupportedByBinding,
+		unsupportedByNamespaceBinding,
+		available,
+	};
+}
+
+function createHookSummaryLookup( ...maps ) {
+	return {
+		get( key ) {
+			for ( const map of maps ) {
+				const value = map?.get?.( key );
+				if ( value ) {
+					return value;
+				}
+			}
+			return undefined;
+		},
+		has( key ) {
+			return maps.some( map => Boolean( map?.has?.( key ) ) );
+		},
+		getNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			for ( const map of maps ) {
+				const value = map?.getNamespaceMember?.( namespaceBindingIdentifier, memberName );
+				if ( value ) {
+					return value;
+				}
+			}
+			return undefined;
+		},
+		hasNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return maps.some( map => Boolean( map?.hasNamespaceMember?.( namespaceBindingIdentifier, memberName ) ) );
+		},
+	};
+}
+
+function createNamespaceHookLookup( namespaceBindingMap ) {
+	return {
+		getNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return namespaceBindingMap?.get?.( namespaceBindingIdentifier )?.get( memberName );
+		},
+		hasNamespaceMember( namespaceBindingIdentifier, memberName ) {
+			return Boolean( namespaceBindingMap?.get?.( namespaceBindingIdentifier )?.has( memberName ) );
+		},
+	};
+}
+
+function splitNamespaceMemberName( localName ) {
+	const parts = typeof localName === 'string' ? localName.split( '.' ) : [];
+	if ( parts.length !== 2 || ! parts[ 0 ] || ! parts[ 1 ] ) {
+		return null;
+	}
+	return {
+		namespaceLocalName: parts[ 0 ],
+		memberName: parts[ 1 ],
+	};
+}
+
+function getCompiledPathsForCallsiteContext( context, manifest ) {
+	const canonicalSegments = normalizeStoreSelectorSegments( context.canonicalSegments || [] );
+	const discoveryByComponent = getCrossFileManifestEntry( manifest.childRelativeDiscoveryByFile || {}, context.targetFile ) || {};
+	const discoveryEntries = discoveryByComponent[ context.targetComponent ] || [];
+	const discoveryEntry = discoveryEntries.find( entry => entry.propName === context.propName );
+	const localPaths = discoveryEntry?.localPaths || [];
+	if ( localPaths.length === 0 ) {
+		return [ stringifyStoreSelectorSegments( canonicalSegments ) ].filter( Boolean );
+	}
+
+	const dynamicRootSegments = normalizeStoreSelectorSegments(
+		discoveryEntry.dynamicRootSegments || [ discoveryEntry.localName ].filter( Boolean )
+	);
+	const compiledPaths = localPaths.map( localPath => {
+		const localSegments = normalizeStoreSelectorSegments( localPath );
+		const suffix = segmentsStartWith( localSegments, dynamicRootSegments ) ?
+			localSegments.slice( dynamicRootSegments.length ) :
+			localSegments;
+		return stringifyStoreSelectorSegments( [
+			...canonicalSegments,
+			...suffix,
+		] );
+	} ).filter( Boolean );
+
+	return Array.from( new Set( compiledPaths ) ).sort();
+}
+
+function getCrossFileManifestEntry( manifestByFile, filename ) {
+	if ( ! manifestByFile || ! filename ) {
+		return null;
+	}
+
+	const normalizedFilename = normalizeStoreSelectorFilename( filename );
+	return manifestByFile[ filename ] ||
+		manifestByFile[ normalizedFilename ] ||
+		manifestByFile[ filename.replace( /\\/g, '/' ) ] ||
+		manifestByFile[ normalizedFilename.replace( /\\/g, '/' ) ] ||
+		null;
+}
+
+function normalizeStoreSelectorFilename( filename ) {
+	return path.normalize( path.resolve( filename ) );
+}
+
+function addStoreSelectorSeedAlias( seedAliasesByComponent, componentName, seedAlias ) {
+	if ( ! seedAliasesByComponent.has( componentName ) ) {
+		seedAliasesByComponent.set( componentName, [] );
+	}
+
+	const seedAliases = seedAliasesByComponent.get( componentName );
+	const seedKey = createStoreSelectorSeedAliasKey( seedAlias );
+	if ( seedAliases.some( existing => createStoreSelectorSeedAliasKey( existing ) === seedKey ) ) {
+		return false;
+	}
+
+	seedAliases.push( seedAlias );
+	return true;
+}
+
+function createDynamicRootPropsByComponent( seedAliasesByComponent ) {
+	const entries = {};
+	seedAliasesByComponent.forEach( ( seedAliases, componentName ) => {
+		const props = Array.from( new Set(
+			seedAliases
+				.filter( alias => alias.dynamicRoot && alias.propName )
+				.map( alias => alias.propName )
+		) );
+		if ( props.length > 0 ) {
+			entries[ componentName ] = props;
+		}
+	} );
+	return entries;
+}
+
+function mergeDynamicRootPropsByComponent( ...sources ) {
+	const merged = {};
+	sources.forEach( ( source ) => {
+		if ( ! source || typeof source !== 'object' ) {
+			return;
+		}
+
+		Object.entries( source ).forEach( ( [ componentName, props ] ) => {
+			if ( ! Array.isArray( props ) ) {
+				return;
+			}
+			const existing = new Set( merged[ componentName ] || [] );
+			props.forEach( prop => existing.add( prop ) );
+			merged[ componentName ] = Array.from( existing ).sort();
+		} );
+	} );
+	return merged;
+}
+
+function createDynamicRootDebugAlias( alias ) {
+	return {
+		localName: alias.localName,
+		memberName: alias.memberName,
+		propName: alias.propName,
+		path: stringifyStoreSelectorSegments( alias.segments ),
+		segments: alias.segments || [],
+		declarationPath: stringifyStoreSelectorSegments( alias.declarationSegments || alias.segments ),
+		declarationSegments: alias.declarationSegments || alias.segments || [],
+		dynamicRootPath: stringifyStoreSelectorSegments( alias.dynamicRootSegments || alias.declarationSegments || alias.segments ),
+		dynamicRootSegments: alias.dynamicRootSegments || alias.declarationSegments || alias.segments || [],
+		source: alias.source,
+	};
+}
+
+function mergeStoreSelectorUnsupportedRecords( unsupportedEntries, records ) {
+	const seen = new Set();
+	unsupportedEntries.forEach( entry => {
+		( entry.unsupported || [] ).forEach( unsupported => {
+			seen.add( createStoreSelectorUnsupportedKey( entry.componentName, unsupported ) );
+		} );
+	} );
+
+	records.forEach( ( record ) => {
+		const unsupported = record.unsupported;
+		const key = createStoreSelectorUnsupportedKey( record.componentName, unsupported );
+		if ( seen.has( key ) ) {
+			return;
+		}
+		seen.add( key );
+		unsupportedEntries.push( {
+			componentName: record.componentName,
+			unsupported: [ unsupported ],
+		} );
+	} );
+}
+
+function createStoreSelectorUnsupportedKey( componentName, unsupported = {} ) {
+	return [
+		componentName,
+		unsupported.kind || '',
+		unsupported.propName || '',
+		( unsupported.sourcePaths || [] ).join( ',' ),
+		unsupported.message || '',
+	].join( '|' );
+}
+
+function normalizeStoreSelectorSegments( segments ) {
+	if ( typeof segments === 'string' ) {
+		return segments.split( '.' ).filter( Boolean );
+	}
+	if ( ! Array.isArray( segments ) ) {
+		return [];
+	}
+	return segments.flatMap( segment => String( segment ).split( '.' ).filter( Boolean ) );
+}
+
+function segmentsStartWith( segments, prefix ) {
+	return prefix.length > 0 &&
+		prefix.every( ( segment, index ) => segments[ index ] === segment );
+}
+
+function stringifyStoreSelectorSegments( segments = [] ) {
+	return segments.join( '.' );
+}
+
+function createStoreSelectorSeedAliasKey( seedAlias ) {
+	return [
+		seedAlias.localName,
+		seedAlias.memberName || '',
+		( seedAlias.segments || [] ).join( '.' ),
+		( seedAlias.declarationSegments || [] ).join( '.' ),
+		seedAlias.dynamicRoot ? 'dynamic-root' : '',
+		seedAlias.propName || '',
+	].join( '|' );
+}
+
+function getTopLevelComponentPaths( programPath, types ) {
+	const components = new Map();
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		const component = getTopLevelComponentPath( childPath, types );
+		if ( ! component ) {
+			return;
+		}
+
+		components.set( component.name, component.path );
+	} );
+	return components;
 }
 
 module.exports = templateVarsVisitor;

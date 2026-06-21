@@ -15,7 +15,7 @@ const filePath = pathToFileURL( __dirname ).href;
 module.exports = ( babel, config ) => {
 	// Creat custom import template for injecting language functions into components.
 	const buildImport = babel.template(`
-		import { getLanguageList, getLanguageReplace, getLanguageControl, registerLanguage, getLanguageString } from "${ filePath }/language/index.js";
+		import { getLanguageList, getLanguageReplace, getLanguageControl, getLanguageString, createTemplateRootDescriptor, getTemplateRootPathArg } from "${ filePath }/language/index.js";
 	`);
 	const languageImportDeclaration = buildImport();
 	const pluginPathURL = pathToFileURL( __dirname ).href;
@@ -54,7 +54,11 @@ module.exports = ( babel, config ) => {
 			Program(path, state) {
 				const root = path;
 				// The main plugin visitor.
-				path.traverse( templateVarsVisitor( babel, config ) );
+				const visitorResult = templateVarsVisitor( babel, config );
+				path.traverse( visitorResult.visitor || visitorResult );
+				if ( typeof visitorResult.processProgram === 'function' ) {
+					visitorResult.processProgram( path, state );
+				}
 				
 				if ( tidyOnly ) {
 					return;

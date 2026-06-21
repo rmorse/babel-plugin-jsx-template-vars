@@ -248,6 +248,149 @@ I think I mentioned that there are **significant limitations** with the differen
 
 [More information is being added to the docs, currently on our github Wiki](https://github.com/rmorse/babel-plugin-jsx-template-vars/wiki).
 
+## Experimental store selectors
+
+The `experimentalStoreSelectors` option is an active experiment for deriving
+template variables from a statically traceable store selector instead of manual
+`templateVars` declarations. It is intended for review/CI use with
+`strict: true` so unsupported boundaries fail loudly.
+
+```jsx
+import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+const App = () => {
+    const hero = useStoreSelector((state) => state.hero);
+    return <Header hero={ hero } />;
+};
+```
+
+Same-file tracing is enabled directly:
+
+```js
+plugins: [
+    [ 'babel-plugin-jsx-template-vars', {
+        experimentalStoreSelectors: true,
+        strict: true,
+    } ],
+]
+```
+
+Cross-file tracing uses a prepass manifest. The filesystem wrapper is
+experimental and shape-agnostic. It supports the current static import graph
+surface, including relative imports, supported barrels/namespace edges, explicit
+resolver aliases, and simple `tsconfig.json` / `jsconfig.json`
+`compilerOptions.baseUrl` + trailing-wildcard `paths` mappings such as
+`@/* -> src/*`. It walks and reads matching project files synchronously when the
+manifest is created; it does not provide caching, invalidation, watch mode,
+package `exports`, workspace package maps, or bundler integration yet:
+
+```js
+const {
+    createStoreSelectorBabelOptions,
+    createStoreSelectorProjectManifest,
+} = require('babel-plugin-jsx-template-vars/store-selector-project');
+
+const manifest = createStoreSelectorProjectManifest({
+    rootDir: process.cwd(),
+});
+
+const pluginOptions = createStoreSelectorBabelOptions(manifest, {
+    language: 'handlebars',
+    strict: true,
+    experimentalStoreSelectors: {
+        debug: true,
+    },
+});
+```
+
+### Initial store data
+
+The store-selector experiment treats `useStoreSelector((state) => ...)` as a
+static data-contract marker for the template build. The Babel transform does
+not need real initial store data in order to compile templates; it reads the
+selector paths from source code and emits Handlebars/PHP paths against the same
+plain object shape.
+
+Recommended setup:
+
+- define one plain "template data" shape for the app, for example
+  `{ hero, products, article, catalog }`
+- use selectors only to declare paths into that shape
+- seed previews, tests, Storybook, PHP, or server renderers with a plain object
+  that matches the same shape
+- keep `strict: true` and `debug: true` in review/CI so unsupported paths fail
+  loudly
+
+Example template data fixture:
+
+```js
+const templateData = {
+    hero: {
+        title: 'Summer collection',
+        status: 'published',
+    },
+    products: [
+        { id: 'a', name: 'Tote' },
+        { id: 'b', name: 'Cap' },
+    ],
+};
+```
+
+Selectors should reference that shape:
+
+```jsx
+const hero = useStoreSelector((state) => state.hero);
+const products = useStoreSelector((state) => state.products);
+```
+
+Generated Handlebars/PHP output then expects the renderer to receive equivalent
+data at render time. For example, `hero.title` compiles to `{{hero.title}}` in
+Handlebars or `$data['hero']['title']` in PHP.
+
+The package-scoped runtime helper is intentionally minimal:
+
+```js
+const { useStoreSelector } = require('babel-plugin-jsx-template-vars/store');
+
+useStoreSelector((state) => state.hero.title, templateData); // "Summer collection"
+useStoreSelector((state) => state.hero.title); // undefined placeholder
+```
+
+Use this helper as an experiment marker or test utility, not as a full app
+store. For a production app store such as Redux, Zustand, or an app-owned
+selector hook, keep the runtime provider/store as normal and configure the
+transform to recognize the app-owned selector hook when needed. The template
+contract should still be the plain serializable data object that the final
+template renderer will receive.
+
+Avoid seeding selector-derived data into mutable React state/ref/callback hooks
+for template output. Those flows are runtime state, not static template data,
+and the experiment intentionally fails them closed.
+
+Supported static subsets include selector object roots, scalar/control paths,
+lists and nested lists, static optional member chains such as `hero?.title`,
+function declaration components, default imports, named/default-as-named
+barrels, namespace member components, transparent `memo`/`React.memo` wrappers,
+direct `children` passthrough, supported list children, inline object-literal
+scalar spreads, and transparent hook summaries through supported
+direct/barrel/namespace/alias imports. Dynamic components, HOCs, render props,
+arbitrary spreads, unconfigured package/workspace imports, generic context
+tracing, and shape-polymorphic output remain fail-closed boundaries.
+
+Path-polymorphic object roots and list-relative reuse use two different
+mechanisms. Object roots such as `<Header hero={ homeHero } />` use parent
+callsite descriptors plus child-relative discovery. Compatible list-relative
+reuse, such as `product={ product }` inside different `.map()` roots, shares a
+child-relative seed shape through `declarationSegments` so the parent still owns
+the list wrapper and PHP context depth.
+
+Ambiguous multi-source selector flows that could produce partial or empty
+templates hard-error by default, even when warnings are suppressed. As new
+static shapes become supported, they should be paired with fail-closed fixtures
+for the nearest unsupported shape so false-positive hard errors are caught early.
+
 ## Caveats
 
 ### This is currently experimental
@@ -270,4 +413,3 @@ mixed object/list paths such as `catalog.sections[].products[].badges[].label`.
 
 Each component still owns its own `templateVars` contract; nested declarations
 are not inferred automatically across component boundaries.
-

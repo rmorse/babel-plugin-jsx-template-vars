@@ -26,7 +26,14 @@ class ControlController {
 	}
 	updateTernaryMemberConditions( path ) {
 		const { types } = this.babel;
-		if ( types.isMemberExpression( path.parentPath?.node ) && path.parentPath.node.object === path.node ) {
+		if (
+			(
+				types.isMemberExpression( path.parentPath?.node ) ||
+				( typeof types.isOptionalMemberExpression === 'function' && types.isOptionalMemberExpression( path.parentPath?.node ) ) ||
+				path.parentPath?.node?.type === 'OptionalMemberExpression'
+			) &&
+			path.parentPath.node.object === path.node
+		) {
 			return;
 		}
 

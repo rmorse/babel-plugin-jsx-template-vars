@@ -2,11 +2,25 @@
 const {
 	isJSXElementComponent,
 	isJSXElementInput,
+	getMemberExpressionSegments,
 } = require('./utils');
 
 const { ReplaceController } = require('./controllers/replace');
 const { ListController } = require('./controllers/list');
 const { ControlController } = require('./controllers/control');
+const diagnostics = require('./diagnostics');
+const {
+	getComponentFirstParamPath,
+	getComponentFunctionPath,
+} = require('./component-adapter');
+
+const templateArtifactHelpers = new Set([
+	'getLanguageReplace',
+	'getLanguageList',
+	'getLanguageControl',
+	'getTemplateRootPathArg',
+	'createTemplateRootDescriptor',
+]);
 /**
  * Generate new uids for the provided scope.
  * 
@@ -34,6 +48,17 @@ const isHookCall = (callee, types) => {
 	return types.isIdentifier(callee) && hookPattern.test(callee.name);
 };
 
+function normalizeExpressionBodiedArrowComponent( componentPath, types ) {
+	const component = getComponentFunctionPath( componentPath, types )?.node;
+	if ( ! types.isArrowFunctionExpression( component ) || types.isBlockStatement( component.body ) ) {
+		return;
+	}
+
+	component.body = types.blockStatement([
+		types.returnStatement( component.body ),
+	]);
+}
+
 const templateVarsController = {
 	babel: {},
 	vars: {
@@ -46,6 +71,11 @@ const templateVarsController = {
 	init: function (templateVars, componentName, componentPath, babel, config = {}) {
 		this.babel = babel;
 		const { types, parse } = babel;
+		normalizeExpressionBodiedArrowComponent( componentPath, types );
+		const componentFunctionPath = getComponentFunctionPath( componentPath, types );
+		if ( ! componentFunctionPath ) {
+			return;
+		}
 		// Get the three types of template vars.
 		const { replace: replaceVars, control: controlVars, list: listVars } = templateVars;
 		const sharedVarMap = {};
@@ -79,6 +109,11 @@ const templateVarsController = {
 			listMetadata: templateVars.listMetadata || [],
 			scalarMetadata: templateVars.scalarMetadata || [],
 		}
+		const generatedTemplateArtifactNames = new Set([
+			...Object.values(this.vars.replace.mapped),
+			...Object.values(this.vars.control.mapped),
+			...Object.values(this.vars.list.mapped),
+		]);
 
 
 		// All the list variable names we need to look for in JSX expressions
@@ -86,12 +121,12 @@ const templateVarsController = {
 		// Start the main traversal of component
 
 		// TODO - we should look through the params and apply the same logic...
-		const componentParam = componentPath.node.declarations[0].init.params[0];
+		const componentParam = componentFunctionPath.node.params[0];
 		let propsName = null;
 		// If the param is an object pattern, we want to add `__context__` as a property to it.
-		if (componentPath.node.declarations[0].init.params.length === 0) {
+		if (componentFunctionPath.node.params.length === 0) {
 			// Then there are no params, so lets add an object pattern with the generated props.
-			componentPath.node.declarations[0].init.params.push(types.objectPattern([
+			componentFunctionPath.node.params.push(types.objectPattern([
 				types.objectProperty(types.identifier('__context__'), types.identifier('__context__'), false, true),
 				types.objectProperty(types.identifier('__config__'), types.identifier('__config__'), false, true),
 			]));
@@ -116,9 +151,10 @@ const templateVarsController = {
 		const replaceController = new ReplaceController(this.vars.replace, this.contextIdentifier.name, babel, listController);
 		const controlController = new ControlController(this.vars.control, this.contextIdentifier.name, babel, listController);
 		if (types.isObjectPattern(componentParam)) {
-			const componentParamPath = componentPath.get('declarations.0.init.params.0');
+			const componentParamPath = getComponentFirstParamPath( componentPath, types );
 			listController.registerPatternAliases(componentParam, [], componentParamPath);
 		}
+		listController.registerExternalPathAliases( config.storeSelectorAliases || [] );
 
 
 		// Prevent infinite recursion by adding early return statements.
@@ -177,6 +213,8 @@ const templateVarsController = {
 					// Add config attribute
 					const configAttribute = types.jSXAttribute(types.jSXIdentifier('__config__'), types.jSXExpressionContainer(types.identifier(self.recursionIdentifier.name)));
 					subPath.node.openingElement.attributes.push(configAttribute);
+
+					injectDynamicRootDescriptors(subPath, listController, config, types);
 				}
 
 				/**
@@ -321,7 +359,74 @@ const templateVarsController = {
 
 		});
 
+		cleanupUnusedTemplateArtifactDeclarations(componentPath, types, generatedTemplateArtifactNames);
+
 	}
+}
+
+function cleanupUnusedTemplateArtifactDeclarations(componentPath, types, generatedTemplateArtifactNames) {
+	const functionPath = getComponentFunctionPath( componentPath, types );
+	if (!functionPath?.scope || generatedTemplateArtifactNames.size === 0) {
+		return;
+	}
+
+	let removed = false;
+	do {
+		removed = false;
+		functionPath.scope.crawl();
+		const declarationsToRemove = [];
+
+		functionPath.traverse({
+			VariableDeclarator(declaratorPath) {
+				const id = declaratorPath.node.id;
+				if (!types.isIdentifier(id) || !generatedTemplateArtifactNames.has(id.name)) {
+					return;
+				}
+
+				if (!hasTemplateArtifactInitializer(declaratorPath, types)) {
+					return;
+				}
+
+				const binding = declaratorPath.scope.getBinding(id.name);
+				if (binding && binding.referencePaths.length === 0) {
+					declarationsToRemove.push(declaratorPath);
+				}
+			},
+		});
+
+		declarationsToRemove.forEach((declaratorPath) => {
+			if (declaratorPath.removed) {
+				return;
+			}
+
+			const declarationPath = declaratorPath.parentPath;
+			if (declarationPath.node.declarations.length === 1) {
+				declarationPath.remove();
+			} else {
+				declaratorPath.remove();
+			}
+			removed = true;
+		});
+	} while (removed);
+}
+
+function hasTemplateArtifactInitializer(declaratorPath, types) {
+	const initPath = declaratorPath.get('init');
+	if (!initPath.node) {
+		return false;
+	}
+
+	let found = false;
+	initPath.traverse({
+		CallExpression(callPath) {
+			const callee = callPath.node.callee;
+			if (types.isIdentifier(callee) && templateArtifactHelpers.has(callee.name)) {
+				found = true;
+				callPath.stop();
+			}
+		},
+	});
+	return found;
 }
 
 function getConditionalReturn(recursionIdentifier, componentName, types) {
@@ -337,3 +442,83 @@ function getConditionalReturn(recursionIdentifier, componentName, types) {
 
 
 module.exports = templateVarsController;
+
+function injectDynamicRootDescriptors(path, listController, config, types) {
+	const elementName = getJSXElementName(path.node.openingElement?.name, types);
+	const rootProps = getDynamicRootPropsForComponent(config, elementName);
+	if (rootProps.size === 0) {
+		return;
+	}
+
+	path.get('openingElement.attributes').forEach((attributePath) => {
+		const attribute = attributePath.node;
+		const propName = attribute.name?.name;
+		if (!rootProps.has(propName) || !types.isJSXExpressionContainer(attribute.value)) {
+			return;
+		}
+
+		const expressionPath = attributePath.get('value.expression');
+		if (isLocalDynamicRootExpression(expressionPath.node, config, types)) {
+			return;
+		}
+
+		const segments = listController.resolveAliasedExpressionSegments(expressionPath.node, expressionPath);
+		if (!segments) {
+			diagnostics.error(
+				expressionPath,
+				`Dynamic root prop "${propName}" for child component "${elementName}" must receive a selector-derived or descriptor-derived value.`
+			);
+		}
+
+		const descriptorSegments = segments;
+		expressionPath.replaceWith(types.callExpression(
+			types.identifier('createTemplateRootDescriptor'),
+			[
+				types.arrayExpression(descriptorSegments.map(segment => types.stringLiteral(segment))),
+				types.arrayExpression(descriptorSegments.map(segment => types.stringLiteral(segment))),
+			]
+		));
+	});
+}
+
+function getJSXElementName(name, types) {
+	if (!name) {
+		return null;
+	}
+	if (types.isJSXIdentifier(name)) {
+		return name.name;
+	}
+	if (types.isJSXMemberExpression(name)) {
+		const objectName = getJSXElementName(name.object, types);
+		const propertyName = getJSXElementName(name.property, types);
+		return objectName && propertyName ? `${objectName}.${propertyName}` : null;
+	}
+	return null;
+}
+
+function getDynamicRootPropsForComponent(config, componentName) {
+	const propsByComponent = config.dynamicRootPropsByComponent || {};
+	const props = propsByComponent[componentName];
+	return new Set(Array.isArray(props) ? props : []);
+}
+
+function getExpressionSegmentsForDescriptor(expression, types) {
+	if (types.isIdentifier(expression)) {
+		return [expression.name];
+	}
+
+	return getMemberExpressionSegments(expression, types);
+}
+
+function isLocalDynamicRootExpression(expression, config, types) {
+	const segments = getExpressionSegmentsForDescriptor(expression, types);
+	if (!segments) {
+		return false;
+	}
+
+	return (config.dynamicRootAliases || []).some((alias) => {
+		const rootSegments = [alias.localName, alias.memberName].filter(Boolean);
+		return rootSegments.length === segments.length &&
+			rootSegments.every((segment, index) => segment === segments[index]);
+	});
+}

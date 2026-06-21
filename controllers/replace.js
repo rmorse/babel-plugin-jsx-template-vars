@@ -5,13 +5,14 @@ const {
 	getMemberExpressionSegments,
 } = require( '../utils' );
 
-function createTemplateArg( varName, varConfig, types ) {
+function createTemplateArg( varName, varConfig, pathResolver = null ) {
 	const segments = Array.isArray( varConfig.segments ) ? varConfig.segments : null;
-	return {
+	const arg = {
 		type: segments && segments.length > 1 ? 'path' : 'identifier',
 		value: varName,
 		segments,
 	};
+	return pathResolver ? pathResolver.resolveTemplateArg( arg, null ) : arg;
 }
 
 function isPartialMemberExpression( path, types ) {
@@ -45,7 +46,7 @@ class ReplaceController {
 				types.identifier( 'getLanguageReplace' ),
 				[
 					types.stringLiteral( 'format' ),
-					getArgObjectExpression( createTemplateArg( varName, varConfig, types ), types ),
+					getArgObjectExpression( createTemplateArg( varName, varConfig, self.pathResolver ), types ),
 					types.identifier( self.contextName ),
 				]
 			);
@@ -68,7 +69,7 @@ class ReplaceController {
 		if ( replacementPath ) {
 			// Make sure we only replace identifiers that are not props and also that
 			// they are not variable declarations.
-			const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'VariableDeclarator', 'ArrayPattern', 'AssignmentPattern' ];
+			const excludeTypes = [ 'ObjectProperty', 'MemberExpression', 'OptionalMemberExpression', 'VariableDeclarator', 'ArrayPattern', 'AssignmentPattern' ];
 			if ( path.parentPath.node && ! excludeTypes.includes( path.parentPath.node.type ) ) {
 				path.node.name = this.vars.mapped[ replacementPath ];
 			}

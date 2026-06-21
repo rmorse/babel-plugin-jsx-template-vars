@@ -67,6 +67,21 @@ describe('template vars plugin', () => {
 		expect(output).toContain("{{#if_equal status 'ready'}}<strong>Ready</strong>{{/if_equal}}");
 	});
 
+	it('renders expression-bodied arrow components with flat templateVars', async () => {
+		const source = `
+			const Person = ({ name }) => <h1>{ name }</h1>;
+			Person.templateVars = [ 'name' ];
+
+			module.exports = { Person };
+		`;
+
+		const { output } = await renderTemplateFixture('handlebars', source, 'Person', {
+			name: 'Runtime name',
+		});
+
+		expect(output).toBe('<h1>{{name}}</h1>');
+	});
+
 	it('renders PHP output for replacement, list, and control vars', async () => {
 		const { output } = await renderTemplateFixture('php', COMPLEX_COMPONENT, 'App', {
 			title: 'Ignored',
