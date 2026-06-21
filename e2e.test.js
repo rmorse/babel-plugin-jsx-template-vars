@@ -67,7 +67,8 @@ function expectNoOrphanedTemplateArtifacts(code) {
 
 const fixtureNames = fs.readdirSync(e2eFixturesDir)
 	.filter((name) => fs.statSync(path.join(e2eFixturesDir, name)).isDirectory());
-const moduleFixtureNames = fixtureNames.filter(hasModuleFixture);
+const moduleFixtureNames = fixtureNames.filter((name) => hasModuleFixture(name) && ! hasExpectedErrorFixture(name));
+const moduleFailClosedFixtureNames = fixtureNames.filter((name) => hasModuleFixture(name) && hasExpectedErrorFixture(name));
 const selectorFailClosedFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name) && hasExpectedErrorFixture(name));
 const selectorFixtureNames = fixtureNames.filter((name) => name.startsWith('store-selector-') && ! hasModuleFixture(name) && ! hasExpectedErrorFixture(name));
 const stableFixtureNames = fixtureNames.filter((name) => ! name.startsWith('store-selector-') && ! hasModuleFixture(name));
@@ -157,6 +158,27 @@ describe('e2e template output fixtures', () => {
 			(entry.callsiteContexts || []).length > 0 ||
 			Object.keys(entry.childRelativeDiscovery || {}).length > 0
 		))).toBe(true);
+	});
+
+	it.each(moduleFailClosedFixtureNames.flatMap((fixtureName) => (
+		languages.map((language) => [ fixtureName, language ])
+	)))('%s fails closed for unsupported cross-file selector output in %s', async (fixtureName, language) => {
+		const fixtureConfig = readJsonFixture(fixtureName, 'fixture.json');
+		const files = readModuleFixtureFiles(fixtureName);
+		const entryFilename = path.join(e2eFixturesDir, fixtureName, 'modules', fixtureConfig.entry);
+		const expectedError = readFixture(fixtureName, 'expected-error.txt').trim();
+
+		await expect(async () => {
+			const manifest = createStoreSelectorCrossFileManifest(files);
+			await renderTemplateModules(language, files, entryFilename, fixtureConfig.exportName, {}, {
+				experimentalStoreSelectors: {
+					crossFile: true,
+					debug: true,
+					__crossFileManifest: manifest,
+				},
+				warnOnUnsupported: false,
+			});
+		}).rejects.toThrow(expectedError);
 	});
 
 	it.each(Array.from(selectorParityFixtures.entries()).flatMap(([ selectorFixtureName, flatFixtureName ]) => (
