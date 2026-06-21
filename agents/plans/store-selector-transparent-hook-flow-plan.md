@@ -73,6 +73,164 @@ guard: if a manifest contains a hook summary for a local binding but the per-fil
 transform cannot re-bind that hook call, the transform should report a
 diagnostic or hard-error instead of silently dropping the summary.
 
+## Next Slice: Static Custom Hook Flow Expansion
+
+Before returning fully to the broader drop-in import/export resolver work, add a
+focused hook expansion slice for natural custom-hook shapes that remain
+statically provable. This slice should not add new package/barrel/namespace
+resolution; it should use whatever direct same-file and currently-supported
+cross-file hook resolution already exists.
+
+The principle is:
+
+```txt
+custom hook support is allowed when the hook body can be summarized without
+executing application logic.
+```
+
+The hook is not special because it is called `use*`; it is special only when the
+collector can prove either a value-flow summary or a render-flow summary.
+
+### A. Value-Returning Custom Hooks
+
+Value-returning hooks should be summarized into the same expression-info shape
+used by selectors, aliases, `useMemo`, and existing hook summaries:
+
+```jsx
+function useHeroTitle(hero) {
+  return hero.title;
+}
+
+const title = useHeroTitle(hero);
+```
+
+Summary:
+
+```txt
+useHeroTitle($0) -> $0.title
+```
+
+Extend support for static variants where the proof remains local:
+
+- nested static member paths
+- chained transparent hooks
+- object-root identity returns
+- object returns with statically derived members
+- destructuring and member access from object returns
+- static object spreads into child props
+- compatible list-root/list-relative returns
+- optional static member chains
+- same-file and already-supported direct cross-file hook calls
+
+Fail closed for value hooks when the return is not statically equivalent to a
+selector-derived value:
+
+- conditionals or multiple returns unless a future proof can show equivalent
+  selector paths in every branch
+- mutation, reassignment, or writes to captured values
+- state/ref/effect/lifecycle/callback-driven values
+- computed keys or dynamic member access
+- opaque helper calls
+- runtime object/array construction that cannot be summarized as a static
+  member map
+- tuple/array returns until positional contracts are explicitly designed
+
+### B. JSX-Returning Custom Hooks
+
+Some hooks are render helpers:
+
+```jsx
+function useHeroHeader(hero) {
+  return <Header hero={ hero } />;
+}
+
+const header = useHeroHeader(hero);
+return <section>{ header }</section>;
+```
+
+When the hook returns JSX that is statically analyzable, treat it like a
+component/render summary rather than as arbitrary runtime JSX:
+
+- analyze the returned JSX with the same child prop tracing used for components
+- propagate selector-derived hook arguments into the returned JSX callsites
+- support returned JSX fragments and one static JSX expression
+- support returned child components, attributes, controls, and list-relative
+  children only when the existing component tracing rules can prove them
+- preserve HBS/PHP parity and no-leak/no-orphan checks
+
+Fail closed for JSX-returning hooks when render flow is dynamic:
+
+- conditional JSX returns
+- multiple return statements
+- arrays of JSX before an explicit list/render contract exists
+- callbacks returning JSX
+- render props or function-as-child
+- JSX produced through helper calls
+- runtime component selection or computed JSX tag names
+- hooks that mix JSX return with state/ref/effect-driven selector data
+
+### C. Shared Summary Contract
+
+Both value-flow and render-flow summaries must stay out of controllers. They
+should lower into collector/manifest data that the existing template machinery
+already understands:
+
+```txt
+hookSummary
+  hookName
+  returnKind: "value" | "object-map" | "jsx"
+  params[]
+  segments?
+  declarationSegments?
+  dynamicRoot?
+  dynamicRootSegments?
+  objectMembers?
+  jsxReturn?
+  childPropTraces?
+  childPropSeedTraces?
+  unsupportedReason?
+```
+
+For JSX-returning hooks, prefer a summary that records the returned JSX's child
+prop traces and seed traces rather than generating component clones or pushing
+hook logic into controllers.
+
+### D. Gates For The Next Slice
+
+Positive gates:
+
+- same-file value hook with nested member return
+- same-file value hook chaining another transparent hook
+- object-root hook result passed to a child descriptor
+- object-return hook result spread into a child with object-root and scalar props
+- list-root hook result mapped in JSX
+- JSX-returning hook with `<Header hero={ hero } />`
+- JSX-returning hook with fragment return
+- JSX-returning hook called from a component that has its own selector values
+- HBS/PHP parity for value and JSX hook returns
+
+Fail-closed gates:
+
+- JSX-returning hook with conditional return
+- JSX-returning hook with helper-generated JSX
+- hook returning an array/tuple of JSX or values
+- hook returning a callback
+- hook with state/ref/effect/callback data in the returned value/JSX
+- hook with computed member paths
+- hook result used after reassignment
+- cross-file hook import skipped by the current resolver and then used in output
+
+Debug gates:
+
+- summary records identify `returnKind`
+- value hook callsites expose compiled paths
+- JSX hook summaries expose child component, prop, source path, and skip reason
+- unsupported hook summaries remain visible even with warnings suppressed
+
+This next slice should be reviewed as hook-flow work. Package aliases, barrels,
+namespace hook imports, and wrong-kind import diagnostics remain owned by the
+broader drop-in resolver plan.
+
 ## Executive Summary
 
 The current experiment recognizes selector sources directly:
@@ -1281,6 +1439,10 @@ Fixture should include:
 5. Phase 5 object return contracts.
 6. Phase 6 cross-file transparent hooks.
 7. Phase 7 final hook fixture matrix.
+8. Next slice: static custom hook flow expansion for deeper value-returning
+   hooks and JSX-returning render-helper hooks, without adding new resolver
+   breadth.
+9. Return to the broader drop-in import/export resolver track.
 
 Rationale:
 
@@ -1292,6 +1454,11 @@ Rationale:
 - Object return contracts are common, but they should build on scalar/object-root
   hook return support.
 - Cross-file hooks should reuse the proven manifest/export resolver.
+- JSX-returning hooks are render-flow summaries. They should be proven while
+  the hook summary model is fresh, before package/barrel/namespace resolver
+  breadth adds more graph complexity.
+- Resolver breadth for hook imports should still land in the broader drop-in
+  resolver plan, not as hook-specific resolver code.
 
 ## Non-Goals
 
@@ -1303,6 +1470,8 @@ Rationale:
 - Arbitrary HOC or helper execution
 - Inferring selector hooks by local name only
 - Supporting every library hook
+- Package/barrel/namespace hook resolution outside the shared drop-in resolver
+- Dynamic JSX-producing hooks that require executing application logic
 
 ## Review Questions
 
@@ -1344,3 +1513,9 @@ Rationale:
 18. Should cross-file hook summaries reuse the component manifest pass, or run as
    a separate prepass phase?
 19. Are there common natural hook patterns missing from this plan?
+20. Should JSX-returning hooks be summarized as render-flow, or should authors
+    be required to convert those helpers into components?
+21. Is the proposed value-flow vs render-flow split sufficient to support common
+    custom hooks without executing app logic?
+22. Are arrays/tuples of returned values or JSX worth a separate positional
+    contract, or should they remain fail-closed?
