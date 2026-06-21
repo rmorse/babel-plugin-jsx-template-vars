@@ -302,6 +302,70 @@ const pluginOptions = createStoreSelectorBabelOptions(manifest, {
 });
 ```
 
+### Initial store data
+
+The store-selector experiment treats `useStoreSelector((state) => ...)` as a
+static data-contract marker for the template build. The Babel transform does
+not need real initial store data in order to compile templates; it reads the
+selector paths from source code and emits Handlebars/PHP paths against the same
+plain object shape.
+
+Recommended setup:
+
+- define one plain "template data" shape for the app, for example
+  `{ hero, products, article, catalog }`
+- use selectors only to declare paths into that shape
+- seed previews, tests, Storybook, PHP, or server renderers with a plain object
+  that matches the same shape
+- keep `strict: true` and `debug: true` in review/CI so unsupported paths fail
+  loudly
+
+Example template data fixture:
+
+```js
+const templateData = {
+    hero: {
+        title: 'Summer collection',
+        status: 'published',
+    },
+    products: [
+        { id: 'a', name: 'Tote' },
+        { id: 'b', name: 'Cap' },
+    ],
+};
+```
+
+Selectors should reference that shape:
+
+```jsx
+const hero = useStoreSelector((state) => state.hero);
+const products = useStoreSelector((state) => state.products);
+```
+
+Generated Handlebars/PHP output then expects the renderer to receive equivalent
+data at render time. For example, `hero.title` compiles to `{{hero.title}}` in
+Handlebars or `$data['hero']['title']` in PHP.
+
+The package-scoped runtime helper is intentionally minimal:
+
+```js
+const { useStoreSelector } = require('babel-plugin-jsx-template-vars/store');
+
+useStoreSelector((state) => state.hero.title, templateData); // "Summer collection"
+useStoreSelector((state) => state.hero.title); // undefined placeholder
+```
+
+Use this helper as an experiment marker or test utility, not as a full app
+store. For a production app store such as Redux, Zustand, or an app-owned
+selector hook, keep the runtime provider/store as normal and configure the
+transform to recognize the app-owned selector hook when needed. The template
+contract should still be the plain serializable data object that the final
+template renderer will receive.
+
+Avoid seeding selector-derived data into mutable React state/ref/callback hooks
+for template output. Those flows are runtime state, not static template data,
+and the experiment intentionally fails them closed.
+
 Supported static subsets include selector object roots, scalar/control paths,
 lists and nested lists, static optional member chains such as `hero?.title`,
 direct `children` passthrough, supported list children, and inline
