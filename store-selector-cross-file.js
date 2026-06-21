@@ -410,9 +410,6 @@ function getFileExports( programPath, componentPaths, types ) {
 function getFileHookExports( programPath, summariesByName, types ) {
 	const exports = new Map();
 	summariesByName.forEach( ( summary, hookName ) => {
-		if ( summary.returnKind === 'jsx' ) {
-			return;
-		}
 		exports.set( hookName, {
 			exportedName: hookName,
 			hookName,
@@ -425,11 +422,7 @@ function getFileHookExports( programPath, summariesByName, types ) {
 		const node = childPath.node;
 		if ( types.isExportDefaultDeclaration( node ) ) {
 			const declaration = node.declaration;
-			if (
-				types.isIdentifier( declaration ) &&
-				summariesByName.has( declaration.name ) &&
-				summariesByName.get( declaration.name ).returnKind !== 'jsx'
-			) {
+			if ( types.isIdentifier( declaration ) && summariesByName.has( declaration.name ) ) {
 				exports.set( 'default', {
 					exportedName: 'default',
 					hookName: declaration.name,
@@ -440,8 +433,7 @@ function getFileHookExports( programPath, summariesByName, types ) {
 			if (
 				types.isFunctionDeclaration( declaration ) &&
 				declaration.id &&
-				summariesByName.has( declaration.id.name ) &&
-				summariesByName.get( declaration.id.name ).returnKind !== 'jsx'
+				summariesByName.has( declaration.id.name )
 			) {
 				exports.set( 'default', {
 					exportedName: 'default',
@@ -465,12 +457,7 @@ function getFileHookExports( programPath, summariesByName, types ) {
 
 			const localName = getExportSpecifierName( specifier.local );
 			const exportedName = getExportSpecifierName( specifier.exported );
-			if (
-				localName &&
-				exportedName &&
-				summariesByName.has( localName ) &&
-				summariesByName.get( localName ).returnKind !== 'jsx'
-			) {
+			if ( localName && exportedName && summariesByName.has( localName ) ) {
 				exports.set( exportedName, {
 					exportedName,
 					hookName: localName,
@@ -814,6 +801,21 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 
 			const targetRecord = records.get( targetFilename );
 			const resolvedHook = resolveImportedHook( importInfo, targetRecord );
+			if ( resolvedHook?.unsupported ) {
+				const diagnostic = {
+					kind: resolvedHook.kind || 'unsupported-hook-import',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+					targetFilename,
+					message: resolvedHook.message || `Store selector cross-file hook tracing could not resolve "${ importInfo.localName }" from "${ importInfo.source }" to a supported transparent hook export.`,
+				};
+				diagnostics.push( diagnostic );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo, targetFilename ) );
+				return;
+			}
+
 			if ( ! resolvedHook ) {
 				const diagnostic = {
 					kind: 'unsupported-hook-import',
@@ -855,6 +857,13 @@ function resolveImportedHook( importInfo, targetRecord ) {
 
 	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
 	const exportInfo = targetRecord.hookExports?.get( exportedName );
+	if ( exportInfo?.summary?.returnKind === 'jsx' ) {
+		return {
+			unsupported: true,
+			kind: 'unsupported-cross-file-jsx-hook',
+			message: `Store selector cross-file hook tracing resolved "${ importInfo.localName }" to JSX-returning hook "${ exportInfo.hookName }", but cross-file JSX hook render summaries are deferred to the shared import/export resolver.`,
+		};
+	}
 	return exportInfo?.summary ? exportInfo : null;
 }
 

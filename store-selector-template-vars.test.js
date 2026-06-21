@@ -1295,6 +1295,34 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<section><h1>{{hero.title}}</h1><p>{{hero.kicker}}</p></section>');
 	});
 
+	it('supports JSX-returning hook fragments for php', async () => {
+		const source = `
+			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+			const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+
+			function useHeroHeader(hero) {
+				return (
+					<>
+						<Header hero={ hero } />
+						<p>{ hero.kicker }</p>
+					</>
+				);
+			}
+
+			const App = () => {
+				const hero = useStoreSelector((state) => state.hero);
+				return <section>{ useHeroHeader(hero) }</section>;
+			};
+
+			module.exports = { App };
+		`;
+
+		const { output } = await renderTemplateFixture('php', source, 'App', {}, selectorOptions);
+
+		expect(normalizeTemplateOutput(output)).toBe("<section><h1><?php echo $data['hero']['title']; ?></h1><p><?php echo $data['hero']['kicker']; ?></p></section>");
+	});
+
 	it('fails closed for JSX-returning hooks with conditional returns', () => {
 		const source = `
 			import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
@@ -1348,6 +1376,98 @@ describe('experimental store selectors', () => {
 		})).toThrow(/unsupported-hook-body/);
 	});
 
+	const jsxHookFailClosedCases = [
+		{
+			name: 'conditional return',
+			params: 'hero',
+			body: 'return hero.featured ? <Header hero={ hero } /> : null;',
+			args: 'hero',
+		},
+		{
+			name: 'helper-generated jsx',
+			setup: 'const renderHeader = (hero) => <Header hero={ hero } />;',
+			params: 'hero',
+			body: 'return renderHeader(hero);',
+			args: 'hero',
+		},
+		{
+			name: 'render prop',
+			params: 'hero',
+			body: 'return <Wrapper render={() => <Header hero={ hero } />} />;',
+			args: 'hero',
+		},
+		{
+			name: 'function-as-children',
+			params: 'hero',
+			body: 'return <Wrapper>{() => <Header hero={ hero } />}</Wrapper>;',
+			args: 'hero',
+		},
+		{
+			name: 'broad jsx spread',
+			params: 'hero',
+			body: 'return <Header {...hero} />;',
+			args: 'hero',
+		},
+		{
+			name: 'dynamic component param',
+			params: 'hero, Component',
+			body: 'return <Component hero={ hero } />;',
+			args: 'hero, Header',
+		},
+		{
+			name: 'nested function shadowing hook param',
+			params: 'hero',
+			body: 'return <Wrapper render={(hero) => <Header hero={ hero } />} />;',
+			args: 'hero',
+		},
+	];
+	const jsxHookFailClosedForms = [
+		{
+			name: 'const alias',
+			render: call => `const header = ${ call };\n\t\t\t\treturn <section>{ header }</section>;`,
+		},
+		{
+			name: 'direct rendered call',
+			render: call => `return <section>{ ${ call } }</section>;`,
+		},
+	];
+	const jsxHookFailClosedMatrix = jsxHookFailClosedCases.flatMap( testCase => (
+		jsxHookFailClosedForms.flatMap( form => (
+			[ 'handlebars', 'php' ].map( language => [ testCase.name, form.name, language, testCase, form ] )
+		) )
+	) );
+
+	it.each(jsxHookFailClosedMatrix)(
+		'fails closed for JSX-returning hook %s via %s in %s',
+		(_caseName, _formName, language, testCase, form) => {
+			const call = `useHeroHeader(${ testCase.args })`;
+			const source = `
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+				const Wrapper = ({ children, render }) => <aside>{ render ? render() : children }</aside>;
+				${ testCase.setup || '' }
+
+				function useHeroHeader(${ testCase.params }) {
+					${ testCase.body }
+				}
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					${ form.render( call ) }
+				};
+
+				module.exports = { App };
+			`;
+
+			expect(() => transformTemplateVars(source, {
+				language,
+				experimentalStoreSelectors: true,
+				warnOnUnsupported: false,
+			})).toThrow(/unsupported-hook/);
+		}
+	);
+
 	it('fails closed when cross-file JSX-returning hooks are used before resolver support', () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({
@@ -1382,7 +1502,7 @@ describe('experimental store selectors', () => {
 			warnOnUnsupported: false,
 		}, {
 			filename: appFilename,
-		})).toThrow(/unsupported-hook-import/);
+		})).toThrow(/unsupported-cross-file-jsx-hook/);
 	});
 
 	it('fails closed for derived object-return hooks with methods', () => {

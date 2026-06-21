@@ -203,9 +203,12 @@ hookSummary
   unsupportedReason?
 ```
 
-For JSX-returning hooks, prefer a summary that records the returned JSX's child
-prop traces and seed traces rather than generating component clones or pushing
-hook logic into controllers.
+For same-file JSX-returning hooks, inlining before child tracing is the current
+implementation because it lets the existing component/list/control machinery see
+ordinary authored JSX. For future cross-file JSX-returning hooks, prefer a
+summary that records the returned JSX's child prop traces, referenced component
+bindings, and seed traces rather than generating component clones or pushing hook
+logic into controllers.
 
 ### D. Gates For The Next Slice
 

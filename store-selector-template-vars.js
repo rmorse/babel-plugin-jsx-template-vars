@@ -473,7 +473,7 @@ function summarizeDerivedHookReturn( candidate, babel, summariesByBinding ) {
 
 	const paramName = params[ 0 ].name;
 	if ( isJSXHookReturnExpression( returnExpressionPath.node, babel ) ) {
-		if ( jsxReturnContainsUnsupportedDynamicFlow( returnExpressionPath, babel ) ) {
+		if ( jsxReturnContainsUnsupportedDynamicFlow( returnExpressionPath, babel, [ paramName ] ) ) {
 			return null;
 		}
 
@@ -651,7 +651,7 @@ function summarizeHookReturnExpression( candidate, expressionPath, selectorAlias
 	const { types } = babel;
 	const expression = expressionPath.node;
 	if ( isJSXHookReturnExpression( expression, babel ) ) {
-		if ( jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) ) {
+		if ( jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel, [] ) ) {
 			return null;
 		}
 
@@ -712,9 +712,23 @@ function isJSXHookReturnExpression( node, babel ) {
 	return Boolean( babel.types.isJSXElement( node ) || babel.types.isJSXFragment( node ) );
 }
 
-function jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) {
+function jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel, params = [] ) {
+	const { types } = babel;
+	const paramNames = new Set( params );
 	let found = false;
 	expressionPath.traverse( {
+		ArrowFunctionExpression( path ) {
+			found = true;
+			path.stop();
+		},
+		FunctionExpression( path ) {
+			found = true;
+			path.stop();
+		},
+		FunctionDeclaration( path ) {
+			found = true;
+			path.stop();
+		},
 		ConditionalExpression( path ) {
 			found = true;
 			path.stop();
@@ -723,15 +737,25 @@ function jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) {
 			found = true;
 			path.stop();
 		},
+		JSXSpreadAttribute( path ) {
+			found = true;
+			path.stop();
+		},
+		JSXElement( path ) {
+			if ( isUnsupportedJSXHookElementName( path.node.openingElement.name, paramNames, babel ) ) {
+				found = true;
+				path.stop();
+			}
+		},
 		CallExpression( path ) {
 			if ( path.node === expressionPath.node ) {
 				return;
 			}
 			const callee = path.node.callee;
 			if (
-				babel.types.isIdentifier( callee ) ||
+				types.isIdentifier( callee ) ||
 				(
-					babel.types.isMemberExpression( callee ) &&
+					types.isMemberExpression( callee ) &&
 					! callee.computed
 				)
 			) {
@@ -741,6 +765,15 @@ function jsxReturnContainsUnsupportedDynamicFlow( expressionPath, babel ) {
 		},
 	} );
 	return found;
+}
+
+function isUnsupportedJSXHookElementName( name, paramNames, babel ) {
+	const { types } = babel;
+	if ( types.isJSXMemberExpression( name ) || types.isJSXNamespacedName( name ) ) {
+		return true;
+	}
+
+	return Boolean( types.isJSXIdentifier( name ) && paramNames.has( name.name ) );
 }
 
 function summarizeSourceHookObjectMemberExpression( expressionPath, selectorAliases, selectorLocalNames, babel ) {
@@ -2024,7 +2057,17 @@ class StoreSelectorCollector {
 
 				const binding = path.scope.getBinding( path.node.callee.name );
 				const summary = binding ? this.config.storeSelectorHookSummariesByBinding?.get?.( binding.identifier ) : null;
+				const unsupported = binding ? this.config.storeSelectorUnsupportedHookSummariesByBinding?.get?.( binding.identifier ) : null;
 				if ( ! summary || summary.returnKind !== 'jsx' ) {
+					if ( unsupported && this.canInlineJSXHookCall( path ) ) {
+						const selectorSources = this.collectSelectorDerivedSegmentsFromPaths( path.get( 'arguments' ) );
+						if ( selectorSources.length > 0 ) {
+							diagnostics.error(
+								path,
+								`Store selector ${ unsupported.kind || 'unsupported-hook-call' }: JSX-returning hook "${ unsupported.hookName || path.node.callee.name }" cannot be rendered from this unsupported hook body (${ unsupported.reason || 'unsupported hook summary' }).`
+							);
+						}
+					}
 					return;
 				}
 
