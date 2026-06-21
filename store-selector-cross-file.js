@@ -1,9 +1,11 @@
 const path = require( 'path' );
 const babel = require( '@babel/core' );
 const {
+	STORE_SELECTOR_MODULE,
 	collectStoreSelectorImports,
 	collectStoreSelectorChildPropFlows,
 	collectStoreSelectorTemplateVars,
+	collectTransparentHookSummaries,
 	createStoreSelectorDynamicRootAliases,
 	createStoreSelectorSeedAliases,
 } = require( './store-selector-template-vars' );
@@ -19,6 +21,8 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 	const debug = {
 		importEdges: [],
 		seedEdges: [],
+		hookImportEdges: [],
+		skippedHooks: [],
 		callsiteContexts: [],
 		skippedImports: [],
 		skippedFiles: [],
@@ -50,6 +54,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 			const childSeedTracesByComponent = new Map();
 
 			record.componentPaths.forEach( ( componentPath, componentName ) => {
+				const hookSummaryLookup = createRecordHookSummaryLookup( record );
 				const selectorResult = collectStoreSelectorTemplateVars(
 					componentPath,
 					record.selectorImports.localNames,
@@ -59,6 +64,8 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 						storeSelectorComponentNames: componentNames,
 						storeSelectorComponentPaths: componentPaths,
 						storeSelectorSeedAliases: getManifestSeeds( seedAliasesByFile, record.filename, componentName ),
+						storeSelectorHookSummariesByBinding: hookSummaryLookup,
+						storeSelectorHookSummariesAvailable: hasRecordHookSummaries( record ),
 						storeSelectorNeutralizeSelectors: false,
 					}
 				);
@@ -113,6 +120,7 @@ function createStoreSelectorCrossFileManifest( files, options = {} ) {
 		dynamicRootPropsByFile,
 		callsiteContextsByFile,
 		childRelativeDiscoveryByFile,
+		hookSummariesByFile: createHookSummariesByFile( records ),
 		componentNamesByFile: createComponentNamesByFile( records ),
 		diagnostics,
 		debug: {
@@ -174,16 +182,22 @@ function createFileRecords( files, diagnostics, debug ) {
 		} );
 
 		const componentPaths = getTopLevelComponentPaths( programPath, babel.types );
+		const selectorImports = collectStoreSelectorImports( programPath, babel );
+		const hookSummaries = collectTransparentHookSummaries( programPath, selectorImports, babel );
 		records.set( filename, {
 			filename,
 			source,
 			programPath,
 			componentPaths,
 			exports: getFileExports( programPath, componentPaths, babel.types ),
+			hookSummaries,
+			hookExports: getFileHookExports( programPath, hookSummaries.summariesByName, babel.types ),
 			unsupportedComponents: getUnsupportedComponentDeclarations( programPath, babel.types ),
-			selectorImports: collectStoreSelectorImports( programPath, babel ),
+			selectorImports,
 			imports: new Map(),
+			hookImports: new Map(),
 			rawImports: collectRawComponentImports( programPath, filename ),
+			rawHookImports: collectRawHookImports( programPath, filename ),
 		} );
 	} );
 
@@ -254,6 +268,41 @@ function collectRawComponentImports( programPath, filename ) {
 					kind: 'namespace',
 					localName: specifier.local.name,
 					importedName: '*',
+					source: node.source.value,
+					filename,
+				} );
+			}
+		} );
+	} );
+	return imports;
+}
+
+function collectRawHookImports( programPath, filename ) {
+	const imports = [];
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		const node = childPath.node;
+		if ( ! babel.types.isImportDeclaration( node ) || node.source.value === STORE_SELECTOR_MODULE || node.source.value === 'react' ) {
+			return;
+		}
+
+		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
+			const specifier = specifierPath.node;
+			if ( babel.types.isImportSpecifier( specifier ) && isHookName( specifier.local.name ) ) {
+				imports.push( {
+					kind: 'named',
+					localName: specifier.local.name,
+					importedName: getImportSpecifierName( specifier.imported ),
+					source: node.source.value,
+					filename,
+				} );
+				return;
+			}
+
+			if ( babel.types.isImportDefaultSpecifier( specifier ) && isHookName( specifier.local.name ) ) {
+				imports.push( {
+					kind: 'default',
+					localName: specifier.local.name,
+					importedName: 'default',
 					source: node.source.value,
 					filename,
 				} );
@@ -346,6 +395,58 @@ function getFileExports( programPath, componentPaths, types ) {
 					exportedName,
 					componentName: localName,
 					kind: exportedName === 'default' ? 'default-named-export' : 'local-named-export',
+				} );
+			}
+		} );
+	} );
+
+	return exports;
+}
+
+function getFileHookExports( programPath, summariesByName, types ) {
+	const exports = new Map();
+	summariesByName.forEach( ( summary, hookName ) => {
+		exports.set( hookName, {
+			exportedName: hookName,
+			hookName,
+			summary,
+			kind: 'hook',
+		} );
+	} );
+
+	programPath.get( 'body' ).forEach( ( childPath ) => {
+		const node = childPath.node;
+		if ( types.isExportDefaultDeclaration( node ) ) {
+			const declaration = node.declaration;
+			if ( types.isIdentifier( declaration ) && summariesByName.has( declaration.name ) ) {
+				exports.set( 'default', {
+					exportedName: 'default',
+					hookName: declaration.name,
+					summary: summariesByName.get( declaration.name ),
+					kind: 'default-hook-identifier',
+				} );
+			}
+			return;
+		}
+
+		if ( ! types.isExportNamedDeclaration( node ) ) {
+			return;
+		}
+
+		childPath.get( 'specifiers' ).forEach( ( specifierPath ) => {
+			const specifier = specifierPath.node;
+			if ( ! types.isExportSpecifier( specifier ) || node.source ) {
+				return;
+			}
+
+			const localName = getExportSpecifierName( specifier.local );
+			const exportedName = getExportSpecifierName( specifier.exported );
+			if ( localName && exportedName && summariesByName.has( localName ) ) {
+				exports.set( exportedName, {
+					exportedName,
+					hookName: localName,
+					summary: summariesByName.get( localName ),
+					kind: exportedName === 'default' ? 'default-hook-named-export' : 'local-hook-named-export',
 				} );
 			}
 		} );
@@ -653,7 +754,79 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 				exportHops: resolvedImport.exportHops || [],
 			} );
 		} );
+
+		record.rawHookImports.forEach( ( importInfo ) => {
+			if ( ! isRelativeImport( importInfo.source ) && ! resolveAliasedImportBase( importInfo.source, resolver ) ) {
+				const diagnostic = {
+					kind: 'unsupported-hook-import-source',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					message: `Store selector cross-file hook tracing only supports relative hook imports; "${ importInfo.source }" is skipped.`,
+				};
+				diagnostics.push( diagnostic );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo ) );
+				return;
+			}
+
+			const targetFilename = resolveImportFilename( record.filename, importInfo.source, records, resolver );
+			if ( ! targetFilename ) {
+				const diagnostic = {
+					kind: 'unresolved-hook-import',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					message: `Store selector cross-file hook tracing could not resolve "${ importInfo.source }" from "${ record.filename }".`,
+				};
+				diagnostics.push( diagnostic );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo ) );
+				return;
+			}
+
+			const targetRecord = records.get( targetFilename );
+			const resolvedHook = resolveImportedHook( importInfo, targetRecord );
+			if ( ! resolvedHook ) {
+				const diagnostic = {
+					kind: 'unsupported-hook-import',
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+					targetFilename,
+					message: `Store selector cross-file hook tracing could not resolve "${ importInfo.localName }" from "${ importInfo.source }" to a supported transparent hook export.`,
+				};
+				diagnostics.push( diagnostic );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo, targetFilename ) );
+				return;
+			}
+
+			record.hookImports.set( importInfo.localName, {
+				localName: importInfo.localName,
+				hookName: resolvedHook.hookName,
+				filename: targetFilename,
+				summary: resolvedHook.summary,
+			} );
+			debug.hookImportEdges.push( {
+				sourceFilename: record.filename,
+				importSource: importInfo.source,
+				localName: importInfo.localName,
+				importedName: importInfo.importedName,
+				targetFilename,
+				targetHookName: resolvedHook.hookName,
+				exportKind: resolvedHook.kind,
+			} );
+		} );
 	} );
+}
+
+function resolveImportedHook( importInfo, targetRecord ) {
+	if ( ! targetRecord ) {
+		return null;
+	}
+
+	const exportedName = importInfo.kind === 'default' ? 'default' : importInfo.importedName;
+	const exportInfo = targetRecord.hookExports?.get( exportedName );
+	return exportInfo?.summary ? exportInfo : null;
 }
 
 function addNamespaceComponentImports( record, importInfo, targetRecord, records, targetFilename, debug, resolver ) {
@@ -878,6 +1051,46 @@ function createComponentNamesByFile( records ) {
 		}
 	} );
 	return componentNamesByFile;
+}
+
+function createHookSummariesByFile( records ) {
+	const hookSummariesByFile = {};
+	records.forEach( ( record ) => {
+		if ( record.hookImports.size === 0 ) {
+			return;
+		}
+
+		hookSummariesByFile[ record.filename ] = {};
+		record.hookImports.forEach( ( hookImport, localName ) => {
+			hookSummariesByFile[ record.filename ][ localName ] = hookImport.summary;
+		} );
+	} );
+	return hookSummariesByFile;
+}
+
+function createRecordHookSummaryLookup( record ) {
+	const importedSummariesByBinding = new WeakMap();
+	record.hookImports.forEach( ( hookImport, localName ) => {
+		const binding = record.programPath.scope.getBinding( localName );
+		if ( binding ) {
+			importedSummariesByBinding.set( binding.identifier, hookImport.summary );
+		}
+	} );
+
+	return {
+		get( key ) {
+			return record.hookSummaries.summariesByBinding.get( key ) ||
+				importedSummariesByBinding.get( key );
+		},
+		has( key ) {
+			return record.hookSummaries.summariesByBinding.has( key ) ||
+				importedSummariesByBinding.has( key );
+		},
+	};
+}
+
+function hasRecordHookSummaries( record ) {
+	return record.hookSummaries.summaryRecords.length > 0 || record.hookImports.size > 0;
 }
 
 function addManifestSeedAlias(
@@ -1333,6 +1546,10 @@ function getUnsupportedComponentDeclarations( programPath, types ) {
 
 function isRelativeImport( source ) {
 	return typeof source === 'string' && ( source.startsWith( './' ) || source.startsWith( '../' ) );
+}
+
+function isHookName( name ) {
+	return typeof name === 'string' && /^use[A-Z]/.test( name );
 }
 
 function normalizeFilename( filename ) {

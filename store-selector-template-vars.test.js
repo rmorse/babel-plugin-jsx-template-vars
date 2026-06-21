@@ -1906,6 +1906,164 @@ describe('experimental store selectors', () => {
 		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{hero.title}}</h1></main>');
 	});
 
+	it('supports cross-file transparent source hook imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				export function useHero() {
+					return useStoreSelector((state) => state.hero);
+				}
+			`,
+			'App.jsx': `
+				import { useHero } from './hooks.jsx';
+
+				const App = () => {
+					const hero = useHero();
+					return <h1>{ hero.title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output, codeByFile } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.hookSummariesByFile[path.join(root, 'App.jsx')].useHero).toEqual(expect.objectContaining({
+			hookName: 'useHero',
+			returnKind: 'source-selector',
+			segments: [ 'hero' ],
+		}));
+		expect(manifest.debug.hookImportEdges).toEqual([
+			expect.objectContaining({
+				localName: 'useHero',
+				importedName: 'useHero',
+				targetFilename: path.join(root, 'hooks.jsx'),
+				targetHookName: 'useHero',
+			}),
+		]);
+		expect(Object.values(codeByFile).join('\n')).not.toContain('useStoreSelector');
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('supports cross-file transparent derived hook imports', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'hooks.jsx': `
+				export function useHeroTitle(hero) {
+					return hero.title;
+				}
+			`,
+			'App.jsx': `
+				import { useHeroTitle } from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				const App = () => {
+					const hero = useStoreSelector((state) => state.hero);
+					const title = useHeroTitle(hero);
+					return <h1>{ title }</h1>;
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(normalizeTemplateOutput(output)).toBe('<h1>{{hero.title}}</h1>');
+	});
+
+	it('uses cross-file derived hook imports during child descriptor discovery', async () => {
+		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
+		const files = crossFileFixtureFiles({
+			'Header.jsx': `
+				export const Header = ({ hero }) => <h1>{ hero.title }</h1>;
+			`,
+			'hooks.jsx': `
+				export function useCurrentHero(hero) {
+					return hero;
+				}
+			`,
+			'HomePage.jsx': `
+				import { Header } from './Header.jsx';
+				import { useCurrentHero } from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				export const HomePage = () => {
+					const homeHero = useStoreSelector((state) => state.home.hero);
+					const home = useCurrentHero(homeHero);
+					return <Header hero={ home } />;
+				};
+			`,
+			'ArticlePage.jsx': `
+				import { Header } from './Header.jsx';
+				import { useCurrentHero } from './hooks.jsx';
+				import { useStoreSelector } from 'babel-plugin-jsx-template-vars/store';
+
+				export const ArticlePage = () => {
+					const articleHero = useStoreSelector((state) => state.article.hero);
+					const article = useCurrentHero(articleHero);
+					return <Header hero={ article } />;
+				};
+			`,
+			'App.jsx': `
+				import { HomePage } from './HomePage.jsx';
+				import { ArticlePage } from './ArticlePage.jsx';
+
+				const App = () => {
+					return (
+						<main>
+							<HomePage />
+							<ArticlePage />
+						</main>
+					);
+				};
+
+				module.exports = { App };
+			`,
+		});
+		const manifest = createStoreSelectorCrossFileManifest(files);
+
+		const { output } = await renderTemplateModules(
+			'handlebars',
+			files,
+			path.join(root, 'App.jsx'),
+			'App',
+			{},
+			createCrossFileOptions(manifest)
+		);
+
+		expect(manifest.diagnostics).toEqual([]);
+		expect(manifest.seedAliasesByFile[path.join(root, 'Header.jsx')].Header).toEqual([
+			expect.objectContaining({
+				localName: 'hero',
+				dynamicRoot: true,
+			}),
+		]);
+		expect(manifest.dynamicRootPropsByFile[path.join(root, 'HomePage.jsx')].Header).toEqual([ 'hero' ]);
+		expect(manifest.dynamicRootPropsByFile[path.join(root, 'ArticlePage.jsx')].Header).toEqual([ 'hero' ]);
+		expect(normalizeTemplateOutput(output)).toBe('<main><h1>{{home.hero.title}}</h1><h1>{{article.hero.title}}</h1></main>');
+	});
+
 	it('traces cross-file function declaration components', async () => {
 		const root = path.join(process.cwd(), '__cross_file_store_selector_tests__');
 		const files = crossFileFixtureFiles({

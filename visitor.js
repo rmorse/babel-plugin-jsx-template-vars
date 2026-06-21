@@ -178,11 +178,17 @@ function templateVarsVisitor( babel, config ) {
 
 			const selectorImports = collectStoreSelectorImports( programPath, babel, config );
 			const hookSummaries = collectTransparentHookSummaries( programPath, selectorImports, babel );
+			const filename = normalizeStoreSelectorFilename( state.file.opts.filename );
+			const crossFileHookSummaries = createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename );
+			const hookSummaryLookup = createHookSummaryLookup(
+				hookSummaries.summariesByBinding,
+				crossFileHookSummaries.summariesByBinding
+			);
+			const hookSummariesAvailable = hookSummaries.summaryRecords.length > 0 || crossFileHookSummaries.available;
 			const componentPaths = getTopLevelComponentPaths( programPath, types );
 			const processedComponents = new Set();
 			const debugEntries = [];
 			const unsupportedEntries = [];
-			const filename = normalizeStoreSelectorFilename( state.file.opts.filename );
 			const componentNames = new Set( [
 				...componentPaths.keys(),
 				...getCrossFileComponentNames( storeSelectorOptions, filename ),
@@ -211,8 +217,9 @@ function templateVarsVisitor( babel, config ) {
 						storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 						storeSelectorDynamicRootPropsByComponent: dynamicRootPropsForCollection,
 						storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
-						storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
+						storeSelectorHookSummariesByBinding: hookSummaryLookup,
 						storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
+						storeSelectorHookSummariesAvailable: hookSummariesAvailable,
 						storeSelectorNeutralizeSelectors: false,
 					} );
 					selectorResults.set( componentName, selectorResult );
@@ -278,8 +285,9 @@ function templateVarsVisitor( babel, config ) {
 					storeSelectorSeedAliases: seedAliasesByComponent.get( componentName ) || [],
 					storeSelectorDynamicRootPropsByComponent: dynamicRootPropsByComponent,
 					storeSelectorConfiguredLocalNames: selectorImports.configuredLocalNames,
-					storeSelectorHookSummariesByBinding: hookSummaries.summariesByBinding,
+					storeSelectorHookSummariesByBinding: hookSummaryLookup,
 					storeSelectorUnsupportedHookSummariesByBinding: hookSummaries.unsupportedByBinding,
+					storeSelectorHookSummariesAvailable: hookSummariesAvailable,
 				} );
 				selectorResults.set( componentName, selectorResult );
 
@@ -531,6 +539,49 @@ function getCrossFileDebugForFile( storeSelectorOptions, filename ) {
 		seedEdges,
 		skippedImports,
 		diagnostics,
+	};
+}
+
+function createCrossFileHookSummariesByBinding( programPath, storeSelectorOptions, filename ) {
+	const summariesByBinding = new WeakMap();
+	if ( storeSelectorOptions.crossFile !== true ) {
+		return {
+			summariesByBinding,
+			available: false,
+		};
+	}
+
+	const hookSummariesByFile = storeSelectorOptions.__crossFileManifest?.hookSummariesByFile || {};
+	const summariesByLocalName = getCrossFileManifestEntry( hookSummariesByFile, filename ) || {};
+	let available = false;
+	Object.entries( summariesByLocalName ).forEach( ( [ localName, summary ] ) => {
+		const binding = programPath.scope.getBinding( localName );
+		if ( binding && summary ) {
+			summariesByBinding.set( binding.identifier, summary );
+			available = true;
+		}
+	} );
+
+	return {
+		summariesByBinding,
+		available,
+	};
+}
+
+function createHookSummaryLookup( ...maps ) {
+	return {
+		get( key ) {
+			for ( const map of maps ) {
+				const value = map?.get?.( key );
+				if ( value ) {
+					return value;
+				}
+			}
+			return undefined;
+		},
+		has( key ) {
+			return maps.some( map => Boolean( map?.has?.( key ) ) );
+		},
 	};
 }
 

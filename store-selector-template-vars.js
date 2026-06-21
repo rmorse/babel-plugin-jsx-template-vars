@@ -221,6 +221,7 @@ function collectStoreSelectorTemplateVars( componentPath, selectorLocalNames, ba
 
 function collectTransparentHookSummaries( programPath, selectorImports, babel ) {
 	const summariesByBinding = new WeakMap();
+	const summariesByName = new Map();
 	const summaries = [];
 	const summaryRecords = [];
 	const selectorLocalNames = selectorImports.localNames || new Set();
@@ -237,6 +238,7 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 		}
 
 		summariesByBinding.set( candidate.binding.identifier, summary );
+		summariesByName.set( candidate.hookName, summary );
 		summaryRecords.push( summary );
 		summaries.push( {
 			hookName: summary.hookName,
@@ -252,6 +254,7 @@ function collectTransparentHookSummaries( programPath, selectorImports, babel ) 
 
 	return {
 		summariesByBinding,
+		summariesByName,
 		unsupportedByBinding,
 		summaryRecords,
 		summaries,
@@ -1605,7 +1608,11 @@ class StoreSelectorCollector {
 	}
 
 	collect() {
-		if ( this.selectorLocalNames.size === 0 && this.seedAliases.length === 0 ) {
+		if (
+			this.selectorLocalNames.size === 0 &&
+			this.seedAliases.length === 0 &&
+			this.config.storeSelectorHookSummariesAvailable !== true
+		) {
 			return this.createResult();
 		}
 
