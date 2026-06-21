@@ -742,13 +742,26 @@ function getDefaultExportDeclarationKind( declaration, types ) {
 function resolveRecordImports( records, diagnostics, debug, resolver ) {
 	records.forEach( ( record ) => {
 		record.rawImports.forEach( ( importInfo ) => {
-			if ( ! isRelativeImport( importInfo.source ) && ! resolveAliasedImportBase( importInfo.source, resolver ) ) {
+			const unsupportedAlias = resolveUnsupportedAliasedImport( importInfo.source, resolver );
+			if ( unsupportedAlias ) {
+				diagnostics.push( {
+					...unsupportedAlias,
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+				} );
+				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
+				return;
+			}
+
+			if ( ! isRelativeImport( importInfo.source ) && ! hasConfiguredImportResolution( importInfo.source, resolver ) ) {
 				diagnostics.push( {
 					kind: 'unsupported-import-source',
 					filename: record.filename,
 					source: importInfo.source,
 					localName: importInfo.localName,
-					message: `Store selector cross-file tracing only supports relative imports; "${ importInfo.source }" is skipped.`,
+					message: `Store selector cross-file tracing only supports relative imports or configured local resolver paths; "${ importInfo.source }" is skipped.`,
 				} );
 				debug.skippedImports.push( createSkippedImportDebugEntry( diagnostics[ diagnostics.length - 1 ], importInfo ) );
 				return;
@@ -857,13 +870,27 @@ function resolveRecordImports( records, diagnostics, debug, resolver ) {
 		} );
 
 		record.rawHookImports.forEach( ( importInfo ) => {
-			if ( ! isRelativeImport( importInfo.source ) && ! resolveAliasedImportBase( importInfo.source, resolver ) ) {
+			const unsupportedAlias = resolveUnsupportedAliasedImport( importInfo.source, resolver );
+			if ( unsupportedAlias ) {
+				const diagnostic = {
+					...unsupportedAlias,
+					filename: record.filename,
+					source: importInfo.source,
+					localName: importInfo.localName,
+					importedName: importInfo.importedName,
+				};
+				diagnostics.push( diagnostic );
+				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo ) );
+				return;
+			}
+
+			if ( ! isRelativeImport( importInfo.source ) && ! hasConfiguredImportResolution( importInfo.source, resolver ) ) {
 				const diagnostic = {
 					kind: 'unsupported-hook-import-source',
 					filename: record.filename,
 					source: importInfo.source,
 					localName: importInfo.localName,
-					message: `Store selector cross-file hook tracing only supports relative hook imports; "${ importInfo.source }" is skipped.`,
+					message: `Store selector cross-file hook tracing only supports relative hook imports or configured local resolver paths; "${ importInfo.source }" is skipped.`,
 				};
 				diagnostics.push( diagnostic );
 				debug.skippedHooks.push( createSkippedImportDebugEntry( diagnostic, importInfo ) );
@@ -1244,7 +1271,12 @@ function getImportSpecifierName( imported ) {
 
 function resolveImportFilename( fromFilename, source, records, resolver = {} ) {
 	const aliasBase = resolveAliasedImportBase( source, resolver );
-	const base = aliasBase || path.resolve( path.dirname( fromFilename ), source );
+	const base = aliasBase ||
+		( isRelativeImport( source ) ? path.resolve( path.dirname( fromFilename ), source ) : null ) ||
+		resolveBaseUrlImportBase( source, resolver );
+	if ( ! base ) {
+		return null;
+	}
 	const candidates = [
 		base,
 		`${ base }.jsx`,
@@ -1264,10 +1296,25 @@ function normalizeResolverOptions( options = {} ) {
 	const resolver = options.resolver || options.config?.resolver || {};
 	return {
 		aliases: resolver.aliases || {},
+		exactAliases: resolver.exactAliases || {},
+		baseUrl: resolver.baseUrl,
+		unsupportedAliases: resolver.unsupportedAliases || {},
 	};
 }
 
+function hasConfiguredImportResolution( source, resolver = {} ) {
+	return Boolean(
+		resolveAliasedImportBase( source, resolver ) ||
+		resolveBaseUrlImportBase( source, resolver )
+	);
+}
+
 function resolveAliasedImportBase( source, resolver = {} ) {
+	const exactAliases = resolver.exactAliases || {};
+	if ( Object.prototype.hasOwnProperty.call( exactAliases, source ) ) {
+		return path.resolve( exactAliases[ source ] );
+	}
+
 	const aliases = resolver.aliases || {};
 	const aliasEntries = Object.entries( aliases )
 		.filter( ( [ alias, target ] ) => alias && typeof target === 'string' )
@@ -1279,6 +1326,29 @@ function resolveAliasedImportBase( source, resolver = {} ) {
 		}
 		const rest = source === alias ? '' : source.slice( alias.length + 1 );
 		return path.resolve( target, rest );
+	}
+
+	return null;
+}
+
+function resolveBaseUrlImportBase( source, resolver = {} ) {
+	if ( isRelativeImport( source ) || ! resolver.baseUrl ) {
+		return null;
+	}
+	return path.resolve( resolver.baseUrl, source );
+}
+
+function resolveUnsupportedAliasedImport( source, resolver = {} ) {
+	const unsupportedAliases = resolver.unsupportedAliases || {};
+	const aliasEntries = Object.entries( unsupportedAliases )
+		.filter( ( [ alias ] ) => alias )
+		.sort( ( [ left ], [ right ] ) => right.length - left.length );
+
+	for ( const [ alias, diagnostic ] of aliasEntries ) {
+		if ( source !== alias && ! source.startsWith( `${ alias }/` ) ) {
+			continue;
+		}
+		return diagnostic;
 	}
 
 	return null;

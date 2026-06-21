@@ -278,10 +278,13 @@ plugins: [
 ```
 
 Cross-file tracing uses a prepass manifest. The filesystem wrapper is
-experimental, shape-agnostic, and currently targets relative named imports. It
-walks and reads matching project files synchronously when the manifest is
-created; it does not provide caching, invalidation, watch mode, or bundler
-integration yet:
+experimental and shape-agnostic. It supports the current static import graph
+surface, including relative imports, supported barrels/namespace edges, explicit
+resolver aliases, and simple `tsconfig.json` / `jsconfig.json`
+`compilerOptions.baseUrl` + trailing-wildcard `paths` mappings such as
+`@/* -> src/*`. It walks and reads matching project files synchronously when the
+manifest is created; it does not provide caching, invalidation, watch mode,
+package `exports`, workspace package maps, or bundler integration yet:
 
 ```js
 const {
